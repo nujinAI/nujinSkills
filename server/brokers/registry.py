@@ -75,11 +75,33 @@ class BrokerRegistry:
         cls._plugins_scanned = True
 
     @classmethod
-    def list_available_brokers(cls) -> List[Dict[str, Any]]:
+    def list_available_brokers(cls, connect: bool = False) -> List[Dict[str, Any]]:
+        """
+        Lists every registered broker adapter. Read-only by default.
+
+        "Which adapters are installed, and what accounts are configured for them?" is a
+        read-only question, so the default (`connect=False`) constructs each adapter without
+        authenticating. That matters because `connect()` *is* the login: it decrypts the
+        stored password and opens a broker session. Callers of this method are status
+        surfaces — `/api/brokers`, the Telegram `/brokers` card, `tools/bot_control.py
+        status` and the offline import audit — and none of them should log in to a funded
+        account as a side effect.
+
+        `get_account_info()` is store-backed (accounts, labels, masked logins and per-account
+        lot sizes come from `accounts_store`), so discovery still reports what is configured;
+        only the live fields — `balance`, `equity` and `connected` — need a session. Those
+        come from the real session as soon as one exists: an already-connected adapter is
+        reused from the instance cache, so a running bot's status shows live figures without
+        this call authenticating anything.
+
+        Pass `connect=True` to force a login per adapter and get live balance/equity even
+        when no session has been established yet. Prefer it in an explicit operator-facing
+        command, never from a discovery path.
+        """
         cls.scan_plugin_brokers()
         result = []
         for b_id, b_cls in cls._broker_classes.items():
-            inst = cls.get_broker(b_id)
+            inst = cls.get_broker(b_id, connect=connect)
             info = inst.get_account_info() if inst else {}
             result.append({
                 "broker_id": b_id,
@@ -111,7 +133,15 @@ class BrokerRegistry:
         return "paper"
 
     @classmethod
-    def get_broker(cls, broker_id: Optional[str] = None) -> BaseExecutionBroker:
+    def get_broker(cls, broker_id: Optional[str] = None, connect: bool = True) -> BaseExecutionBroker:
+        """
+        Resolves a broker adapter, connecting it on first use unless `connect=False`.
+
+        With `connect=False` the adapter is returned *uncached*. Caching an unconnected
+        instance would be a silent execution hazard: the next `get_broker()` — the call the
+        executor makes before placing an order — would hand back an instance whose
+        `connect()` never ran, and it would look healthy because the object exists.
+        """
         cls.scan_plugin_brokers()
         target_id = (broker_id or cls.get_active_broker_id()).lower().strip()
 
@@ -121,6 +151,10 @@ class BrokerRegistry:
                 f"Available brokers: {list(cls._broker_classes.keys())}. Falling back to 'paper'."
             )
             target_id = "paper"
+
+        if not connect:
+            # Reuse a live instance if one exists; otherwise build a throwaway one.
+            return cls._instances.get(target_id) or cls._broker_classes[target_id]()
 
         if target_id not in cls._instances:
             broker_cls = cls._broker_classes[target_id]

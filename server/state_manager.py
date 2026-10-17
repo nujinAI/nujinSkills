@@ -29,6 +29,28 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from server.cynic_gates import GATE_KEYS
+from server.constants import (
+    A_TIER_COMPOSITE,
+    A_TIER_DRAWDOWN,
+    A_TIER_DSR,
+    A_TIER_PROFIT_FACTOR,
+    A_TIER_SHARPE,
+    A_TIER_TRADES,
+    DSR_THRESHOLD,
+    MAX_DRAWDOWN,
+    MIN_PROFIT_FACTOR,
+    MIN_SHARPE,
+    MIN_TRADES,
+    MIN_WIN_RATE,
+    S_TIER_COMPOSITE,
+    S_TIER_DSR,
+    S_TIER_PROFIT_FACTOR,
+    S_TIER_SHARPE,
+    S_TIER_TRADES,
+    trade_annualization_factor,
+)
+
 logger = logging.getLogger("StateManager")
 
 # ─────────────────────────────────────────────────────────────
@@ -427,7 +449,7 @@ class SignalStore:
             std_r = math.sqrt(
                 sum((r - mean_r) ** 2 for r in returns) / len(returns)
             ) or 1e-8
-            sharpe_live = round((mean_r / std_r) * math.sqrt(252), 2)
+            sharpe_live = round((mean_r / std_r) * trade_annualization_factor(), 2)
         else:
             sharpe_live = 0.0
 
@@ -666,7 +688,9 @@ class StrategyRegistry:
                                     rationale = " ".join(doc_lines[1:]) if len(doc_lines) > 1 else doc_lines[0]
                                     thesis = rationale[:200]
             except Exception as e:
-                logger.warning(f"[StrategyRegistry] Metadata extraction failed for {py_path}: {e}")
+                # `py_path` here was a copy-paste from remove_strategy() and did not exist in
+                # this scope, so the warning itself raised NameError and escaped the handler.
+                logger.warning(f"[StrategyRegistry] Metadata extraction failed for {filepath}: {e}")
 
         # Derive readable fallback name
         humanized_name = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', clean)
@@ -729,7 +753,7 @@ class StrategyRegistry:
                     "drift_score": 50.0,
                     "composite_score": 0.0,
                     "gates_passed": 0,
-                    "gates_total": 5,
+                    "gates_total": len(GATE_KEYS),
                     "tier_reason": "No backtest trades recorded"
                 }
             }
@@ -747,10 +771,10 @@ class StrategyRegistry:
         # Net Sharpe (Hurdle: 1.80, Benchmark: 3.50)
         if sharpe <= 0:
             sh_pts = 0.0
-        elif sharpe < 1.8:
-            sh_pts = (sharpe / 1.8) * 25.0
+        elif sharpe < MIN_SHARPE:
+            sh_pts = (sharpe / MIN_SHARPE) * 25.0
         elif sharpe <= 3.5:
-            sh_pts = 25.0 + ((sharpe - 1.8) / 1.7) * 25.0
+            sh_pts = 25.0 + ((sharpe - MIN_SHARPE) / 1.7) * 25.0
         else:
             sh_pts = 50.0
 
@@ -775,7 +799,7 @@ class StrategyRegistry:
 
         # ── 2. Statistical Robustness & Falsification (0 to 100) - Weight 30% ──
         # Deflated Sharpe Ratio (DSR) (max 50 pts)
-        if dsr >= 0.95:
+        if dsr >= DSR_THRESHOLD:
             dsr_pts = 50.0
         elif dsr >= 0.90:
             dsr_pts = 35.0
@@ -796,24 +820,36 @@ class StrategyRegistry:
         else:
             n_pts = 3.0
 
-        # 5-Gate Cynic Audit Verification (max 20 pts)
-        g1 = 1 if sharpe >= 1.8 else 0
-        g2 = 1 if max_dd <= 0.030 else 0
-        g3 = 1 if (trades >= 30 and win_rate >= 0.50) else 0
-        g4 = 1 if profit_factor >= 1.3 else 0
-        g5 = 1 if dsr >= 0.95 else 0
-        gates_passed = g1 + g2 + g3 + g4 + g5
-        gates_pts = (gates_passed / 5.0) * 20.0
+        # Cynic Falsification Gate Verification (max 20 pts)
+        # Counts come from the canonical matrix persisted by
+        # server/cynic_gates.py. This scorer previously invented its own
+        # five thresholds that had nothing to do with the falsification
+        # gates, so a `gates_passed` figure could not be compared with the
+        # audit itself.
+        gates_summary = gates.get("gates_summary") or {}
+        gates_total = int(gates_summary.get("gates_total") or 0)
+        if gates_total > 0:
+            gates_passed = int(gates_summary.get("gates_passed") or 0)
+        else:
+            # Legacy records written before the canonical matrix existed.
+            g1 = 1 if sharpe >= MIN_SHARPE else 0
+            g2 = 1 if max_dd <= MAX_DRAWDOWN else 0
+            g3 = 1 if (trades >= MIN_TRADES and win_rate >= MIN_WIN_RATE) else 0
+            g4 = 1 if profit_factor >= MIN_PROFIT_FACTOR else 0
+            g5 = 1 if dsr >= DSR_THRESHOLD else 0
+            gates_passed = g1 + g2 + g3 + g4 + g5
+            gates_total = 5
+        gates_pts = (gates_passed / float(gates_total)) * 20.0
         robustness_score = round(min(100.0, dsr_pts + n_pts + gates_pts), 1)
 
         # ── 3. Capital Preservation & Risk (0 to 100) - Weight 25% ──
         # Max Drawdown (Gate <= 3.0%, Scalper Elite <= 1.0%)
         if max_dd <= 0.01:
             dd_pts = 60.0
-        elif max_dd <= 0.030:
+        elif max_dd <= MAX_DRAWDOWN:
             dd_pts = 60.0 - ((max_dd - 0.01) / 0.020) * 25.0
         elif max_dd <= 0.06:
-            dd_pts = max(5.0, 35.0 - ((max_dd - 0.030) / 0.030) * 30.0)
+            dd_pts = max(5.0, 35.0 - ((max_dd - MAX_DRAWDOWN) / MAX_DRAWDOWN) * 30.0)
         else:
             dd_pts = 0.0
 
@@ -850,29 +886,29 @@ class StrategyRegistry:
 
         # ── Institutional Tier Determination ──
         is_s = (
-            composite_score >= 80.0 and
-            sharpe >= 2.5 and
-            dsr >= 0.95 and
-            max_dd <= 0.030 and
-            win_rate >= 0.50 and
-            profit_factor >= 1.5 and
-            trades >= 25
+            composite_score >= S_TIER_COMPOSITE and
+            sharpe >= S_TIER_SHARPE and
+            dsr >= S_TIER_DSR and
+            max_dd <= MAX_DRAWDOWN and
+            win_rate >= MIN_WIN_RATE and
+            profit_factor >= S_TIER_PROFIT_FACTOR and
+            trades >= S_TIER_TRADES
         )
         is_a = (
-            composite_score >= 65.0 and
-            sharpe >= 1.8 and
-            dsr >= 0.90 and
-            max_dd <= 0.04 and
-            profit_factor >= 1.3 and
-            trades >= 20
+            composite_score >= A_TIER_COMPOSITE and
+            sharpe >= A_TIER_SHARPE and
+            dsr >= A_TIER_DSR and
+            max_dd <= A_TIER_DRAWDOWN and
+            profit_factor >= A_TIER_PROFIT_FACTOR and
+            trades >= A_TIER_TRADES
         )
 
         if is_s:
             tier = "S-Tier (Superior Edge)"
-            tier_reason = f"Elite Production Alpha: {gates_passed}/5 Gates Passed, DSR {dsr:.2f} >= 0.95, Sharpe {sharpe:.2f}"
+            tier_reason = f"Elite Production Alpha: {gates_passed}/{gates_total} Gates Passed, DSR {dsr:.2f} >= 0.95, Sharpe {sharpe:.2f}"
         elif is_a:
             tier = "A-Tier (Robust Edge)"
-            tier_reason = f"Production Edge: {gates_passed}/5 Gates Passed, DSR {dsr:.2f}, Sharpe {sharpe:.2f}"
+            tier_reason = f"Production Edge: {gates_passed}/{gates_total} Gates Passed, DSR {dsr:.2f}, Sharpe {sharpe:.2f}"
         elif composite_score >= 45.0:
             tier = "B-Tier (Incubation Alpha)"
             reasons = []
@@ -882,7 +918,7 @@ class StrategyRegistry:
                 reasons.append(f"WinRate {win_rate*100:.1f}% < 50%")
             if trades < 30:
                 reasons.append(f"Trades {trades} < 30")
-            tier_reason = f"Incubation: {gates_passed}/5 Gates. Pending: {', '.join(reasons) or 'Further OOS Data'}"
+            tier_reason = f"Incubation: {gates_passed}/{gates_total} Gates. Pending: {', '.join(reasons) or 'Further OOS Data'}"
         else:
             tier = "C-Tier (Sub-Hurdle)"
             reasons = []
@@ -892,7 +928,7 @@ class StrategyRegistry:
                 reasons.append(f"High Drawdown ({max_dd*100:.1f}%)")
             if profit_factor < 1.1:
                 reasons.append(f"Low PF ({profit_factor:.2f})")
-            tier_reason = f"Sub-Hurdle: {gates_passed}/5 Gates. {', '.join(reasons) or 'Fails Core Gates'}"
+            tier_reason = f"Sub-Hurdle: {gates_passed}/{gates_total} Gates. {', '.join(reasons) or 'Fails Core Gates'}"
 
         return {
             "ranking_score": composite_score,
@@ -904,7 +940,7 @@ class StrategyRegistry:
                 "drift_score": drift_score,
                 "composite_score": composite_score,
                 "gates_passed": gates_passed,
-                "gates_total": 5,
+                "gates_total": gates_total,
                 "tier_reason": tier_reason,
             }
         }
@@ -1527,7 +1563,7 @@ class StrategyRegistry:
         if len(returns) > 1:
             mean_r = sum(returns) / len(returns)
             std_r = math.sqrt(sum((r - mean_r) ** 2 for r in returns) / len(returns)) or 1e-8
-            sharpe_live = round((mean_r / std_r) * math.sqrt(252), 2)
+            sharpe_live = round((mean_r / std_r) * trade_annualization_factor(), 2)
         else:
             sharpe_live = 0.0
 

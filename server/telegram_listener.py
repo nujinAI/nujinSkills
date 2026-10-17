@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import os
 import re
 import shlex
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -223,7 +225,8 @@ class TelegramListener:
         telegram_gateway.send_message(msg, target_chat_id=str(chat_id))
 
     async def _cmd_brokers(self, chat_id: int | str) -> None:
-        brokers = broker_registry.list_available_brokers()
+        # Discovery only: printing the adapter list must not log in to a funded account.
+        brokers = broker_registry.list_available_brokers(connect=False)
         lines = [
             "🔌 <b>Installed Execution Brokers:</b>",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -292,7 +295,7 @@ class TelegramListener:
             args = args[1:]
 
         # Check if broker is registered
-        available = [b.get("broker_id") for b in broker_registry.list_available_brokers()]
+        available = [b.get("broker_id") for b in broker_registry.list_available_brokers(connect=False)]
         if target_broker not in available:
             msg = (
                 "🔒 <b>Nujin Pro Plugin Required</b>\n\n"

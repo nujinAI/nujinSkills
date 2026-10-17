@@ -1,256 +1,136 @@
 #!/usr/bin/env python3
+"""
+validation_cynic.py — thin CLI shim over server.cynic_gates.
+
+All gate math now lives in `server/cynic_gates.py` (single source of truth).
+This module exists only to preserve the historical import path
+(`from tools.validation_cynic import compute_dsr, ...`) used by
+server/backtest_engine.py and server/strategy_executor.py.
+
+Do NOT re-implement any gate here.
+"""
+
+from __future__ import annotations
+
 import argparse
 import json
+import os
+import sys
+
 import numpy as np
-from scipy.stats import norm, skew, kurtosis
 
-def compute_dsr(returns: np.ndarray, num_trials: int) -> dict:
-    clean_r = returns[~np.isnan(returns)]
-    if len(clean_r) < 30:
-        return {"dsr": 0.0, "status": "FAIL", "reason": "Insufficient return samples (< 30)"}
-        
-    mean_r, std_r = float(np.mean(clean_r)), float(np.std(clean_r, ddof=1))
-    if std_r == 0:
-        return {"dsr": 0.0, "status": "FAIL", "reason": "Zero return variance"}
-        
-    sr = (mean_r / std_r) * np.sqrt(252)
-    t_obs = len(clean_r)
-    sk = float(skew(clean_r))
-    kt = float(kurtosis(clean_r, fisher=False)) # Pearson kurtosis (normal = 3)
-    
-    # Expected maximum Sharpe under pure chance across N trials (Euler-Mascheroni constant)
-    emc = 0.5772156649
-    n = max(num_trials, 2)
-    z = np.sqrt(2.0 * np.log(n))
-    sr_0 = z * (1.0 - emc / (2.0 * np.log(n))) + (emc / z)
-    
-    denom = np.sqrt((1.0 - sk * sr + ((kt - 1.0) / 4.0) * (sr ** 2)) / (t_obs - 1))
-    dsr = float(norm.cdf((sr - sr_0) / denom)) if denom > 0 else 0.0
-    
-    return {
-        "dsr": round(dsr, 4),
-        "observed_sr": round(sr, 4),
-        "benchmark_sr_0": round(sr_0, 4),
-        "trials_penalized": num_trials,
-        "status": "PASS" if dsr >= 0.95 else "FAIL"
-    }
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-def run_monte_carlo(returns: np.ndarray, num_simulations: int = 1000) -> dict:
-    if len(returns) < 10:
-        return {"mdd_99": 0.0, "status": "FAIL", "reason": "Insufficient return samples (< 10)"}
-        
-    cum_returns = np.cumsum(returns)
-    orig_mdd = float(np.max(np.maximum.accumulate(cum_returns) - cum_returns)) if len(cum_returns) > 0 else 0.01
-    
-    sim_mdds = []
-    rng = np.random.default_rng(42)
-    for _ in range(num_simulations):
-        permuted = rng.permutation(returns)
-        cum_p = np.cumsum(permuted)
-        mdd = np.max(np.maximum.accumulate(cum_p) - cum_p)
-        sim_mdds.append(mdd)
-        
-    mdd_99 = float(np.percentile(sim_mdds, 99))
-    ratio = mdd_99 / (orig_mdd + 1e-6)
-    passed = (ratio <= 2.5) and (mdd_99 <= 0.030)
-    
-    return {
-        "original_mdd": round(orig_mdd, 4),
-        "mdd_99": round(mdd_99, 4),
-        "mdd_ratio": round(ratio, 2),
-        "status": "PASS" if passed else "FAIL",
-        "reason": "MDD99 <= 3.0% & ratio <= 2.5" if passed else ("MDD99 > 3.0%" if mdd_99 > 0.030 else "Tail ratio > 2.5")
-    }
+from server.cynic_gates import (  # noqa: E402  (canonical implementations, re-exported)
+    compute_dsr,
+    compute_equity_linearity,
+    compute_cusum_degradation,
+    evaluate_gates,
+    format_matrix,
+    verify_monte_carlo,
+    verify_parameter_stability,
+)
 
-def run_parameter_stability(param_grid_json: str, observed_sr: float) -> dict:
-    try:
-        grid = json.loads(param_grid_json) if isinstance(param_grid_json, str) else param_grid_json
-    except Exception:
-        grid = {}
-        
-    if not grid or not isinstance(grid, dict):
-        grid = {"wick": [0.45, 0.50, 0.55, 0.60], "vol_z": [1.2, 1.5, 1.8, 2.1]}
-        
-    keys = list(grid.keys())
-    x_vals = grid.get(keys[0], [1.2, 1.5, 1.8, 2.1])
-    y_vals = grid.get(keys[-1], [0.45, 0.50, 0.55, 0.60])
-    
-    # Generate matrix simulation around observed SR to evaluate plateau vs cliff
-    rng = np.random.default_rng(123)
-    rows = len(x_vals)
-    cols = len(y_vals)
-    
-    matrix = []
-    for i in range(rows):
-        row = []
-        for j in range(cols):
-            val = observed_sr * (0.85 + 0.3 * (1.0 - abs(i - 1)/4.0 - abs(j - 1)/4.0)) + rng.normal(0, 0.05)
-            row.append(round(max(0.1, val), 2))
-        matrix.append(row)
-        
-    flat = [v for r in matrix for v in r]
-    avg_cell = np.mean(flat)
-    min_cell = np.min(flat)
-    
-    plateau_status = "STABLE_PLATEAU" if (min_cell > 0.4 * abs(observed_sr) and avg_cell > 0.7 * abs(observed_sr)) else "ISOLATED_CLIFF"
-    
-    return {
-        "matrix": matrix,
-        "x_axis": [str(x) for x in x_vals],
-        "y_axis": [str(y) for y in y_vals],
-        "plateau_status": plateau_status,
-        "status": "PASS" if plateau_status == "STABLE_PLATEAU" else "FAIL"
-    }
+__all__ = [
+    "compute_dsr",
+    "compute_equity_linearity",
+    "compute_cusum_degradation",
+    "evaluate_gates",
+    "verify_monte_carlo",
+    "verify_parameter_stability",
+    "run_monte_carlo",
+    "run_parameter_stability",
+]
 
-def compute_equity_linearity(returns: np.ndarray) -> dict:
-    clean_r = returns[~np.isnan(returns)]
-    if len(clean_r) < 15:
-        return {"r_squared": 0.0, "k_ratio": 0.0, "status": "FAIL", "reason": "Insufficient return samples (< 15)"}
-    cum_eq = np.cumsum(clean_r)
-    n = len(cum_eq)
-    x = np.arange(n)
-    x_mean = np.mean(x)
-    y_mean = np.mean(cum_eq)
-    ss_xy = np.sum((x - x_mean) * (cum_eq - y_mean))
-    ss_xx = np.sum((x - x_mean) ** 2)
-    ss_yy = np.sum((cum_eq - y_mean) ** 2)
-    slope = ss_xy / ss_xx if ss_xx > 0 else 0.0
-    r_val = ss_xy / np.sqrt(ss_xx * ss_yy) if (ss_xx * ss_yy) > 0 else 0.0
-    r_squared = float(r_val ** 2) if not np.isnan(r_val) else 0.0
-    residuals = cum_eq - (y_mean + slope * (x - x_mean))
-    std_err = np.sqrt(np.sum(residuals ** 2) / max(1, n - 2)) / np.sqrt(ss_xx) if ss_xx > 0 else 1.0
-    k_ratio = float((slope / max(std_err, 1e-6)) * (np.sqrt(n) / n)) if (std_err > 0 and n > 0) else 0.0
-    passed = (slope > 0) and (r_squared >= 0.85)
-    return {
-        "r_squared": round(r_squared, 4),
-        "k_ratio": round(k_ratio, 2),
-        "slope": round(float(slope), 6),
-        "status": "PASS" if passed else "FAIL"
-    }
 
-def compute_cusum_degradation(returns: np.ndarray, threshold_sigma: float = 2.5) -> dict:
+# ── Backwards-compatible aliases ─────────────────────────────────────────────
+# Historical name -> canonical implementation. Kept so existing callers
+# (server/backtest_engine.py) keep working without carrying their own math.
+
+def run_monte_carlo(returns, num_simulations: int = 1000) -> dict:
+    return verify_monte_carlo(returns, num_simulations=num_simulations)
+
+
+def run_parameter_stability(param_grid_json, observed_sr: float) -> dict:
     """
-    Page's Cumulative Sum (CUSUM) test for live/forward alpha degradation detection.
-    Detects negative performance drift when cumulative downward error exceeds threshold * sigma.
+    Historically this synthesised a parameter matrix from `observed_sr` and so
+    could never fail. It now returns INCONCLUSIVE unless genuinely perturbed
+    results are supplied, which is the honest answer given only a grid spec.
     """
-    if len(returns) < 5:
-        return {"status": "HEALTHY", "cusum_statistic": 0.0, "reason": "Insufficient samples (< 5)"}
-        
-    mean_r = float(np.mean(returns))
-    std_r = float(np.std(returns, ddof=1)) if len(returns) > 1 else 1.0
-    if std_r == 0:
-        std_r = 1e-6
-        
-    k = 0.5 * std_r
-    s_t = 0.0
-    max_s = 0.0
-    
-    for r in returns:
-        s_t = max(0.0, s_t - r - k)
-        if s_t > max_s:
-            max_s = s_t
-            
-    h_threshold = threshold_sigma * std_r
-    degraded = max_s >= h_threshold
-    
-    return {
-        "status": "DEGRADED" if degraded else "HEALTHY",
-        "max_cusum": round(max_s, 6),
-        "threshold": round(h_threshold, 6),
-        "mean_return": round(mean_r, 6),
-        "std_return": round(std_r, 6)
-    }
+    matrix = None
+    if isinstance(param_grid_json, dict):
+        candidate = param_grid_json.get("metric_matrix")
+        if isinstance(candidate, list) and candidate:
+            matrix = candidate
+    return verify_parameter_stability(metric_matrix=matrix, observed_sr=observed_sr)
 
-def audit_candidate(returns_path: str, trials: int, param_grid: str, oos_data: str, strategy: str = "", strict: bool = False):
-    returns = np.array([])
-    if strategy:
-        import os, sys
-        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        if root_dir not in sys.path:
-            sys.path.insert(0, root_dir)
-        from server.backtest_engine import run_real_backtest
-        print(f"[ValidationCynic] Running real backtest to audit strategy '{strategy}'...")
+
+def _resolve_returns(args) -> np.ndarray:
+    """Load a return series from --returns, --strategy, or the default location."""
+    if args.strategy:
         try:
-            bt_results = run_real_backtest(strategy, save_as_active=False)
-            trades = bt_results.get("trades_detail", [])
-            returns = np.array([float(t.get("pnl_pct", 0.0)) / 100.0 for t in trades])
-            print(f"[ValidationCynic] Loaded {len(returns)} trade returns from backtest.")
-        except Exception as e:
-            print(f"[ValidationCynic] Backtest error for {strategy}: {e}")
-            if strict:
-                sys.exit(1)
-            return
-    elif returns_path:
-        print(f"[ValidationCynic] Loading candidate trade returns from {returns_path}...")
-        try:
-            with open(returns_path, 'r') as f:
-                returns = np.array(json.load(f))
-        except Exception as e:
-            print(f"[ValidationCynic] Error reading returns file: {e}")
-            returns = np.array([])
-    else:
-        print("[ValidationCynic] ERROR: Either --returns or --strategy must be specified.")
-        if strict:
-            sys.exit(1)
-        return
+            from server.backtest_engine import run_real_backtest
+            bt = run_real_backtest(args.strategy, save_as_active=False)
+            trades = bt.get("trades_detail", [])
+            return np.array([float(t.get("pnl_pct", 0.0)) / 100.0 for t in trades])
+        except Exception as e:  # pragma: no cover - defensive
+            print(f"[ValidationCynic] ERROR running backtest: {e}", file=sys.stderr)
+            return np.array([])
 
-    if len(returns) == 0:
-        print(json.dumps({"overall_status": "REJECT", "reason": "Empty return series"}, indent=2))
-        if strict:
-            sys.exit(1)
-        return
+    candidates = [args.returns] if args.returns else []
+    candidates += [os.path.join("data", "candidate_returns.json"),
+                   os.path.join(".nujin", "candidate_returns.json")]
+    for path in candidates:
+        if path and os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    return np.array(json.load(f), dtype=float)
+            except Exception as e:
+                print(f"[ValidationCynic] Error reading returns file {path}: {e}",
+                      file=sys.stderr)
+    return np.array([])
 
-    # Gate 1: Deflated Sharpe Ratio
-    dsr_res = compute_dsr(returns, trials)
-    
-    # Gate 2: Parameter Stability Surface
-    param_res = run_parameter_stability(param_grid, dsr_res.get("observed_sr", 1.5))
-    
-    # Gate 3: Monte Carlo Reshuffling
-    mc_res = run_monte_carlo(returns)
-    
-    # Gate 4: OOS Walk-Forward Simulation
-    is_sr = dsr_res.get("observed_sr", 1.5)
-    oos_sr = round(is_sr * 0.78, 2)
-    oos_status = "PASS" if oos_sr >= 0.65 * is_sr else "FAIL"
-    
-    # Gate 5: Equity Curve Linearity ($R^2 \ge 0.85$, K-Ratio)
-    lin_res = compute_equity_linearity(returns)
 
-    overall_pass = (
-        dsr_res["status"] == "PASS" and 
-        param_res["status"] == "PASS" and 
-        mc_res["status"] == "PASS" and 
-        oos_status == "PASS" and
-        lin_res["status"] == "PASS"
-    )
-    
-    result = {
-        "overall_status": "PASS" if overall_pass else "REJECT",
-        "gate_1_dsr": dsr_res,
-        "gate_2_parameter_stability": param_res,
-        "gate_3_monte_carlo": mc_res,
-        "gate_4_oos_walkforward": {
-            "sharpe_is": is_sr,
-            "sharpe_oos": oos_sr,
-            "retention_pct": round((oos_sr / (is_sr + 1e-6)) * 100, 1),
-            "status": oos_status
-        },
-        "gate_5_equity_linearity": lin_res
-    }
-    
-    print(json.dumps(result, indent=2))
-    if strict and not overall_pass:
-        sys.exit(1)
-
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Adversarial Audit & Falsification Cynic CLI")
     parser.add_argument("--returns", default="", help="JSON file path containing candidate returns")
-    parser.add_argument("--strategy", default="", help="Strategy filename or path to audit via backtest returns")
-    parser.add_argument("--trials", type=int, default=100, help="Cumulative trial count across ideation phase")
-    parser.add_argument("--param-grid", default="{}", help="Parameter grid JSON string for stability testing")
+    parser.add_argument("--strategy", default="", help="Strategy filename to audit via a real backtest")
+    parser.add_argument("--trials", type=int, default=100, help="Cumulative trial count across ideation")
+    parser.add_argument("--param-grid", default="{}", help="Parameter grid JSON for stability testing")
     parser.add_argument("--oos-data", default="", help="Optional OOS features CSV path")
-    parser.add_argument("--strict", action="store_true", help="Exit with non-zero status code if candidate fails gates")
+    parser.add_argument("--strict", action="store_true", help="Exit non-zero if the candidate is rejected")
+    parser.add_argument("--json", action="store_true", help="Emit raw JSON only")
     args = parser.parse_args()
-    
-    audit_candidate(args.returns, args.trials, args.param_grid, args.oos_data, strategy=args.strategy, strict=args.strict)
+
+    returns = _resolve_returns(args)
+    if len(returns) == 0:
+        print("[ValidationCynic] ERROR: no return series found (--returns or --strategy).",
+              file=sys.stderr)
+        result = {"overall_status": "REJECT", "reason": "Empty return series"}
+        print(json.dumps(result, indent=2))
+        if args.strict:
+            sys.exit(1)
+        return
+
+    # A real backtest's fills are already net of spread, slippage and fees.
+    matrix = evaluate_gates(returns, n_trials=args.trials,
+                            returns_are_net=bool(args.strategy))
+
+    # Legacy flat keys preserved for existing consumers (e.g. autoresearch_miner),
+    # derived from the canonical matrix so they can never diverge again.
+    result = dict(matrix)
+    result["gate_5_equity_linearity"] = matrix["gate_8_equity_linearity"]
+    result["overall_status"] = ("PASS" if matrix["overall_status"] == "APPROVED"
+                                else matrix["overall_status"])
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        print(json.dumps(result, indent=2))
+
+    if args.strict and matrix["overall_status"] != "APPROVED":
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

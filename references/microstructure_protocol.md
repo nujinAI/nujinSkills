@@ -67,6 +67,6 @@ $$\text{Upper Rejection} = \frac{\text{High} - \max(\text{Open}, \text{Close})}{
 
 To prevent strategy bias:
 1. **Hypothesis Neutrality:** Auction imbalance is one valid hypothesis family alongside Momentum Continuation, Mean Reversion, and Structural Breakouts. The engine **never mandates** using absorption or traps.
-2. **Falsification Gate Compliance:** Any trapped-inventory strategy must strictly pass all **6 Cynic Audit Gates**, particularly:
-   - **Gate 1 (Microstructure Noise Floor):** Stops must reside $\ge \max(3\times \text{Spread}, 1.5\times \text{ATR})$ away from the entry to avoid trading inside random spread noise.
-   - **Gate 6 (Equity Linearity):** Payoffs must compound smoothly ($R^2 \ge 0.85$, $K\text{-Ratio} \ge 1.5$) rather than relying on rare, sporadic liquidation cascades.
+2. **Falsification Gate Compliance:** Any trapped-inventory strategy must strictly pass all **8 canonical Cynic Audit Gates** (see [`cynic_audit.md`](cynic_audit.md)), particularly:
+   - **Gate 6 (Friction & Microstructure Noise Floor):** Stops must reside $\ge \max(3\times \text{Spread}, 1.5\times \text{ATR})$ away from the entry, and no tighter than the implemented 10 bps floor, to avoid trading inside random spread noise.
+   - **Gate 8 (Equity Linearity):** Payoffs must compound smoothly ($R^2 \ge 0.85$, $K\text{-Ratio} \ge 1.5$) rather than relying on rare, sporadic liquidation cascades.

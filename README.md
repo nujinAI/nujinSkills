@@ -8,7 +8,7 @@
 [![Bot Operations](https://img.shields.io/badge/Bot-Live%20Supervision-cyan.svg)](references/bot_operations.md)
 [![Telemetry API](https://img.shields.io/badge/Telemetry-JSON%20API-sky.svg)](references/telemetry_api.md)
 
-> **Unlock quantitative trading with full autonomy.** You bring the creative hypothesis and define your targets; your AI agent handles the mathematical modeling, multi-timeframe feature extraction, adversarial statistical falsification (6-Gate Cynic Audit), 24/7 live signaling, and safe bot hot-deployment.
+> **Unlock quantitative trading with full autonomy.** You bring the creative hypothesis and define your targets; your AI agent handles the mathematical modeling, multi-timeframe feature extraction, adversarial statistical falsification (8-Gate Cynic Audit), 24/7 live signaling, and safe bot hot-deployment.
 
 ---
 
@@ -19,7 +19,7 @@
 Instead of getting bogged down in boilerplate code, manual data joining, or curve-fitted indicator traps:
 1. **Universal Hypothesis Modeling:** Formulate strategies for any concept or market (Price Action, Market Structure, Order Flow, Statistical Arbitrage, Volatility Breakouts, Macro/Funding Spreads, or Machine Learning classifiers).
 2. **Institutional Multi-Timeframe (MTF) Confluence:** Seamlessly link Higher-Timeframe (HTF) market regime and context, Mid-Timeframe (MTF) structural zones, and Lower-Timeframe (LTF) precision execution triggers with **strict zero lookahead bias**.
-3. **6-Gate Adversarial Falsification:** Stress-test candidates against real friction, Deflated Sharpe Ratio ($\text{DSR} \ge 0.95$), multi-regime temporal slices, synthetic noise jitter ($\ge 80\%$ Sharpe retention), 1,000-run Monte Carlo trade order permutations ($\text{MDD}_{99} \le 3.0\%$), and the Equity Linearity Standard ($R^2 \ge 0.85$).
+3. **8-Gate Adversarial Falsification:** Stress-test candidates against the Deflated Sharpe Ratio ($\text{DSR} \ge 0.95$), a genuine parameter-stability plateau, 1,000-run Monte Carlo trade order permutations ($\text{MDD}_{99} \le 3.0\%$), out-of-sample walk-forward, multi-regime survival, real friction plus the microstructure noise floor, synthetic noise jitter ($\ge 80\%$ Sharpe retention), and the Equity Linearity Standard ($R^2 \ge 0.85$). All gate mathematics lives in one place — `server/cynic_gates.py` — so the auditor and the deployment path cannot disagree, and a gate that cannot be evaluated reports `INCONCLUSIVE` rather than passing.
 4. **Unified Single-Folder Data Isolation (`.nujin/`):** All research features, briefings, returns, and states live strictly inside `.nujin/`, namespaced via `--id <experiment_name>` so new strategies never contaminate or overwrite prior research.
 5. **Live Bot Hot-Deployment:** Emits production Python strategies and hot-deploys them into the live running trading engine without dropping active WebSocket connections or restarting server processes.
 
@@ -77,7 +77,7 @@ python tools/frontend_control.py start --port 3000 --daemon
 ### 3. Prompt Your AI Agent
 Open this workspace in your agentic coding environment (**Google Antigravity**, **Claude Code**, **Cursor**, **Windsurf**, or **Hermes**) and issue a request:
 
-> *"Research a gold (XAU/USD) 1m scalping strategy targeting max 3% drawdown and Sharpe >= 1.8 with 5m MTF trend confluence. Mine the features, run the 6-Gate Cynic audit, and deploy it to paper mode."*
+> *"Research a gold (XAU/USD) 1m scalping strategy targeting max 3% drawdown and Sharpe >= 1.8 with 5m MTF trend confluence. Mine the features, run the 8-Gate Cynic audit, and deploy it to paper mode."*
 
 The agent reads [`SKILL.md`](SKILL.md), invokes the specialized CLI tools, and executes the entire institutional pipeline.
 
@@ -94,12 +94,13 @@ The agent reads [`SKILL.md`](SKILL.md), invokes the specialized CLI tools, and e
   Join HTF context -> Extract scale-invariant features -> Vectorized screen -> Mutate rules.
                     │
                     ▼
-[ STAGE 3: 6-Gate Adversarial Cynic Audit (Falsification) ]
-  Friction Gate + DSR (>= 0.95) + Regime Survival + Noise Jitter + MC MDD99 + Linearity (R² >= 0.85).
+[ STAGE 3: 8-Gate Adversarial Cynic Audit (Falsification) ]
+  DSR (>= 0.95) + Param Stability + MC MDD99 (<= 3.0%) + OOS Walk-Forward + Regime Survival
+  + Friction/Noise Floor + Noise Jitter (>= 80%) + Linearity (R² >= 0.85). All in server/cynic_gates.py.
                     │
                     ▼
 [ STAGE 4: Native Strategy Synthesis, Closed-Loop Audit & Live Hot-Deployment ]
-  Directly code native Python class, enforce 6 Cynic Gates, verify correlation (< 0.50), & hot-deploy.
+  Directly code native Python class, enforce all 8 Cynic Gates, verify correlation (< 0.50), & hot-deploy.
 ```
 
 ---
@@ -143,6 +144,12 @@ nujin/
 
 Invoke all tools using the project virtualenv (`.venv/bin/python3 tools/<tool>.py`):
 
+### 0. Preflight (Run This First)
+* **Full production-readiness gate (compile + hermetic suite + audit CLI agreement):**
+  ```bash
+  python tools/preflight.py
+  ```
+
 ### 1. Empirical Discovery & Feature Extraction
 * **Market Anomaly & Statistical Profiling:**
   ```bash
@@ -166,7 +173,7 @@ Invoke all tools using the project virtualenv (`.venv/bin/python3 tools/<tool>.p
   ```
 
 ### 3. Adversarial Cynic Audit (Falsification)
-* **6-Gate Adversarial Cynic Auditor (Friction + DSR + Regimes + Noise + MC MDD + Linearity):**
+* **8-Gate Adversarial Cynic Auditor (DSR + Param Stability + MC MDD + OOS + Regimes + Friction/Noise Floor + Noise Jitter + Linearity):**
   ```bash
   python tools/cynic_auditor.py --id my_alpha --trials 50 --strict
   ```
@@ -215,7 +222,7 @@ Access the interactive trading cockpit at **`http://localhost:3000`**:
 |---|---|---|
 | **Chart Canvas** | **`F1`** | High-performance candlestick chart overlaid with visual primitives (multi-scale EMAs, Bollinger Bands, Fair Value Gaps, liquidity sweeps, and execution markers). |
 | **Signal Deck** | **`F2`** | Live execution telemetry: win rate, profit factor, annualized Sharpe, active open position card with real-time unrealized PnL, and manual override controls. |
-| **Backtest Deck** | **`F3`** | Backtest audit: equity trajectory curves, return distribution, regime breakdown (Bull, Bear, Range), and 6-Gate Cynic matrix ($R^2 \ge 0.85$). |
+| **Backtest Deck** | **`F3`** | Backtest audit: equity trajectory curves, return distribution, regime breakdown (Bull, Bear, Range), and the 8-Gate Cynic matrix ($R^2 \ge 0.85$). |
 | **Strategy Manager** | **`F4`** | Strategy leaderboard, global Live vs. Paper toggle, equity trajectory curves, correlation matrices, and direct action navigation. |
 | **Cycle Screens** | **`Ctrl + Space`** | Seamlessly toggle focus between open decks. |
 
@@ -232,7 +239,19 @@ Nujin supports external modular extensions via the `plugins/` directory. Any ins
 For in-depth mathematical derivations and operational specifications:
 - [`SKILL.md`](SKILL.md) — Master Autonomous Quant Engine Protocol & Instructions
 - [`references/quant_protocol.md`](references/quant_protocol.md) — Universal quant research methodology, MTF architecture, volatility sizing & risk-reward math
-- [`references/cynic_audit.md`](references/cynic_audit.md) — 6-Gate Adversarial Falsification formulas (DSR, Monte Carlo MDD, noise jitter, parameter plateau, linearity)
+- [`references/cynic_audit.md`](references/cynic_audit.md) — 8-Gate Adversarial Falsification formulas (DSR, parameter stability, Monte Carlo MDD, OOS walk-forward, regime survival, friction/noise floor, noise jitter, linearity)
+
+**Testing:** run `python -m pytest` inside `nujinSkills/` (config in `pytest.ini`; dependencies in `requirements-dev.txt`). Shared thresholds and the annualisation policy live in `server/constants.py` — import them rather than restating literals.
+
+**Preflight — "is this checkout safe to run?"** One command runs the whole gate and exits non-zero on the first problem:
+```bash
+python -m tools.preflight          # add --json for a machine-readable result
+```
+It byte-compiles `server/`, `tools/` and `tests/`, runs the full suite, and then checks that `tools/validation_cynic.py` and `tools/cynic_auditor.py` still reach the *same* verdict on the same deterministic return series (they are two entry points onto one body of gate mathematics, so a disagreement means the contract broke). This repository deliberately has no CI pipeline, so run it before deploying a change — it is the only gate there is.
+
+The suite is hermetic by contract. `tests/conftest.py` redirects every persisted store into a throwaway directory and blocks outbound sockets *and* name resolution, so a test run never touches live broker accounts, live signal history or live market prices — and never places an order through a connected broker. A test that needs a real feed must opt in explicitly with `NUJIN_ALLOW_NETWORK_TESTS=1`, and `NUJIN_TRACE_NETWORK=1` prints the call site of any blocked attempt. Tests covering the proprietary `nujinPro` extension skip when that plugin (or a given strategy within it) is not installed.
+
+Five invariants are enforced mechanically rather than by convention: every module in `server/` and `tools/` must import with the network blocked (`tests/test_import_safety.py`); live fetches must be reached through the `server.data_manager` module so one seam intercepts them, never via a module-level `from server.data_manager import fetch_x`; no function may read a global the module never defines (`test_framework_consistency.py` resolves scopes with `symtable`); **discovering** broker adapters must not **authenticate** against one — `list_available_brokers()` is read-only by default *and* every call site has to name `connect=` explicitly, so no status surface can inherit a login from a silent default; `get_broker(..., connect=False)` is the read-only form of resolution, an unconnected adapter is never cached (a cached instance whose `connect()` never ran looks healthy to the executor about to place an order), and the reported `connected`/`balance` describe the session that actually exists instead of presenting a configured account as a live one; and the on-disk secret format must not depend on optional packages, so `SecretCipher` always writes the standard-library `sl:` payload (legacy `fn:` Fernet blobs are still read where `cryptography` is installed). None of these are theoretical — they caught an exception handler logging another method's variable, a Telegram listener whose daily-report state was silently never persisted, and a broker listing call that logged in to a live account.
 - [`references/microstructure_protocol.md`](references/microstructure_protocol.md) — Market microstructure, trapped inventory, passive absorption, and auction failure dynamics
 - [`references/tools_reference.md`](references/tools_reference.md) — Complete CLI manual with all tool flags, parameters, and invocation examples
 - [`references/bot_operations.md`](references/bot_operations.md) — Non-disruptive live bot supervision, state inspection, and hot-deployment guide

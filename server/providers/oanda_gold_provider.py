@@ -6,7 +6,11 @@ import time
 from typing import Dict, Any, List, Optional
 
 from server.providers.base import BaseMarketDataProvider
-from server.data_manager import get_oanda_spot_quote, fetch_real_oanda_candles, _timeframe_to_seconds
+# Imported as a module, never as bound names: a module-level `from server.data_manager import
+# fetch_x` freezes the function into this namespace, which defeats monkeypatching
+# server.data_manager and hides live fetches from anything that intercepts them there.
+from server import data_manager
+from server.data_manager import _timeframe_to_seconds
 
 logger = logging.getLogger("OandaGoldProvider")
 
@@ -26,7 +30,7 @@ class OandaGoldProvider(BaseMarketDataProvider):
     def _load_initial_candles(self):
         """Loads clean genuine historical candles from data_manager."""
         try:
-            candles = fetch_real_oanda_candles(interval=self.timeframe, count=20000)
+            candles = data_manager.fetch_real_oanda_candles(interval=self.timeframe, count=20000)
             if candles:
                 self._candles = candles
                 last_c = self._candles[-1]
@@ -84,7 +88,7 @@ class OandaGoldProvider(BaseMarketDataProvider):
 
         while self.is_running:
             try:
-                quote = await loop.run_in_executor(None, get_oanda_spot_quote)
+                quote = await loop.run_in_executor(None, data_manager.get_oanda_spot_quote)
                 if quote and quote.get("price"):
                     anchor_p = float(quote["price"])
                     now_sec = int(time.time())

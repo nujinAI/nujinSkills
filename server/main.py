@@ -15,7 +15,10 @@ from typing import Dict, Any, Optional, List
 from server.websocket import manager
 from server.telegram_bot import telegram_gateway
 from server.bot_runner import bot_supervisor
-from server.data_manager import fetch_real_binance_klines
+# Imported as a module, never as bound names: a module-level `from server.data_manager import
+# fetch_x` freezes the function into this namespace, which defeats monkeypatching
+# server.data_manager and hides live fetches from anything that intercepts them there.
+from server import data_manager
 from server.backtest_engine import run_real_backtest
 from server.xauusd_streamer import xauusd_engine
 
@@ -260,7 +263,7 @@ async def get_candles(
                 if interval == "1m":
                     xauusd_engine.candles_1m = data
             else:
-                data = fetch_real_binance_klines(symbol=symbol, interval=interval, count=count)
+                data = data_manager.fetch_real_binance_klines(symbol=symbol, interval=interval, count=count)
                 if provider and data:
                     provider._candles = data
 
@@ -759,8 +762,14 @@ async def list_plugins():
 
 @app.get("/api/brokers")
 async def list_brokers():
-    """Returns all registered execution brokers, active broker, and connection status."""
-    brokers = broker_registry.list_available_brokers()
+    """
+    Returns all registered execution brokers, active broker, and connection status.
+
+    Discovery only: this endpoint reports what is installed and configured, and never
+    authenticates. If the executor already opened a session, the live adapter is reused and
+    its real balance/equity ride along; otherwise those fields are reported as not connected.
+    """
+    brokers = broker_registry.list_available_brokers(connect=False)
     active_id = broker_registry.get_active_broker_id()
     return {
         "active_broker": active_id,

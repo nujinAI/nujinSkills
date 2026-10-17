@@ -5,7 +5,7 @@ import os
 import math
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import websockets
 import pandas as pd
 import numpy as np
@@ -19,7 +19,9 @@ class XauusdScalpEngine:
     enforces London/NY session gates, and manages 2m-15m holding clocks.
     """
     def __init__(self):
-        self.candles_1m: List[Dict[str, Any]] = []
+        # Candles are loaded on first use, not here: see the candles_1m property.
+        self._candles_1m: List[Dict[str, Any]] = []
+        self._seeded = False
         init_p = 4374.98
         csv_path = "data/xauusd_candles_1m.csv"
         if os.path.exists(csv_path):
@@ -48,10 +50,57 @@ class XauusdScalpEngine:
         self.last_signal: Optional[Dict[str, Any]] = None
         self.is_running = False
         self._last_tv_sync = 0.0
+        # Set when a data gap could not be filled with authentic candles. Kept
+        # visible so consumers know the series is incomplete rather than being
+        # fed synthesised bars.
+        self.data_degraded = False
+        self.data_gap_seconds = 0
+
+    @property
+    def candles_1m(self) -> List[Dict[str, Any]]:
+        """
+        Recent 1m candles, seeding from history on first access.
+
+        Seeding used to run inside __init__, so constructing an engine — or importing this
+        module, which builds a module-level engine — performed a 20,000-bar live fetch.
+        That made importing the module do network I/O, which is why startup depended on the
+        network and why anything that merely inspected state paid for a full candle fetch.
+        The fetch now happens the first time candles are actually needed.
+        """
+        self._ensure_seeded()
+        return self._candles_1m
+
+    @candles_1m.setter
+    def candles_1m(self, value: List[Dict[str, Any]]) -> None:
+        # An explicit assignment is authoritative and counts as seeded, whether it came
+        # from the historical fetch or from a caller hot-swapping the series.
+        self._candles_1m = value
+        self._seeded = True
+
+    def _ensure_seeded(self) -> None:
+        if self._seeded:
+            return
+        self._seeded = True
         self._load_initial_candles()
 
+    def _mark_data_recovered(self, reason: str) -> None:
+        """
+        Clears `data_degraded` once authentic candles fill the gap.
+
+        The flag is documented as advisory "until it clears", but nothing ever cleared it: a
+        single startup or reconnect gap marked the series unreliable for the rest of the
+        process lifetime, and consumers had no way to learn that data had recovered short of
+        a restart. Only authentic bars clear it — bars whose volume was derived from the
+        polled tick stream are not evidence that the series is complete.
+        """
+        if not self.data_degraded:
+            return
+        self.data_degraded = False
+        self.data_gap_seconds = 0
+        logger.info(f"[XauusdScalpEngine] Data integrity restored ({reason}).")
+
     def _load_initial_candles(self):
-        """Loads cached 1m candles or pulls fresh from TradingView."""
+        """Loads cached 1m candles or pulls fresh from TradingView (first use only)."""
         try:
             from server.data_manager import fetch_real_oanda_candles
             bars = fetch_real_oanda_candles(interval="1m", count=20000)
@@ -373,12 +422,31 @@ class XauusdScalpEngine:
                 for c in self.candles_1m:
                     if c["time"] in by_time and c["time"] < current_active_time:
                         c["volume"] = by_time[c["time"]]["volume"]
+                        c["volume_source"] = "authentic"
                         c["open"] = by_time[c["time"]]["open"]
                         c["high"] = by_time[c["time"]]["high"]
                         c["low"] = by_time[c["time"]]["low"]
                         c["close"] = by_time[c["time"]]["close"]
+                self._mark_data_recovered("authentic bars merged from the background sync")
         except Exception as e:
             logger.debug(f"[XauusdScalpEngine] Background candle sync note: {e}")
+
+    def _broker_feed(self) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        """
+        Returns (active_broker, quote) when a connected broker can serve a live quote.
+
+        This is the broker-vs-public feed decision, extracted from the streaming loop so it
+        is testable without running the loop: an active, connected broker wins and its own
+        quote is adopted; otherwise the caller falls back to the public OANDA spot feed.
+        """
+        try:
+            from server.brokers.registry import broker_registry
+            active_broker = broker_registry.get_broker()
+            if active_broker and getattr(active_broker, "is_connected", False) and hasattr(active_broker, "get_latest_quote"):
+                return active_broker, active_broker.get_latest_quote("XAU/USD")
+        except Exception as e_bq:
+            logger.debug(f"[XauusdScalpEngine] Broker quote check note: {e_bq}")
+        return None, None
 
     async def run_live_feed(self, broadcast_callback=None):
         """
@@ -397,14 +465,7 @@ class XauusdScalpEngine:
 
                 # Dynamic Broker Feed Switching:
                 # If an active broker is connected (e.g. TradeLocker), use the broker's own live quote feed.
-                broker_quote = None
-                try:
-                    from server.brokers.registry import broker_registry
-                    active_broker = broker_registry.get_broker()
-                    if active_broker and getattr(active_broker, "is_connected", False) and hasattr(active_broker, "get_latest_quote"):
-                        broker_quote = active_broker.get_latest_quote("XAU/USD")
-                except Exception as e_bq:
-                    logger.debug(f"[XauusdScalpEngine] Broker quote check note: {e_bq}")
+                active_broker, broker_quote = self._broker_feed()
 
                 if broker_quote and broker_quote.get("price"):
                     feed_data = broker_quote
@@ -449,20 +510,25 @@ class XauusdScalpEngine:
                             tick_vol = (baseline_vol / 30.0) * vol_multiplier
                             last_c["volume"] = round(float(last_c.get("volume", 0)) + tick_vol, 1)
 
-                            # Micro-pip live fluctuation (authentic gold bid/ask tick dance)
-                            import random
-                            micro_pip = random.choice([-0.12, -0.06, 0.0, 0.05, 0.11]) if price_displacement < 0.05 else 0.0
-                            live_p = round(c_close + micro_pip, 2)
-                            last_c["close"] = live_p
-                            last_c["high"] = max(last_c["high"], live_p)
-                            last_c["low"] = min(last_c["low"], live_p)
-                            self.current_quote["price"] = live_p
-                            self.current_quote["bid"] = round(live_p - 0.15, 2)
-                            self.current_quote["ask"] = round(live_p + 0.15, 2)
+                            # Serve the observed price VERBATIM. This block used to
+                            # add a random micro-pip "tick dance" to the close and
+                            # then re-derive bid/ask from it, so the quoted price
+                            # was not the real market price. Prices are never
+                            # synthesised.
+                            last_c["close"] = c_close
+                            last_c["high"] = max(last_c["high"], c_close)
+                            last_c["low"] = min(last_c["low"], c_close)
+                            self.current_quote["price"] = c_close
+                            self.current_quote["bid"] = feed_data.get("bid") or round(c_close - 0.15, 2)
+                            self.current_quote["ask"] = feed_data.get("ask") or round(c_close + 0.15, 2)
                         elif minute_bucket > last_c["time"]:
-                            # Ensure the finalized previous bar has a realistic closed volume
-                            if last_c.get("volume", 0) < baseline_vol * 0.5:
-                                last_c["volume"] = round(baseline_vol * float(np.random.uniform(0.85, 1.15)), 1)
+                            # An OANDA spot quote carries no volume, so this bar's
+                            # volume is DERIVED from the polled price stream, not
+                            # exchange volume. It used to be randomised into looking
+                            # authentic; now it is labelled instead, and the
+                            # authentic background sync overwrites it when available.
+                            if not last_c.get("volume_source"):
+                                last_c["volume_source"] = "derived_from_ticks"
 
                             # If missed more than 1 minute (e.g. startup/reconnect gap), backfill authentic bars
                             if (minute_bucket - last_c["time"]) > 120:
@@ -470,20 +536,20 @@ class XauusdScalpEngine:
                                 fresh = await loop.run_in_executor(None, lambda: fetch_real_oanda_candles(interval="1m", count=20000, force_refresh=False))
                                 if fresh and fresh[-1]["time"] >= minute_bucket - 120:
                                     self.candles_1m = fresh
+                                    self._mark_data_recovered("gap backfilled with authentic candles")
                                 else:
-                                    curr_t = last_c["time"] + 60
-                                    prev_close = last_c["close"]
-                                    while curr_t <= minute_bucket:
-                                        self.candles_1m.append({
-                                            "time": curr_t,
-                                            "open": prev_close,
-                                            "high": max(prev_close, c_close),
-                                            "low": min(prev_close, c_close),
-                                            "close": c_close if curr_t == minute_bucket else prev_close,
-                                            "volume": round(max(10.0, baseline_vol / 30.0), 1)
-                                        })
-                                        prev_close = c_close
-                                        curr_t += 60
+                                    # Do NOT fabricate bars for minutes that were never
+                                    # observed. Record the gap so consumers know the
+                                    # series is incomplete, rather than silently feeding
+                                    # interpolated prices into indicators and signals.
+                                    self.data_degraded = True
+                                    self.data_gap_seconds = int(minute_bucket - last_c["time"])
+                                    logger.warning(
+                                        "[XauusdScalpEngine] Data gap of %ss could not be "
+                                        "backfilled with authentic candles; refusing to "
+                                        "synthesise bars.",
+                                        self.data_gap_seconds,
+                                    )
                             else:
                                 prev_close = last_c["close"]
                                 initial_vol = round(max(10.0, baseline_vol / 30.0), 1)
@@ -493,7 +559,10 @@ class XauusdScalpEngine:
                                     "high": max(prev_close, c_close),
                                     "low": min(prev_close, c_close),
                                     "close": c_close,
-                                    "volume": initial_vol
+                                    "volume": initial_vol,
+                                    # An OANDA spot quote carries no volume; this value
+                                    # is derived until the authentic sync replaces it.
+                                    "volume_source": "derived_from_ticks"
                                 })
 
                                 # Schedule non-blocking background sync of finalized bars from TradingView
@@ -529,4 +598,44 @@ class XauusdScalpEngine:
 
             await asyncio.sleep(2.0)
 
-xauusd_engine = XauusdScalpEngine()
+_ENGINE: Optional[XauusdScalpEngine] = None
+
+
+def get_xauusd_engine() -> XauusdScalpEngine:
+    """
+    Returns the process-wide XAUUSD scalp engine, building and seeding it on first use.
+
+    The engine used to be constructed at import time, so importing this module — or
+    anything that imports it, such as `server.main` — performed a 20,000-bar live fetch.
+    Deferring both the construction and the seed keeps module import free of network I/O
+    while leaving callers with exactly the same object and behaviour on first use.
+    """
+    global _ENGINE
+    if _ENGINE is None:
+        _ENGINE = XauusdScalpEngine()
+        _ENGINE._ensure_seeded()
+    return _ENGINE
+
+
+class _LazyEngine:
+    """
+    Stand-in for the old module-level `xauusd_engine` instance.
+
+    Forwards attribute reads and writes to the engine from get_xauusd_engine(), so existing
+    `xauusd_engine.something` call sites keep working unchanged while construction stays
+    deferred until the first access.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(get_xauusd_engine(), item)
+
+    def __setattr__(self, key: str, value: Any) -> None:
+        setattr(get_xauusd_engine(), key, value)
+
+    def __repr__(self) -> str:
+        return f"<lazy {XauusdScalpEngine.__name__} proxy at {hex(id(self))}>"
+
+
+xauusd_engine = _LazyEngine()

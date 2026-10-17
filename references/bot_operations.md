@@ -99,3 +99,48 @@ Broadcast research milestones, backtest summaries, or strategy promotions:
 ```bash
 nujinSkills/.venv/bin/python3 tools/telegram_broadcast.py broadcast --type update --title "New Strategy Deployed" -m "Alpha strategy 'MyAlphaStrategy' hot-deployed to paper mode with DSR 0.97."
 ```
+
+---
+
+## 🛡️ Data Integrity Guarantees
+
+Live market data must never be synthesised. The XAU/USD feed (`server/xauusd_streamer.py`) polls an
+OANDA spot quote, which carries a **price but no volume**, so:
+
+- **Prices are served verbatim.** No random "micro-pip" jitter is applied to the close or to bid/ask.
+- **Volume is labelled, never faked.** Bars built from the polled stream carry
+  `volume_source: "derived_from_ticks"`; the background authentic sync sets `volume_source: "authentic"`
+  when it fills a bar from real candles. Strategies that depend on volume must not run on bars whose
+  `volume_source` is not `"authentic"`.
+- **Gaps are reported, not interpolated.** If a gap cannot be backfilled with authentic candles, the
+  engine sets `data_degraded = True` (with `data_gap_seconds`) and logs a warning instead of appending
+  synthesised bars.
+
+Any consumer that observes `data_degraded` should treat signals as unreliable until it clears. It does
+clear: `_mark_data_recovered()` resets it (and `data_gap_seconds` to 0) the moment **authentic** bars
+arrive — either because a backfill succeeded or because the background authentic sync merged real
+candles. Bars whose volume was derived from the polled tick stream are not evidence that the series is
+complete, so they never clear the flag.
+
+---
+
+## 🔐 Live Entry Arming Interlock
+
+An order routed to a **live** broker environment is real money, and the adapter cannot tell an intended
+live entry from an accidental one. Live entries therefore require one explicit, process-level switch:
+
+```bash
+export NUJIN_LIVE_TRADING=1     # arm live entries for this process
+```
+
+- **Unset (or any value other than `1`/`true`/`yes`/`on`)** — live entries are refused with status
+  `BLOCKED_NOT_ARMED`. No client session is even created, no order is sent, and the strategy records
+  the signal as `BLOCKED_NOT_ARMED` with `execution_mode: "NONE"` so no phantom position is tracked.
+- **Armed** — the live path behaves exactly as before.
+- **Demo accounts are unaffected** by the switch; the interlock only applies when the account's
+  `environment` names a live gateway.
+- **Exits are never gated.** `close_position()` and `modify_position()` are deliberately not blocked,
+  even when entries are disarmed: an operator must always be able to flatten or protect a live position.
+
+The refusal is loud — a warning in the log plus a Telegram receipt on the affected account — so a
+disarmed strategy is visible rather than silently idle.

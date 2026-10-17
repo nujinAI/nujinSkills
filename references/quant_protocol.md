@@ -17,7 +17,7 @@ Regardless of the underlying trading philosophy—whether Price Action, Market S
 2. **Translate to Objective Conditions:** Convert subjective or qualitative notions into unambiguous, mathematically verifiable rules and features.
 3. **Multi-Timeframe Structure:** Embed the rules into a hierarchical Higher/Mid/Lower timeframe structure for context, confirmation, and precision.
 4. **Enforce Execution Realism:** Account for spread, taker fees, slippage, and latency from day one.
-5. **Adversarial Falsification:** Subject the candidate to the 5-Gate Cynic Audit before deployment.
+5. **Adversarial Falsification:** Subject the candidate to the 8-Gate Cynic Audit before deployment.
 
 ### 1.2 Mathematical Expectancy & Risk Asymmetry
 Every strategy must produce positive mathematical expectancy after all execution friction:
@@ -41,7 +41,7 @@ A systematic strategy must never attempt to trade inside an asset's microstructu
    - Short entries fill at Bid ($\text{Price} - \frac{1}{2}\text{Spread}$); Short exits fill at Ask ($\text{Price} + \frac{1}{2}\text{Spread}$).
    - Expected edge per trade must exceed $2.5\times$ total round-trip friction ($\text{Spread} + \text{Taker Fee} + \text{Slippage}$).
 
-### 1.4 Equity Curve Linearity & Stability Mandate ($R^2 \ge 0.90$, K-Ratio)
+### 1.4 Equity Curve Linearity & Stability Mandate ($R^2 \ge 0.85$, target $\ge 0.90$, K-Ratio)
 To achieve smooth compounding without erratic swings or long flatlined drawdowns across any asset class:
 
 1. **Linear Regression Goodness-of-Fit ($R^2 \ge 0.90$):**
@@ -160,15 +160,26 @@ Examine underlying series behavior before finalizing rule parameters:
    - Execute vectorized screening via `tools/vectorized_screener.py` or continuous cycles via `tools/autoresearch_miner.py`.
    - Leverage multi-scale features including trend, volatility, and auction microstructure proxies ([`references/microstructure_protocol.md`](microstructure_protocol.md)).
    - If progress halts ($N \ge 5$ iterations without improvement), trigger the **Plateau Breaker** to expand the feature space, mutate rules, or adjust timeframes.
+5. **Search Accounting (Trial Ledger):**
+   - Every evaluated hypothesis is appended to `.nujin/trial_ledger.jsonl` via `server/trial_ledger.py` — backtests record `kind="backtest"`, miner cycles record `kind="miner_step"`, each keyed by a stable rule fingerprint.
+   - DSR's $N_{trials}$ is **read from this ledger**, never inferred from the number of trades. Inferring it from trade count made the multiple-testing penalty arbitrary and the gate weaker than it appeared. Distinct hypotheses count once; re-auditing the same strategy does not inflate $N$.
+   - The ledger is also the evidence a future Probability-of-Backtest-Overfitting (PBO/CSCV) check requires.
 
 ### Stage 3: Adversarial Cynic Audit (Falsification)
-Every candidate strategy must pass all 6 gates before code generation:
-1. **Execution Friction & Noise Floor:** Realistic fee + slippage + spread friction; stops must clear Brownian noise ($\ge \max(3\times \text{Spread}, 1.5\times \text{ATR})$).
-2. **Deflated Sharpe Ratio (DSR):** DSR $\ge 0.95$ accounting for total trial count ($N_{trials}$) and non-normal return skewness/kurtosis.
-3. **Market Regime Survival:** Positive expectancy across distinct market slices (Trending, Choppy, Volatility shock).
-4. **Noise Perturbation Jitter:** Price series perturbed with synthetic noise; Sharpe retention must exceed $80\%$.
-5. **Parameter Stability Surface & Monte Carlo MDD:** Hyperparameter grid must form a stable plateau, and 1,000+ trade order permutations must yield $\text{MDD}_{99} \le 3.0\%$.
-6. **Equity Curve Linearity Standard:** Compounding path must follow a smooth, nearly linear trajectory ($R^2 \ge 0.85$, $K\text{-Ratio} \ge 1.5$).
+Every candidate must pass all **8 canonical gates** before strategy synthesis. The mathematics is
+implemented once in `server/cynic_gates.py`; see [`references/cynic_audit.md`](cynic_audit.md) for the
+full specification.
+1. **Deflated Sharpe Ratio (DSR):** $\text{DSR} \ge 0.95$, penalised for total trial count ($N_{trials}$) and non-normal skew/kurtosis ($\ge 30$ trades).
+2. **Parameter Stability Surface:** Real perturbed re-runs must form a plateau ($\min(M) > 0.40\,\widehat{SR}$ and $\text{mean}(M) > 0.70\,\widehat{SR}$). Without genuine re-runs the gate reports `INCONCLUSIVE`, never `PASS`.
+3. **Monte Carlo MDD:** 1,000 trade-order permutations must yield $\text{MDD}_{99} \le 3.0\%$ with tail ratio $\le 2.5$.
+4. **Out-of-Sample Walk-Forward:** 70/30 chronological split; $SR_{OOS} > 1.0$ and retention $\ge 30\%$.
+5. **Market Regime Survival:** Score $\ge 50/100$ across Bull / Bear / Range (or $\ge 2$ of 3 temporal slices positive).
+6. **Execution Friction & Noise Floor:** Net expectancy $> 0$ after 5 bps fee + 2 bps slippage (not re-charged when returns already embed friction); stops must clear the 10 bps microstructure floor.
+7. **Noise Perturbation Jitter:** Sharpe retention $\ge 80\%$ under seeded synthetic noise.
+8. **Equity Curve Linearity Standard:** $R^2 \ge 0.85$ with positive slope (target $R^2 \ge 0.90$, $K\text{-Ratio} \ge 1.5$).
+
+A gate that cannot be evaluated returns `INCONCLUSIVE` and does **not** count as passed. The candidate is
+`APPROVED` only when all 8 gates report `PASS`; any `FAIL` renders the verdict `REJECTED`.
 
 ### Stage 4: Native AI Strategy Synthesis, Closed-Loop Cynic Verification & Live Hot-Deployment
 1. **Unified Native AI Strategy Synthesis:**
@@ -176,7 +187,7 @@ Every candidate strategy must pass all 6 gates before code generation:
    - Complete expressiveness with zero template ceilings: implements multi-bar state machines, MTF zone tracking, custom liquidity confirmations (wicks, absorptions, momentum), microstructure noise floor protection ($\ge \max(3\times \text{Spread}, 1.5\times \text{ATR})$), and visual indicator manifests (`chart_indicators`).
 2. **Closed-Loop Cynic Compiler Loop:**
    - The emitted strategy is immediately evaluated via `tools/cynic_auditor.py --strategy <Name> --strict`.
-   - If any of the 6 Gates fail (e.g. noise floor, parameter plateau, or $R^2 < 0.85$ linearity), the AI Agent iterates on the strategy rules and logic until all 6 Gates pass.
+   - If any gate reports `FAIL` or `INCONCLUSIVE` (e.g. noise floor, an unevaluated parameter plateau, or $R^2 < 0.85$ linearity), the AI Agent iterates on the strategy rules and logic until all 8 gates report `PASS`.
 3. **Portfolio Correlation Audit:**
    - Verify low pairwise return correlation ($< 0.50$) with existing active strategies (`tools/portfolio_cynic.py`).
 4. **Hot Deployment:**

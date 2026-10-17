@@ -730,6 +730,27 @@ class NativeStrategyRunner:
                     sig["status"] = "ACTIVE_IN_POSITION"
                     sig["execution_mode"] = "PAPER_SIMULATED"
                     sig["annotation"] = f"{sig.get('annotation', '')} (Simulated Paper)"
+            elif order_res.get("status") == "BLOCKED_NOT_ARMED":
+                # Live order routing is disarmed, so nothing was sent and no position exists.
+                # This must never fall through to the simulated-fill branch below, which marks
+                # the signal ACTIVE_IN_POSITION and would manage a position that is not there.
+                err_msg = order_res.get("error") or "Live trading is disarmed"
+                logger.warning(f"[NativeStrategyRunner] ⛔ Live entry blocked for {self.strategy_name}: {err_msg}")
+                sig["status"] = "BLOCKED_NOT_ARMED"
+                sig["execution_mode"] = "NONE"
+                sig["exit_reason"] = f"NOT_ARMED: {err_msg}"
+                sig["annotation"] = "Entry blocked (live trading disarmed)"
+                signal_store.add(sig)
+                telegram_gateway.send_message(
+                    f"⛔ <b>[LIVE ENTRY BLOCKED]</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 <b>Strategy:</b> <code>{self.strategy_name}</code>\n"
+                    f"⚠️ <b>Action:</b> {sig.get('action')} @ {sig.get('price')}\n"
+                    f"🛑 <b>Reason:</b> <code>{err_msg}</code>\n\n"
+                    f"<i>No live position was opened, and none is tracked.</i>",
+                    parse_mode="HTML",
+                )
+                return
             elif order_res.get("status") == "SIMULATED_PREVIEW":
                 if not is_paper_broker:
                     logger.warning(f"[NativeStrategyRunner] Broker returned preview for {self.strategy_name} while on live broker.")

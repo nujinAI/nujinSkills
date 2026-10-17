@@ -14,6 +14,17 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from server.constants import (  # noqa: E402
+    DSR_THRESHOLD,
+    MAX_DRAWDOWN,
+    MIN_EXPECTANCY_BPS,
+    MIN_R2,
+    MIN_SHARPE,
+    MIN_TRADES_SIGNIFICANT,
+    MIN_WIN_RATE,
+)
+from server.trial_ledger import fingerprint as _trial_fingerprint, record_trial  # noqa: E402
+
 TOOL_NAME = "[NujinMiner]"
 NUJIN_DIR = ".nujin" if os.path.exists(".nujin") or not os.path.exists(".autoresearch") else ".autoresearch"
 AUTORESEARCH_DIR = NUJIN_DIR
@@ -219,9 +230,6 @@ def action_scan(data_path: str = "data/candles_15m.csv"):
     briefing = generate_empirical_briefing(data_path, output_path=out_path)
     print_ascii_briefing(briefing)
     return briefing
-    print(f"{TOOL_NAME} Target: {state['target']} (Archetype: {arch_name})")
-    print(f"{TOOL_NAME} Validation Slices: {len(state['validation_slices'])} regime partitions")
-    print(f"{TOOL_NAME} Files created: {state_path}, {rules_path}, {best_rules_path}, {results_path}")
 
 def _mutate_numeric_thresholds(expr: str, factor: float) -> str:
     """
@@ -532,21 +540,38 @@ def action_step(features_path: str = "data/features.csv", rules_override: str = 
     # 1. Execute Evaluation
     metrics = execute_screener_eval(current_rules, features_path)
 
-    # 2. Strict Binary Criteria Evaluation
+    # Record this hypothesis so DSR counts real search effort rather than
+    # inferring a trial count from the number of trades.
+    record_trial(
+        kind="miner_step",
+        fingerprint=_trial_fingerprint(current_rules),
+        metrics={"sharpe": metrics.get("sharpe"), "dsr": metrics.get("dsr")},
+        source="autoresearch_miner",
+    )
+
+    # 2. Strict Binary Criteria Evaluation (thresholds come from server/constants.py)
     criteria = {
-        "sharpe_gte_1_8": 1 if metrics["sharpe"] >= 1.80 else 0,
-        "drawdown_lte_3_0": 1 if metrics["max_drawdown"] <= 0.030 else 0,
-        "sample_trades_gte_60": 1 if (metrics["trades"] >= 60 and metrics["win_rate"] >= 0.50) else 0,
-        "fee_drag_protected": 1 if metrics["expectancy_bps"] >= 14.0 else 0,
-        "dsr_gte_0_95": 1 if metrics["dsr"] >= 0.95 else 0,
+        "sharpe_gte_min": 1 if metrics["sharpe"] >= MIN_SHARPE else 0,
+        "drawdown_lte_max": 1 if metrics["max_drawdown"] <= MAX_DRAWDOWN else 0,
+        "sample_trades_gte_min": 1 if (metrics["trades"] >= MIN_TRADES_SIGNIFICANT
+                                       and metrics["win_rate"] >= MIN_WIN_RATE) else 0,
+        "fee_drag_protected": 1 if metrics["expectancy_bps"] >= MIN_EXPECTANCY_BPS else 0,
+        "dsr_gte_threshold": 1 if metrics["dsr"] >= DSR_THRESHOLD else 0,
         "param_plateau": 1 if metrics["param_stability"] == "PASS" else 0,
-        "equity_linearity_gte_0_85": 1 if metrics.get("r_squared", 0.0) >= 0.85 else 0
+        "equity_linearity_gte_min": 1 if metrics.get("r_squared", 0.0) >= MIN_R2 else 0,
     }
 
     score = sum(criteria.values())
     validation_score = score  # Evaluated on full multi-regime features
-    max_score = state.get("max_score", 7)
-    failures = [crit for crit, val in criteria.items() if val == 0]
+
+    # A criterion that could not be *evaluated* this cycle is surfaced as pending
+    # rather than silently counted as a failure. Parameter stability returns
+    # INCONCLUSIVE until real perturbed re-runs are supplied.
+    pending = [c for c in ("param_plateau",)
+               if metrics.get("param_stability") == "INCONCLUSIVE"]
+    max_score = max(1, len(criteria) - len(pending))
+    state["pending_criteria"] = pending
+    failures = [crit for crit, val in criteria.items() if val == 0 and crit not in pending]
 
     best_v_score = state.get("best_validation_score", -1)
     confidence_margin = state.get("confidence_margin", 1)

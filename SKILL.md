@@ -3,8 +3,9 @@ name: nujinskills
 description: >-
   Autonomous quantitative research, strategy engineering & systematic trading engine for NujinAI.
   Translates any trading thesis or market hypothesis into systematic strategies, runs iterative optimization loops,
-  enforces multi-timeframe confluence, audits via the 6-Gate Cynic protocol (Friction, DSR >= 0.95, Monte Carlo MDD,
-  Noise Jitter, Parameter Stability, Equity Linearity R^2 >= 0.85), and hot-deploys to the running bot.
+  enforces multi-timeframe confluence, audits candidates against the 8-Gate Cynic falsification protocol
+  (Deflated Sharpe >= 0.95, Parameter Stability, Monte Carlo MDD99 <= 3.0%, OOS Walk-Forward, Regime Survival,
+  Friction & Noise Floor, Noise Jitter >= 80% retention, Equity Linearity R^2 >= 0.85), and hot-deploys to the running bot.
 ---
 
 # Skill: NujinSkills — Autonomous Quant Research & Trading Engine
@@ -42,7 +43,8 @@ Your responsibility is to take any trading concept or quantitative hypothesis th
                     │
                     ▼
 [ STAGE 3: Adversarial Cynic Audit & Stress Verification ]
-  Enforce 6 Gates: Real Friction, Deflated Sharpe (DSR >= 0.95), Regimes, Noise Jitter, MC MDD, & Linearity.
+  Enforce 8 canonical gates (see references/cynic_audit.md, implemented in server/cynic_gates.py).
+  A gate that cannot be evaluated reports INCONCLUSIVE and never counts as a pass.
                     │
                     ▼
 [ STAGE 4: Native Strategy Synthesis, Closed-Loop Cynic Audit & Live Hot-Deployment ]
@@ -70,8 +72,9 @@ All research data, features, briefings, returns, and state are organized strictl
   `tools/vectorized_screener.py --id my_alpha --rules '{"entry_long": "condition"}'`
 
 ### 3. Adversarial Cynic Audit (Falsification)
-- **6-Gate Adversarial Falsification Audit (DSR + Monte Carlo + Linearity):**
+- **8-Gate Adversarial Falsification Audit (single source: `server/cynic_gates.py`):**
   `tools/cynic_auditor.py --id my_alpha --trials 50 --strict`
+  (Gate math is never duplicated elsewhere; the backtester and this CLI share one implementation.)
 - **Portfolio Correlation & Regime Orthogonality:**
   `tools/portfolio_cynic.py --data data/candles_15m.csv --threshold 0.50`
 
@@ -104,7 +107,7 @@ All research data, features, briefings, returns, and state are organized strictl
 
 Consult these modular references on demand during specific tasks:
 - [`references/quant_protocol.md`](file:///home/christonomous/Coding/AutonomousEnterprises/nujin/nujinSkills/references/quant_protocol.md) — Comprehensive institutional methodology (Hypothesis formulation, MTF confluence, R:R math, Out-of-Sample rigor).
-- [`references/cynic_audit.md`](file:///home/christonomous/Coding/AutonomousEnterprises/nujin/nujinSkills/references/cynic_audit.md) — 6-Gate Adversarial Audit mathematical formulas (DSR, Monte Carlo MDD, noise jitter, parameter plateau, linearity).
+- [`references/cynic_audit.md`](file:///home/christonomous/Coding/AutonomousEnterprises/nujin/nujinSkills/references/cynic_audit.md) — 8-Gate Adversarial Audit mathematical formulas, canonical gate keys, thresholds and the INCONCLUSIVE rule (DSR, parameter stability, Monte Carlo MDD, OOS walk-forward, regime survival, friction/noise floor, noise jitter, linearity).
 - [`references/microstructure_protocol.md`](file:///home/christonomous/Coding/AutonomousEnterprises/nujin/nujinSkills/references/microstructure_protocol.md) — Market microstructure, trapped inventory, passive absorption, and auction failure dynamics.
 - [`references/tools_reference.md`](file:///home/christonomous/Coding/AutonomousEnterprises/nujin/nujinSkills/references/tools_reference.md) — Complete CLI tool manual with exact flags, parameters, and invocation patterns.
 - [`references/bot_operations.md`](file:///home/christonomous/Coding/AutonomousEnterprises/nujin/nujinSkills/references/bot_operations.md) — Non-disruptive live bot supervision, state inspection, hot-deployment, and telemetry protocols.

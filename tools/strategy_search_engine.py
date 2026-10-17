@@ -10,7 +10,19 @@ import argparse
 import pandas as pd
 import numpy as np
 
-def run_vectorized_backtest(df: pd.DataFrame, entry_signal: pd.Series, exit_signal: pd.Series, fee_bps: float = 5.0, slippage_bps: float = 2.0):
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from server.constants import (  # noqa: E402
+    DEFAULT_TIMEFRAME,
+    FEE_BPS,
+    SLIPPAGE_BPS,
+    annualization_factor,
+)
+
+
+def run_vectorized_backtest(df: pd.DataFrame, entry_signal: pd.Series, exit_signal: pd.Series,
+                            fee_bps: float = FEE_BPS, slippage_bps: float = SLIPPAGE_BPS,
+                            timeframe: str = DEFAULT_TIMEFRAME):
     """Computes vectorized return metrics with friction."""
     price = df['close'] if 'close' in df.columns else df.iloc[:, 1]
     returns = price.pct_change().fillna(0)
@@ -41,7 +53,10 @@ def run_vectorized_backtest(df: pd.DataFrame, entry_signal: pd.Series, exit_sign
     
     mean_ret = strategy_returns.mean()
     std_ret = strategy_returns.std()
-    sharpe = (mean_ret / std_ret * np.sqrt(252 * 24 * 4)) if std_ret > 0 else 0.0
+    # BAR-sampled returns: annualise by this timeframe's bars-per-year. The
+    # factor used to be hardcoded to 15m, so this Sharpe was not comparable
+    # with the trade-based Sharpe used elsewhere on the same 1.80 threshold.
+    sharpe = (mean_ret / std_ret * annualization_factor(timeframe)) if std_ret > 0 else 0.0
     
     return {
         "sharpe": float(sharpe),
@@ -55,6 +70,8 @@ def main():
     parser.add_argument("--features", type=str, required=True, help="Path to features CSV")
     parser.add_argument("--target-sharpe", type=float, default=1.5, help="Target Sharpe Ratio threshold")
     parser.add_argument("--max-dd", type=float, default=0.10, help="Maximum allowed Drawdown")
+    parser.add_argument("--timeframe", type=str, default=DEFAULT_TIMEFRAME,
+                        help="Timeframe of the feature set (e.g. 15m, 1h, 4h)")
     args = parser.parse_args()
 
     print(f"🚀 Initializing Search Engine on: {args.features}")
@@ -77,7 +94,7 @@ def main():
             entry_signal = df[z_col] < entry_thresh
             exit_signal = df[z_col] > exit_thresh
             
-            res = run_vectorized_backtest(df, entry_signal, exit_signal)
+            res = run_vectorized_backtest(df, entry_signal, exit_signal, timeframe=args.timeframe)
             if res["num_trades"] >= 20 and res["sharpe"] > best_sharpe:
                 best_sharpe = res["sharpe"]
                 best_result = {

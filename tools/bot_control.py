@@ -56,7 +56,10 @@ def show_broker_status(endpoint: str):
             active_id = res.get("active_broker", "paper")
     except Exception:
         from server.brokers.registry import broker_registry
-        brokers = broker_registry.list_available_brokers()
+        # This is the offline fallback: there is no running server, so no session exists to
+        # report a balance from. Discover without connecting and say so below rather than
+        # printing a fabricated 0.00.
+        brokers = broker_registry.list_available_brokers(connect=False)
         active_id = broker_registry.get_active_broker_id()
 
     print("\n" + "=" * 80)
@@ -74,8 +77,15 @@ def show_broker_status(endpoint: str):
             bal = acc.get("balance", 0.0)
             eq = acc.get("equity", 0.0)
             is_demo = "Demo / Simulated" if acc.get("is_demo") else "Live Production"
+            accounts = acc.get("multi_account_count", 0)
             print(f"     Mode:    {is_demo}")
-            print(f"     Balance: ${bal:,.2f} {cur} | Equity: ${eq:,.2f} {cur}")
+            if acc.get("connected"):
+                print(f"     Balance: ${bal:,.2f} {cur} | Equity: ${eq:,.2f} {cur}")
+            else:
+                print(
+                    f"     Session: not connected — live balance unavailable "
+                    f"({accounts} account(s) configured; start the bot to see figures)"
+                )
         print("  " + "-" * 76)
     print("=" * 80 + "\n")
 

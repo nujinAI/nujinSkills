@@ -105,12 +105,21 @@ Ultra-fast VectorBT coarse filter evaluating candidate entry/exit logic against 
 ## 3. Adversarial Cynic Audit (Falsification)
 
 ### `cynic_auditor.py` (and `validation_cynic.py`)
-Generic 5-Gate Adversarial Falsification Auditor. Verifies candidate strategy returns against real fee/slippage friction, Deflated Sharpe Ratio ($\text{DSR} \ge 0.95$), multi-regime slices, synthetic price noise jitter ($\ge 80\%$ Sharpe retention), and 1,000-run Monte Carlo trade order permutations ($\text{MDD}_{99}$ tail risk).
+Canonical **8-Gate** Adversarial Falsification Auditor. All gate mathematics lives in
+[`server/cynic_gates.py`](../server/cynic_gates.py); both CLIs are presentation layers over it, so the
+agent-facing auditor and the deployment path can never disagree.
+
+Evaluates Deflated Sharpe Ratio ($\ge 0.95$), parameter stability, 1,000-run Monte Carlo trade-order
+permutations ($\text{MDD}_{99} \le 3.0\%$), out-of-sample walk-forward, regime survival, friction &
+microstructure noise floor, synthetic noise jitter ($\ge 80\%$ Sharpe retention) and equity linearity
+($R^2 \ge 0.85$). Each gate returns `PASS`, `FAIL` or `INCONCLUSIVE`; `INCONCLUSIVE` **never** counts as
+a pass, and the verdict is `APPROVED` only when all 8 gates pass.
 - **Usage:**
   ```bash
-  tools/cynic_auditor.py [--returns PATH] [--strategy NAME] [--spec PATH] [--trials INT] [--strict] [--json]
+  tools/cynic_auditor.py [--id NAME] [--returns PATH] [--strategy NAME] [--spec PATH] [--trials INT] [--strict] [--json]
   ```
 - **Arguments:**
+  - `--id`: Experiment ID to audit in `.nujin/experiments/<id>/`.
   - `--returns`: JSON file containing candidate trade returns series (array of floats).
   - `--strategy`: Strategy name in `strategies/` to run a real backtest audit on.
   - `--spec`: Strategy specification JSON path (default: `.nujin/best_rule.json`).

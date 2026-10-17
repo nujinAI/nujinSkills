@@ -8,7 +8,10 @@ from typing import Dict, Any, List, Optional
 import pandas as pd
 
 from server.providers.base import BaseMarketDataProvider
-from server.data_manager import fetch_real_sp500_candles
+# Imported as a module, never as a bound name: a module-level `from server.data_manager import
+# fetch_x` freezes the function into this namespace, which defeats monkeypatching
+# server.data_manager and hides live fetches from anything that intercepts them there.
+from server import data_manager
 
 logger = logging.getLogger("Sp500Provider")
 
@@ -26,7 +29,7 @@ class Sp500Provider(BaseMarketDataProvider):
         self._load_initial_data()
 
     def _load_initial_data(self):
-        candles = fetch_real_sp500_candles(interval=self.timeframe, count=20000)
+        candles = data_manager.fetch_real_sp500_candles(interval=self.timeframe, count=20000)
         if candles:
             self._candles = candles
             last_c = self._candles[-1]

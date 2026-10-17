@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from server.backtest_engine import run_real_backtest
+from server.cynic_gates import format_matrix, MAX_MDD_99
 
 def audit(strategy: str, save_state: bool, output_path: str):
     print(f"[BacktestAudit] Running quantitative audit for strategy: {strategy}")
@@ -30,19 +31,15 @@ def audit(strategy: str, save_state: bool, output_path: str):
     print(f"  Net Sharpe Ratio:      {summary.get('sharpe')} (>= 1.8 required)")
     print(f"  Win Rate:              {summary.get('win_rate', 0) * 100:.1f}%")
     print(f"  Profit Factor:         {summary.get('profit_factor')}")
-    print(f"  Max Drawdown (IS):     {summary.get('max_drawdown', 0) * 100:.2f}% (<= 4.5%)")
-    print(f"  Monte Carlo MDD99:     {summary.get('mdd_99', 0) * 100:.2f}% (max 4.5%)")
+    print(f"  Max Drawdown (IS):     {summary.get('max_drawdown', 0) * 100:.2f}%")
+    print(f"  Monte Carlo MDD99:     {summary.get('mdd_99', 0) * 100:.2f}% (gate: <= {MAX_MDD_99 * 100:.1f}%)")
     print(f"  Deflated Sharpe (DSR): {summary.get('dsr')} (>= 0.95) -> {gates.get('gate_1_dsr', {}).get('status')}")
     print(f"  Expectancy:            {summary.get('expectancy_bps')} bps")
     print(f"  Total Trades:          {len(trades)}")
     print("-" * 70)
-    print("  5-GATE CYNIC AUDIT MATRIX:")
-    print(f"    [Gate 1] DSR:                 {gates.get('gate_1_dsr', {}).get('status')} (Score: {summary.get('dsr')})")
-    print(f"    [Gate 2] Param Stability:     {gates.get('gate_2_parameter_stability', {}).get('status')} ({gates.get('gate_2_parameter_stability', {}).get('plateau_status')})")
-    print(f"    [Gate 3] Monte Carlo MDD99:   {gates.get('gate_3_monte_carlo', {}).get('status')} ({summary.get('mdd_99', 0) * 100:.2f}%)")
-    print(f"    [Gate 4] OOS Walk-Forward:    {gates.get('gate_4_oos_walkforward', {}).get('status')} (Retention: {gates.get('gate_4_oos_walkforward', {}).get('retention_pct')}%)")
-    print(f"    [Gate 5] Regime Survival:     {gates.get('gate_5_regime_survival', {}).get('status')} (Score: {gates.get('gate_5_regime_survival', {}).get('score')}/100)")
-    print(f"    [Gate 6] Linearity R²:        {gates.get('gate_5_equity_linearity', {}).get('status', 'N/A')} (R²: {gates.get('gate_5_equity_linearity', {}).get('r_squared', 0):.4f} | K-Ratio: {gates.get('gate_5_equity_linearity', {}).get('k_ratio', 0):.2f})")
+    # Rendered from the canonical registry, so the report can no longer
+    # mislabel the gate count or read a key that is never produced.
+    print(format_matrix(gates))
     print("-" * 70)
     print("  MARKET REGIME SURVIVAL:")
     for reg, data in regimes.items():

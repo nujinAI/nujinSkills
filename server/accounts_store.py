@@ -34,8 +34,11 @@ _KEY_FILE = _ROOT_DIR / ".nujin" / ".secret_key"
 
 class SecretCipher:
     """
-    Symmetric encryption engine using Fernet (if cryptography is available)
-    or authenticated PBKDF2-HMAC-SHA256 keystream encryption (standard library).
+    Symmetric encryption engine: authenticated PBKDF2-HMAC-SHA256 keystream encryption using
+    only the standard library, so the on-disk format never depends on optional packages.
+
+    ``decrypt`` additionally understands legacy ``fn:`` Fernet payloads written by earlier
+    versions on machines that had the ``cryptography`` package installed.
     """
 
     def __init__(self, key_path: Path = _KEY_FILE):
@@ -62,20 +65,20 @@ class SecretCipher:
         return new_key
 
     def encrypt(self, plaintext: str) -> str:
-        """Encrypts plaintext string and returns base64 encoded ciphertext with integrity tag."""
+        """
+        Encrypts plaintext and returns a self-describing, base64 payload with an integrity tag.
+
+        Always uses the standard-library authenticated keystream cipher (`sl:`). The format
+        used to depend on whether the optional `cryptography` package happened to be
+        importable — a machine that had it wrote Fernet blobs (`fn:`) and a machine that did
+        not could no longer read them, silently decrypting to an empty string and leaving the
+        broker with no password. Credentials are stored once and read by whatever process
+        happens to start next, so the format must be a property of this code, not of the
+        environment. `decrypt()` still reads legacy `fn:` payloads.
+        """
         if not plaintext:
             return ""
 
-        # Check for cryptography library
-        try:
-            from cryptography.fernet import Fernet
-            fernet_key = base64.urlsafe_b64encode(hashlib.sha256(self._key).digest())
-            f = Fernet(fernet_key)
-            return "fn:" + f.encrypt(plaintext.encode("utf-8")).decode("utf-8")
-        except ImportError:
-            pass
-
-        # Standard library authenticated keystream cipher
         salt = secrets.token_bytes(16)
         iv = secrets.token_bytes(16)
         derived = hashlib.pbkdf2_hmac("sha256", self._key, salt, 100_000, dklen=64)
@@ -104,7 +107,20 @@ class SecretCipher:
 
         try:
             if encoded.startswith("fn:"):
-                from cryptography.fernet import Fernet
+                # Legacy format: written by an earlier version on a machine that had the
+                # optional `cryptography` package installed. Readable only where that package
+                # is present, so say so explicitly instead of failing with a bare ImportError
+                # that looks like corrupt data.
+                try:
+                    from cryptography.fernet import Fernet
+                except ImportError:
+                    logger.error(
+                        "[SecretCipher] This stored secret uses the legacy Fernet format "
+                        "('fn:'), which needs the optional 'cryptography' package. Install it "
+                        "(pip install cryptography) or re-save the account to migrate it to "
+                        "the standard-library format."
+                    )
+                    return ""
                 fernet_key = base64.urlsafe_b64encode(hashlib.sha256(self._key).digest())
                 f = Fernet(fernet_key)
                 return f.decrypt(encoded[3:].encode("utf-8")).decode("utf-8")

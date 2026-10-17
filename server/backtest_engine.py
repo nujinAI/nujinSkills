@@ -12,8 +12,13 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 
 from server.state_manager import state_manager, strategy_registry
-from server.data_manager import sync_30d_candles, sync_xauusd_scalp_candles
-from tools.validation_cynic import compute_dsr, run_monte_carlo, run_parameter_stability
+# Imported as a module, never as bound names: a module-level `from server.data_manager import
+# sync_x` freezes the function into this namespace, which defeats monkeypatching
+# server.data_manager and hides live fetches from anything that intercepts them there.
+from server import data_manager
+from server.cynic_gates import compute_dsr, verify_monte_carlo, evaluate_gates
+from server.trial_ledger import record_trial, n_trials_for_dsr
+from server.constants import trade_annualization_factor
 
 try:
     from server.plugin_loader import plugin_manager
@@ -248,7 +253,7 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
             candles_file = os.path.join(data_dir, "xauusd_candles_1m.csv")
             if not os.path.exists(candles_file) or (time.time() - os.path.getmtime(candles_file) > 3600):
                 try:
-                    sync_xauusd_scalp_candles(output_path=candles_file)
+                    data_manager.sync_xauusd_scalp_candles(output_path=candles_file)
                 except Exception as e_sync:
                     logger.warning(f"[BacktestEngine] Sync XAUUSD candles warning: {e_sync}")
             cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
@@ -264,7 +269,7 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         if not os.path.exists(candles_file) or (time.time() - os.path.getmtime(candles_file) > 3600):
             logger.info(f"[BacktestEngine] Syncing 30 days of real market data for {symbol}...")
             try:
-                sync_30d_candles(symbol=symbol, output_path=candles_file)
+                data_manager.sync_30d_candles(symbol=symbol, output_path=candles_file)
             except Exception as e_sync:
                 logger.warning(f"[BacktestEngine] Sync 30d candles warning: {e_sync}")
         cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
@@ -633,45 +638,29 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
 
     mean_ret = float(np.mean(returns_arr))
     std_ret = float(np.std(returns_arr))
-    sharpe = float((mean_ret / max(std_ret, 1e-6)) * np.sqrt(252))
+    # returns_arr is a TRADE-sampled series, so it annualises on the trade basis.
+    sharpe = float((mean_ret / max(std_ret, 1e-6)) * trade_annualization_factor())
     expectancy_bps = float(mean_ret * 10000.0)
 
-    # 1. Genuine Cynic Audit: Gate 1 DSR (Deflated Sharpe Ratio)
-    trials_count = strat_record.get("latest_backtest", {}).get("trades", 40) if strat_record else 40
-    trials_penalized = max(20, min(100, max(trials_count, trades)))
+    # ── Genuine Cynic Audit ──────────────────────────────────────────────────
+    # All gate math is delegated to server/cynic_gates.py (the single source of
+    # truth). The complete matrix is assembled further below, once the regime
+    # breakdown exists; these two scalars also feed the backtest summary.
+    # N_trials must reflect how many hypotheses were actually searched. It was
+    # previously derived from the trade count, which has no bearing on search
+    # effort and made the DSR penalty arbitrary. Record this evaluation, then
+    # read the auditable ledger.
+    record_trial(
+        kind="backtest",
+        fingerprint=clean_name,
+        metrics={"sharpe": round(sharpe, 2), "trades": trades},
+        source="backtest_engine",
+    )
+    trials_penalized = n_trials_for_dsr()
     dsr_res = compute_dsr(returns_arr, trials_penalized)
     real_dsr = float(dsr_res.get("dsr", 0.0))
-    dsr_status = dsr_res.get("status", "FAIL")
-
-    # 2. Genuine Cynic Audit: Gate 3 Monte Carlo Reshuffling (1,000 permutations)
-    mc_res = run_monte_carlo(returns_arr, num_simulations=1000)
-    real_mdd_99 = float(mc_res.get("mdd_99", max_dd * 2.2))
-    mc_status = mc_res.get("status", "FAIL")
-
-    # 3. Genuine Cynic Audit: Gate 4 Out-of-Sample Walk-Forward (70% IS / 30% OOS)
-    if trades >= 30:
-        split_idx = int(trades * 0.70)
-        is_ret = returns_arr[:split_idx]
-        oos_ret = returns_arr[split_idx:]
-        is_mean, is_std = np.mean(is_ret), np.std(is_ret)
-        oos_mean, oos_std = np.mean(oos_ret), np.std(oos_ret)
-        sr_is = float((is_mean / max(is_std, 1e-6)) * np.sqrt(252))
-        sr_oos = float((oos_mean / max(oos_std, 1e-6)) * np.sqrt(252))
-        retention_pct = round((sr_oos / max(sr_is, 1e-6)) * 100.0, 1) if sr_is > 0 else 0.0
-        oos_status = "PASS" if (sr_oos > 1.0 and retention_pct >= 30.0) else "FAIL"
-        oos_reason = f"IS Sharpe {sr_is:.2f} -> OOS Sharpe {sr_oos:.2f} (Retention: {retention_pct}%)"
-    else:
-        sr_is = round(sharpe, 2)
-        sr_oos = 0.0
-        retention_pct = 0.0
-        oos_status = "FAIL"
-        oos_reason = "Insufficient return samples for OOS walk-forward (< 30)"
-
-    # Genuine Cynic Audit: Gate 2 Parameter Stability Surface
-    param_grid = {"atr_band": ["0.9x", "1.0x", "1.1x"], "wick_ratio": ["0.9x", "1.0x", "1.1x"]}
-    param_res = run_parameter_stability(param_grid, sharpe if sharpe > 0 else 1.0)
-    param_status = param_res.get("status", "PASS") if trades >= 10 else "FAIL"
-    plateau_status = param_res.get("plateau_status", "STABLE_PLATEAU") if trades >= 10 else "INSUFFICIENT_SAMPLES"
+    mc_res = verify_monte_carlo(returns_arr)
+    real_mdd_99 = float(mc_res.get("mdd_99", 0.0))
 
     # Derive accurate dataset time period
     valid_ts = df_c[df_c['timestamp'] > 1000000000]['timestamp'] if 'timestamp' in df_c.columns else pd.Series([])
@@ -900,69 +889,23 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         "thesis_props": thesis_props
     }
 
-    # 6. Execute validation_cynic.py for DSR gate matrix
-    trials = strat_record.get("latest_backtest", {}).get("trades", 40) if strat_record else 40
-    cmd_cynic = [
-        sys.executable, "tools/validation_cynic.py",
-        "--returns", "data/candidate_returns.json",
-        "--trials", str(max(20, min(100, trials))),
-        "--param-grid", '{"param_a": [0.9, 1.0, 1.1], "param_b": [0.9, 1.0, 1.1]}'
-    ]
-    try:
-        subprocess.run(cmd_cynic, cwd=cwd, check=True)
-    except Exception as e_cynic:
-        logger.warning(f"[BacktestEngine] Cynic audit execution warning: {e_cynic}")
-
-    # Calculate regime survival score out of 100
-    bull_win = regime_breakdown.get("bull_market", {}).get("win_rate", 0.0)
-    bear_win = regime_breakdown.get("bear_market", {}).get("win_rate", 0.0)
-    range_win = regime_breakdown.get("ranging_market", {}).get("win_rate", 0.0)
-    regime_survival_score = round(min(100.0, max(0.0, (bull_win * 35.0 + bear_win * 35.0 + range_win * 30.0) * 100.0)), 1)
-    regime_status = "PASS" if (regime_survival_score >= 50.0 and trades >= 10) else ("WARN" if trades >= 10 else "FAIL")
-
-    falsification_gates = {
-        "gate_1_dsr": {
-            "dsr": real_dsr,
-            "status": dsr_status,
-            "threshold": 0.95,
-            "p_value": round(1.0 - real_dsr, 3),
-            "reason": dsr_res.get("reason", "DSR >= 0.95" if dsr_status == "PASS" else "DSR < 0.95"),
-            "trials_penalized": dsr_res.get("trials_penalized", trials_penalized),
-            "benchmark_sr_0": dsr_res.get("benchmark_sr_0", 0.0),
-            "observed_sr": dsr_res.get("observed_sr", round(sharpe, 2))
-        },
-        "gate_2_parameter_stability": {
-            "plateau_status": plateau_status,
-            "status": param_status,
-            "matrix": param_res.get("matrix", []),
-            "x_axis": param_res.get("x_axis", ["0.9x", "1.0x", "1.1x"]),
-            "y_axis": param_res.get("y_axis", ["0.9x", "1.0x", "1.1x"]),
-            "reason": "Plateau verified across +/-10% drift" if param_status == "PASS" else "Parameter cliff or insufficient samples (< 10)"
-        },
-        "gate_3_monte_carlo": {
-            "mdd_99": real_mdd_99,
-            "original_mdd": round(max_dd, 4),
-            "mdd_ratio": mc_res.get("mdd_ratio", 1.0),
-            "status": mc_status,
-            "max_allowed": 0.030,
-            "reason": mc_res.get("reason", "MDD99 <= 3.0%" if mc_status == "PASS" else "Monte Carlo MDD99 failed")
-        },
-        "gate_4_oos_walkforward": {
-            "sharpe_is": round(sr_is, 2),
-            "sharpe_oos": round(sr_oos, 2),
-            "retention_pct": retention_pct,
-            "status": oos_status,
-            "reason": oos_reason
-        },
-        "gate_5_regime_survival": {
-            "score": regime_survival_score,
-            "status": regime_status,
-            "bull_win": bull_win,
-            "bear_win": bear_win,
-            "ranging_win": range_win,
-            "reason": f"Regime survival score {regime_survival_score}/100" if trades >= 10 else "Insufficient trades across regimes (< 10)"
-        }
-    }
+    # ── Assemble the canonical Cynic gate matrix ────────────────────────────
+    # Single source of truth: every gate (DSR, parameter stability, Monte
+    # Carlo, OOS walk-forward, regime survival, friction/noise floor, noise
+    # jitter, equity linearity) is computed by server/cynic_gates.py.
+    #
+    # The previous inline matrix omitted linearity, noise jitter and the
+    # friction gate entirely, and its parameter-stability entry was
+    # synthesised from the observed Sharpe so it could never fail.
+    # returns_arr comes from a real backtest, so spread/slippage/fees are
+    # already reflected in the fills: do not charge friction a second time.
+    falsification_gates = evaluate_gates(
+        returns_arr,
+        n_trials=trials_penalized,
+        strategy_name=clean_name,
+        regime_breakdown=regime_breakdown,
+        returns_are_net=True,
+    )
     state["falsification_gates"] = falsification_gates
 
     result = {
