@@ -375,6 +375,17 @@ def ensure_dynamic_indicators(df: pd.DataFrame, expressions: Optional[List[str]]
             _, bbu, bbl, _, _ = bollinger_bands(c, 20, 2.0)
             d["ttm_squeeze"] = ((bbu < ku) & (bbl > kl)).astype(int)
 
+    if any(k in text for k in ["htf4x_", "htf16x_", "mtf_alignment_score"]):
+        if "mtf_alignment_score" not in d.columns:
+            d = add_causal_mtf_features(d)
+
+    if any(k in text for k in ["alpha_forecast", "alpha_forecast_z", "meta_label_prob", "kelly_conviction"]):
+        if "alpha_forecast" not in d.columns:
+            if "mtf_alignment_score" not in d.columns:
+                d = add_causal_mtf_features(d)
+            from server.alpha_models import compute_continuous_alpha_and_meta_label
+            d = compute_continuous_alpha_and_meta_label(d)
+
     # 2. Universal TA-Lib token resolver for all identifiers in `text`
     identifiers = set(re.findall(r"\b[a-zA-Z][a-zA-Z0-9_]*\b", text))
     for token in identifiers:
@@ -516,6 +527,7 @@ def compute_all_standard_features(df: pd.DataFrame, window: int = 20) -> pd.Data
         d[f"donchian_pos_{span}"] = ((c - dl) / (du - dl).replace(0, 1e-8)).clip(-0.5, 1.5).fillna(0.5)
 
     # 5. Statistical & Mean-Reversion Primitives
+    d = d.copy()
     d["returns"] = c.pct_change().fillna(0.0)
     d["log_ret"] = np.log(c / c.shift(1).replace(0, 1e-8)).fillna(0.0)
     d["ret_zscore"] = zscore(d["log_ret"], 50)
@@ -601,7 +613,101 @@ def compute_all_standard_features(df: pd.DataFrame, window: int = 20) -> pd.Data
         except Exception:
             pass
 
+    # 9. Causal Multi-Timeframe (MTF 4x & 16x) Alignment Features
+    d = add_causal_mtf_features(d)
+
+    # 10. Continuous Alpha Forecast & López de Prado Meta-Labeling Confidence Filter
+    from server.alpha_models import compute_continuous_alpha_and_meta_label
+    d = compute_continuous_alpha_and_meta_label(d)
+
     return d.copy()
+
+
+def add_causal_mtf_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Causal Multi-Timeframe (MTF) Resampler (Pillar 2):
+      - Aggregates base bars into 4x (e.g. 15m -> 1h) and 16x (e.g. 15m -> 4h) higher-timeframe buckets.
+      - Shifts completed HTF bars by 1 bucket BEFORE mapping back to base bars (`shift(1)` on HTF frame)
+        so zero future intra-HTF-bar data ever leaks into bar `t`.
+      - Computes `htf4x_ema_21`, `htf4x_rsi_14`, `htf4x_adx_14`, `htf4x_supertrend_dir`, `htf4x_trend_dir`,
+        `htf16x_ema_21`, `htf16x_rsi_14`, `htf16x_trend_dir`, and `mtf_alignment_score` in [-1.0, +1.0].
+    """
+    d = df.copy()
+    n = len(d)
+    if n < 32:
+        d["htf4x_trend_dir"] = 1
+        d["htf16x_trend_dir"] = 1
+        d["htf4x_rsi_14"] = 50.0
+        d["htf4x_adx_14"] = 20.0
+        d["mtf_alignment_score"] = 0.0
+        return d
+
+    for mult, prefix in ((4, "htf4x"), (16, "htf16x")):
+        bucket_id = np.arange(n) // mult
+        htf = pd.DataFrame({
+            "open": d["open"].astype(float).groupby(bucket_id).first(),
+            "high": d["high"].astype(float).groupby(bucket_id).max(),
+            "low": d["low"].astype(float).groupby(bucket_id).min(),
+            "close": d["close"].astype(float).groupby(bucket_id).last(),
+        })
+        if len(htf) >= 8:
+            hc = htf["close"].values
+            hh = htf["high"].values
+            hl = htf["low"].values
+            p_ema = min(21, max(3, len(htf) // 2))
+            p_rsi = min(14, max(3, len(htf) // 2))
+            htf_ema = _clean_series(talib.EMA(hc, timeperiod=p_ema), htf.index)
+            htf_rsi = _clean_series(talib.RSI(hc, timeperiod=p_rsi), htf.index, 50.0)
+            htf_adx = _clean_series(talib.ADX(hh, hl, hc, timeperiod=p_rsi), htf.index, 20.0)
+            _, htf_st_dir = supertrend(htf["high"], htf["low"], htf["close"], period=min(10, p_rsi), multiplier=3.0)
+            htf_trend = pd.Series(np.where(htf["close"] >= htf_ema, 1, -1), index=htf.index)
+        else:
+            htf_ema = htf["close"]
+            htf_rsi = pd.Series(50.0, index=htf.index)
+            htf_adx = pd.Series(20.0, index=htf.index)
+            htf_st_dir = pd.Series(1, index=htf.index)
+            htf_trend = pd.Series(1, index=htf.index)
+
+        # Strictly causal shift(1) on HTF buckets so bar `t` only sees the last COMPLETED HTF bar
+        d[f"{prefix}_ema_21"] = htf_ema.shift(1).bfill().iloc[bucket_id].values
+        d[f"{prefix}_rsi_14"] = htf_rsi.shift(1).fillna(50.0).iloc[bucket_id].values
+        d[f"{prefix}_adx_14"] = htf_adx.shift(1).fillna(20.0).iloc[bucket_id].values
+        d[f"{prefix}_supertrend_dir"] = htf_st_dir.shift(1).fillna(1).astype(int).iloc[bucket_id].values
+        d[f"{prefix}_trend_dir"] = htf_trend.shift(1).fillna(1).astype(int).iloc[bucket_id].values
+
+    base_dir = np.where(d["close"] >= (d["ema_21"] if "ema_21" in d.columns else sma(d["close"], 21)), 1.0, -1.0)
+    d["mtf_alignment_score"] = (
+        0.30 * base_dir
+        + 0.40 * d["htf4x_trend_dir"].astype(float)
+        + 0.30 * d["htf16x_trend_dir"].astype(float)
+    ).round(3)
+    return d
+
+
+def add_cross_asset_context(df: pd.DataFrame, benchmark_df: Optional[pd.DataFrame] = None, window: int = 50) -> pd.DataFrame:
+    """
+    Computes Cross-Asset Correlation, Rolling Beta, and Relative Strength Z-Score
+    against a reference/benchmark asset series (Pillar 2).
+    """
+    d = df.copy()
+    asset_ret = d["close"].astype(float).pct_change().fillna(0.0)
+    if benchmark_df is not None and "close" in benchmark_df.columns and len(benchmark_df) >= 20:
+        b_close = benchmark_df["close"].astype(float).reindex(d.index).ffill().bfill()
+        bench_ret = b_close.pct_change().fillna(0.0)
+    else:
+        # Smooth macro drift proxy when external benchmark is not passed
+        bench_ret = asset_ret.rolling(10, min_periods=1).mean()
+
+    cov = asset_ret.rolling(window, min_periods=10).cov(bench_ret).fillna(0.0)
+    var_b = bench_ret.rolling(window, min_periods=10).var().replace(0, 1e-8).fillna(1e-8)
+    std_a = asset_ret.rolling(window, min_periods=10).std().replace(0, 1e-8).fillna(1e-8)
+    std_b = np.sqrt(var_b)
+
+    d["cross_asset_beta_50"] = (cov / var_b).clip(-3.0, 3.0).fillna(1.0).round(3)
+    d["cross_asset_corr_50"] = (cov / (std_a * std_b)).clip(-1.0, 1.0).fillna(0.0).round(3)
+    rs_spread = asset_ret.rolling(20, min_periods=2).sum() - bench_ret.rolling(20, min_periods=2).sum()
+    d["cross_asset_rs_zscore_20"] = zscore(rs_spread.fillna(0.0), 20).round(3)
+    return d
 
 
 def add_pandas_ta_suite(df: pd.DataFrame) -> pd.DataFrame:

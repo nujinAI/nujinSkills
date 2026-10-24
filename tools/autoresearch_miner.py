@@ -232,6 +232,18 @@ ARCHETYPE_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "trailing_stop": False,
         "bias": "DUAL",
     },
+    "alpha_meta_ensemble": {
+        "archetype": "alpha_meta_ensemble",
+        "entry_long": "alpha_forecast_z > 0.85 and meta_label_prob >= 0.54 and mtf_alignment_score >= 0.20",
+        "entry_short": "alpha_forecast_z < -0.85 and meta_label_prob >= 0.54 and mtf_alignment_score <= -0.20",
+        "exit": "bars >= 12",
+        "max_bars_held": 12,
+        "stoploss_pct": 0.014,
+        "takeprofit_pct": 0.034,
+        "risk_per_trade_pct": 0.0045,
+        "trailing_stop": True,
+        "bias": "DUAL",
+    },
 }
 
 

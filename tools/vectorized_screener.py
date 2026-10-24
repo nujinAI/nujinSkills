@@ -48,6 +48,11 @@ from server.constants import (
     trade_annualization_factor,
 )
 from server.indicators import compute_all_standard_features, ensure_dynamic_indicators
+from server.risk_governor import (
+    compute_dynamic_slippage_bps,
+    compute_funding_drag_frac,
+    drawdown_governor_multiplier,
+)
 from server.session_store import get_session_paths
 
 
@@ -65,22 +70,30 @@ def simulate_trades_fast(
     risk_per_trade_pct: Optional[float] = 0.0045,
     trailing_stop: bool = False,
     trailing_offset_pct: float = 0.010,
+    use_drawdown_governor: bool = True,
 ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """
-    Fast causal bar-by-bar trade simulator with stop-loss, take-profit,
-    optional trailing stop, max holding horizon, and constant-risk sizing.
+    Fast causal bar-by-bar trade simulator with:
+      - Pessimistic intra-bar conflict resolution (Stop-Loss always takes precedence over Take-Profit)
+      - Volatility- & liquidity-scaled dynamic slippage (`compute_dynamic_slippage_bps`)
+      - Holding-period funding/carry drag (`compute_funding_drag_frac`)
+      - Volatility-targeted, Kelly-conviction-scaled, and Drawdown-Governed risk sizing
     """
     closes = df["close"].to_numpy(dtype=float)
+    opens = df["open"].to_numpy(dtype=float) if "open" in df.columns else closes
     highs = df["high"].to_numpy(dtype=float) if "high" in df.columns else closes
     lows = df["low"].to_numpy(dtype=float) if "low" in df.columns else closes
     atrs = df["atr_14"].to_numpy(dtype=float) if "atr_14" in df.columns else (highs - lows)
+    bar_ranges = np.maximum(highs - lows, 1e-8)
+    median_range = float(np.median(bar_ranges)) if len(bar_ranges) > 0 else 1e-8
+    rel_vols = df["relative_vol"].to_numpy(dtype=float) if "relative_vol" in df.columns else np.ones(len(closes))
+    kelly_conv = df["kelly_conviction"].to_numpy(dtype=float) if "kelly_conviction" in df.columns else np.ones(len(closes))
 
     long_arr = enter_long.fillna(False).to_numpy(dtype=bool)
     short_arr = enter_short.fillna(False).to_numpy(dtype=bool)
     ex_long_arr = exit_long.fillna(False).to_numpy(dtype=bool)
     ex_short_arr = exit_short.fillna(False).to_numpy(dtype=bool)
 
-    friction_roundtrip = 2.0 * (fee_bps + slippage_bps) / 10000.0
     n = len(closes)
 
     trade_returns: List[float] = []
@@ -89,12 +102,18 @@ def simulate_trades_fast(
     in_pos = 0  # 1 = LONG, -1 = SHORT, 0 = FLAT
     entry_price = 0.0
     entry_idx = 0
+    entry_slip_bps = slippage_bps
+    entry_conviction = 1.0
+    entry_vol_mult = 1.0
     stop_dist_pct = stoploss_pct
     tp_dist_pct = takeprofit_pct
     peak_fav_pct = 0.0
+    cum_equity = 0.0
+    peak_equity = 0.0
 
     for i in range(1, n):
         c = closes[i]
+        o = opens[i]
         h = highs[i]
         l = lows[i]
 
@@ -111,8 +130,6 @@ def simulate_trades_fast(
                 raw_close_ret = (entry_price - c) / entry_price
                 sig_exit = ex_short_arr[i] or long_arr[i]
 
-            peak_fav_pct = max(peak_fav_pct, fav_excursion)
-
             hit_sl = stop_dist_pct > 0 and adv_excursion >= stop_dist_pct
             hit_tp = tp_dist_pct > 0 and fav_excursion >= tp_dist_pct
             hit_trail = (
@@ -120,30 +137,47 @@ def simulate_trades_fast(
                 and peak_fav_pct >= trailing_offset_pct
                 and raw_close_ret <= (peak_fav_pct - trailing_offset_pct * 0.5)
             )
+            peak_fav_pct = max(peak_fav_pct, fav_excursion)
             hit_time = max_bars_held > 0 and bars_held >= max_bars_held
 
             if hit_sl or hit_tp or hit_trail or sig_exit or hit_time or i == n - 1:
+                # Pessimistic Intra-Bar Resolution: Stop-Loss always takes precedence over Take-Profit
                 if hit_sl:
-                    gross_ret = -stop_dist_pct
+                    if in_pos == 1 and o < entry_price * (1.0 - stop_dist_pct):
+                        gross_ret = (o - entry_price) / entry_price
+                    elif in_pos == -1 and o > entry_price * (1.0 + stop_dist_pct):
+                        gross_ret = (entry_price - o) / entry_price
+                    else:
+                        gross_ret = -stop_dist_pct
                     reason = "STOP_LOSS"
-                elif hit_tp:
-                    gross_ret = tp_dist_pct
-                    reason = "TAKE_PROFIT"
                 elif hit_trail:
                     gross_ret = max(0.001, peak_fav_pct - trailing_offset_pct * 0.5)
                     reason = "TRAILING_STOP"
+                elif hit_tp:
+                    gross_ret = tp_dist_pct
+                    reason = "TAKE_PROFIT"
                 else:
                     gross_ret = raw_close_ret
                     reason = "SIGNAL_EXIT" if sig_exit else "TIME_EXIT"
 
-                net_price_ret = gross_ret - friction_roundtrip
+                exit_slip_bps = compute_dynamic_slippage_bps(slippage_bps, bar_ranges[i], median_range, rel_vols[i])
+                roundtrip_cost = (2.0 * fee_bps + entry_slip_bps + exit_slip_bps) / 10000.0
+                funding_drag = compute_funding_drag_frac(bars_held)
+                net_price_ret = gross_ret - roundtrip_cost - funding_drag
 
-                # Risk-normalized account return: scales position size so 1 stop-loss = risk_per_trade_pct
+                # Volatility-Targeted + Kelly-Conviction + Drawdown-Governed Risk Sizing
                 if risk_per_trade_pct and risk_per_trade_pct > 0 and stop_dist_pct > 1e-5:
-                    leverage_scale = np.clip(risk_per_trade_pct / stop_dist_pct, 0.05, 3.0)
+                    current_dd = max(0.0, peak_equity - cum_equity)
+                    dd_mult = drawdown_governor_multiplier(current_dd) if use_drawdown_governor else 1.0
+                    eff_risk = risk_per_trade_pct * dd_mult * entry_conviction * entry_vol_mult
+                    leverage_scale = np.clip(eff_risk / stop_dist_pct, 0.03, 3.0)
                     acct_ret = float(net_price_ret * leverage_scale)
                 else:
                     acct_ret = float(net_price_ret)
+
+                cum_equity += acct_ret
+                if cum_equity > peak_equity:
+                    peak_equity = cum_equity
 
                 trade_returns.append(acct_ret)
                 trades_meta.append({
@@ -164,6 +198,10 @@ def simulate_trades_fast(
                 entry_price = max(c, 1e-8)
                 entry_idx = i
                 peak_fav_pct = 0.0
+                entry_slip_bps = compute_dynamic_slippage_bps(slippage_bps, bar_ranges[i], median_range, rel_vols[i])
+                entry_conviction = float(np.clip(kelly_conv[i], 0.50, 1.35))
+                vol_ratio = float(bar_ranges[i] / median_range) if median_range > 0 else 1.0
+                entry_vol_mult = float(np.clip(1.0 / max(vol_ratio, 0.5), 0.55, 1.25))
                 atr_pct = float(atrs[i] / entry_price) if atrs[i] > 0 else stoploss_pct
                 stop_dist_pct = max(0.0015, stoploss_pct if stoploss_pct > 0 else 1.5 * atr_pct)
                 tp_dist_pct = max(stop_dist_pct * 1.2, takeprofit_pct if takeprofit_pct > 0 else 2.5 * atr_pct)

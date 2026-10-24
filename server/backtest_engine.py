@@ -568,19 +568,10 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
                 else:
                     target_tp = take_profit
 
-                # Dynamic Trailing Stop update (ratchets stop loss tight behind the trade)
-                if use_trailing and bars_held >= 1:
-                    if side == "LONG":
-                        max_gain = (curr_h - entry_price) / entry_price
-                        if max_gain >= trail_offset:
-                            new_sl = round(curr_h * (1.0 - trail_pos), 2)
-                            stop_loss = max(stop_loss, new_sl)
-                    else:
-                        max_gain = (entry_price - curr_l) / entry_price
-                        if max_gain >= trail_offset:
-                            new_sl = round(curr_l * (1.0 + trail_pos), 2)
-                            stop_loss = min(stop_loss, new_sl)
-
+                # Pessimistic Intra-Bar Exit Resolution:
+                # 1. Always evaluate existing Stop-Loss FIRST (worst-case intra-bar path)
+                # 2. Then evaluate Take-Profit / Strategy Exit
+                # 3. Only ratchet Trailing Stop at the END of the bar if the trade survived the bar
                 if side == "LONG":
                     if curr_l <= stop_loss:
                         exit_price = stop_loss
@@ -613,6 +604,19 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
                         exit_reason = "STRATEGY_EXIT"
                         final_exit_idx = exit_idx
                         break
+
+                # Ratchet Trailing Stop at bar close for the NEXT bar
+                if use_trailing and bars_held >= 1:
+                    if side == "LONG":
+                        max_gain = (curr_h - entry_price) / entry_price
+                        if max_gain >= trail_offset:
+                            new_sl = round(curr_h * (1.0 - trail_pos), 2)
+                            stop_loss = max(stop_loss, new_sl)
+                    else:
+                        max_gain = (entry_price - curr_l) / entry_price
+                        if max_gain >= trail_offset:
+                            new_sl = round(curr_l * (1.0 + trail_pos), 2)
+                            stop_loss = min(stop_loss, new_sl)
 
                 exit_price = curr_c
                 final_exit_idx = exit_idx

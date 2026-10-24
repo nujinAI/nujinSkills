@@ -184,11 +184,77 @@ def calculate_metrics(returns: np.ndarray) -> Dict[str, float]:
     drawdowns = running_max - cum
     max_dd = float(np.max(drawdowns) * 100) if len(drawdowns) > 0 else 0.0
 
+    # Compute Equity Curve Linearity R^2
+    r_sq = 0.0
+    if len(cum) >= 10 and np.std(cum) > 1e-9:
+        x_idx = np.arange(len(cum), dtype=float)
+        r_val = float(np.corrcoef(x_idx, cum)[0, 1])
+        if not np.isnan(r_val) and total_ret > 0:
+            r_sq = round(float(r_val ** 2), 4)
+
     return {
         "sharpe": round(sharpe, 2),
         "total_return_pct": round(total_ret, 2),
-        "max_drawdown_pct": round(max_dd, 2)
+        "max_drawdown_pct": round(max_dd, 2),
+        "equity_r_squared": r_sq,
     }
+
+
+def compute_hrp_weights(ret_df: pd.DataFrame) -> Dict[str, float]:
+    """
+    López de Prado Hierarchical Risk Parity (HRP) Portfolio Allocator (Pillar 6):
+      1. Correlation distance clustering via `scipy.cluster.hierarchy`
+      2. Quasi-diagonalization of the covariance matrix
+      3. Recursive bisection allocating capital inversely proportional to cluster variance
+    """
+    from scipy.cluster.hierarchy import leaves_list, linkage
+    from scipy.spatial.distance import squareform
+
+    cols = list(ret_df.columns)
+    if len(cols) == 0:
+        return {}
+    if len(cols) == 1:
+        return {cols[0]: 1.0}
+
+    cov = ret_df.cov().to_numpy(copy=True)
+    corr = ret_df.corr().fillna(0.0).to_numpy(copy=True)
+    np.fill_diagonal(corr, 1.0)
+    dist = np.sqrt(np.clip((1.0 - corr) / 2.0, 0.0, 1.0))
+    np.fill_diagonal(dist, 0.0)
+
+    try:
+        condensed = squareform(dist, checks=False)
+        link = linkage(condensed, method="single")
+        sort_ix = list(leaves_list(link))
+    except Exception:
+        sort_ix = list(range(len(cols)))
+
+    weights = np.ones(len(cols), dtype=float)
+
+    def _cluster_var(c_indices: List[int]) -> float:
+        sub_cov = cov[np.ix_(c_indices, c_indices)]
+        ivp = 1.0 / np.maximum(np.diag(sub_cov), 1e-10)
+        ivp /= ivp.sum()
+        return float(np.dot(ivp, np.dot(sub_cov, ivp)))
+
+    clusters = [sort_ix]
+    while clusters:
+        next_clusters = []
+        for cluster in clusters:
+            if len(cluster) > 1:
+                mid = len(cluster) // 2
+                left = cluster[:mid]
+                right = cluster[mid:]
+                var_l = _cluster_var(left)
+                var_r = _cluster_var(right)
+                alpha = 1.0 - var_l / max(var_l + var_r, 1e-12)
+                weights[left] *= alpha
+                weights[right] *= (1.0 - alpha)
+                next_clusters.extend([left, right])
+        clusters = next_clusters
+
+    weights /= max(weights.sum(), 1e-12)
+    return {cols[i]: round(float(weights[i]), 4) for i in range(len(cols))}
 
 
 def evaluate_portfolio(
@@ -282,14 +348,17 @@ def evaluate_portfolio(
                     })
 
     if valid_cols:
-        blended_returns = ret_df[valid_cols].mean(axis=1).values
+        hrp_weights = compute_hrp_weights(ret_df[valid_cols])
+        w_vec = np.array([hrp_weights[c] for c in valid_cols], dtype=float)
+        blended_returns = ret_df[valid_cols].values @ w_vec
         blended_metrics = calculate_metrics(blended_returns)
 
         indiv_vols = [ret_df[c].std() for c in valid_cols]
         blended_vol = float(np.std(blended_returns))
-        div_ratio = round(float(np.mean(indiv_vols) / (blended_vol + 1e-8)), 2)
+        div_ratio = round(float(np.dot(w_vec, indiv_vols) / (blended_vol + 1e-8)), 2)
     else:
-        blended_metrics = {"sharpe": 0.0, "total_return_pct": 0.0, "max_drawdown_pct": 0.0}
+        hrp_weights = {}
+        blended_metrics = {"sharpe": 0.0, "total_return_pct": 0.0, "max_drawdown_pct": 0.0, "equity_r_squared": 0.0}
         div_ratio = 1.0
 
     return {
@@ -298,11 +367,14 @@ def evaluate_portfolio(
         "spearman_matrix": spearman_matrix,
         "individual_metrics": individual_metrics,
         "regime_breakdown": regime_breakdown,
+        "hrp_weights": hrp_weights,
         "portfolio_ensemble": {
             "blended_sharpe": blended_metrics["sharpe"],
             "blended_total_return_pct": blended_metrics["total_return_pct"],
             "blended_max_drawdown_pct": blended_metrics["max_drawdown_pct"],
+            "blended_r_squared": blended_metrics.get("equity_r_squared", 0.0),
             "diversification_ratio": div_ratio,
+            "hrp_weights": hrp_weights,
             "correlation_threshold": correlation_threshold
         },
         "pairwise_analysis": redundancy_flags

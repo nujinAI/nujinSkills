@@ -165,6 +165,91 @@ def test_eight_gates_can_achieve_approved_with_perturbed_matrix():
         returns_are_net=True,
     )
     assert gates["gate_2_parameter_stability"]["status"] == PASS
+    assert "cpcv_median_oos_sharpe" in gates["gate_4_oos_walkforward"]
+    assert "pbo_estimate" in gates["gate_4_oos_walkforward"]
     assert gates["gate_8_equity_linearity"]["status"] == PASS
     assert gates["gates_summary"]["verdict"] == "APPROVED"
     assert gates["gates_summary"]["gates_passed"] == 8
+
+
+def test_causal_mtf_cross_asset_and_continuous_alpha_meta_labeling():
+    from server.indicators import add_cross_asset_context
+
+    df = _synthetic_ohlcv(260)
+    feat = compute_all_standard_features(df, window=20)
+    for col in (
+        "htf4x_trend_dir", "htf16x_trend_dir", "htf4x_rsi_14", "htf4x_adx_14",
+        "mtf_alignment_score", "alpha_forecast", "alpha_forecast_z",
+        "meta_label_prob", "kelly_conviction",
+    ):
+        assert col in feat.columns, f"Missing MTF or Alpha/Meta-Label column: {col}"
+
+    assert feat["alpha_forecast"].between(-1.0, 1.0).all()
+    assert feat["meta_label_prob"].between(0.10, 0.95).all()
+    assert feat["kelly_conviction"].between(0.50, 1.35).all()
+
+    ctx = add_cross_asset_context(feat, df)
+    for col in ("cross_asset_beta_50", "cross_asset_corr_50", "cross_asset_rs_zscore_20"):
+        assert col in ctx.columns
+
+
+def test_pessimistic_intrabar_resolution_and_drawdown_governor():
+    from server.risk_governor import (
+        apply_equity_curve_governor,
+        compute_dynamic_slippage_bps,
+        resolve_intrabar_exit,
+    )
+
+    # If a single candle breaches BOTH Stop-Loss and Take-Profit, it MUST resolve as SL first
+    exited, ret, reason, _ = resolve_intrabar_exit(
+        pos=1,
+        entry_price=100.0,
+        bar_open=100.0,
+        bar_high=105.0,  # Breaches +3% TP
+        bar_low=97.0,    # Also breaches -2% SL
+        bar_close=102.0,
+        sl_pct=0.02,
+        tp_pct=0.03,
+        trail_peak=100.0,
+    )
+    assert exited is True
+    assert reason == "SL"
+    assert ret == pytest.approx(-0.02)
+
+    # Volatility expansion increases dynamic slippage
+    assert compute_dynamic_slippage_bps(2.0, bar_range=30.0, median_range=10.0) > 2.0
+
+    # Drawdown governor throttles position size during losing streaks
+    losing_streak_r = [-1.0] * 10
+    governed = apply_equity_curve_governor(losing_streak_r, base_risk_pct=0.0045, max_dd_limit=0.030)
+    # Later losses in the streak must be smaller in magnitude than the first loss due to governor throttling
+    assert abs(governed[-1]) < abs(governed[0])
+
+
+def test_hrp_portfolio_allocator_and_cusum_drift_monitor():
+    from server.drift_monitor import evaluate_live_vs_backtest_drift
+    from tools.portfolio_cynic import compute_hrp_weights
+
+    rng = np.random.default_rng(99)
+    ret_df = pd.DataFrame({
+        "TrendAlpha": rng.normal(0.0005, 0.004, size=200),
+        "SqueezeBreakout": rng.normal(0.0004, 0.005, size=200),
+        "MeanRevZ": rng.normal(0.0003, 0.002, size=200),
+    })
+    weights = compute_hrp_weights(ret_df)
+    assert set(weights.keys()) == {"TrendAlpha", "SqueezeBreakout", "MeanRevZ"}
+    assert sum(weights.values()) == pytest.approx(1.0, abs=1e-3)
+    # Lowest-volatility uncorrelated strategy receives the largest HRP allocation
+    assert weights["MeanRevZ"] > weights["SqueezeBreakout"]
+
+    # Healthy live return stream matches backtest distribution
+    bt_returns = rng.normal(0.0030, 0.0040, size=100)
+    healthy_live = rng.normal(0.0028, 0.0040, size=15)
+    rep_ok = evaluate_live_vs_backtest_drift(healthy_live, backtest_returns=bt_returns)
+    assert rep_ok["status"] == "HEALTHY"
+
+    # Severely decaying live return stream triggers QUARANTINE
+    decaying_live = np.full(15, -0.0060)
+    rep_bad = evaluate_live_vs_backtest_drift(decaying_live, backtest_returns=bt_returns)
+    assert rep_bad["status"] == "QUARANTINE"
+    assert rep_bad["action"] == "AUTO_DEMOTE_TO_PAPER"

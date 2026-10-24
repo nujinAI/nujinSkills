@@ -100,6 +100,14 @@ FEATURE_DOMAIN_MAP: Dict[str, Tuple[str, str]] = {
     "bop": ("MICROSTRUCTURE_FLOW", "momentum_breakout"),
     "vpin_proxy": ("MICROSTRUCTURE_FLOW", "smc_liquidity"),
     "close_location": ("MICROSTRUCTURE_FLOW", "momentum_breakout"),
+    # Multi-Timeframe (MTF) & Continuous Alpha Forecast / Meta-Labeling
+    "mtf_alignment_score": ("TREND_CONTINUATION", "trend_following"),
+    "htf4x_rsi_14": ("STRUCTURAL_PULLBACK", "mtf_pullback"),
+    "htf4x_adx_14": ("TREND_CONTINUATION", "trend_following"),
+    "htf16x_rsi_14": ("STRUCTURAL_PULLBACK", "mtf_pullback"),
+    "alpha_forecast": ("TREND_CONTINUATION", "trend_following"),
+    "alpha_forecast_z": ("TREND_CONTINUATION", "trend_following"),
+    "meta_label_prob": ("STRUCTURAL_PULLBACK", "mtf_pullback"),
 }
 
 
@@ -352,14 +360,19 @@ def scan_library_feature_ic(
                 best_p = float(pval)
                 best_hz = hz
                 # Check IS (first half) vs OOS (second half) sign consistency
-                rho_is, _ = stats.spearmanr(x_clean[: m // 2], y_clean[: m // 2])
-                rho_oos, _ = stats.spearmanr(x_clean[m // 2 :], y_clean[m // 2 :])
-                oos_consistent = bool(
-                    not np.isnan(rho_is)
-                    and not np.isnan(rho_oos)
-                    and (np.sign(rho_is) == np.sign(rho_oos))
-                    and abs(rho_oos) >= 0.02
-                )
+                x_is, y_is = x_clean[: m // 2], y_clean[: m // 2]
+                x_oos, y_oos = x_clean[m // 2 :], y_clean[m // 2 :]
+                if np.nanstd(x_is) > 1e-9 and np.nanstd(x_oos) > 1e-9 and np.nanstd(y_is) > 1e-9 and np.nanstd(y_oos) > 1e-9:
+                    rho_is, _ = stats.spearmanr(x_is, y_is)
+                    rho_oos, _ = stats.spearmanr(x_oos, y_oos)
+                    oos_consistent = bool(
+                        not np.isnan(rho_is)
+                        and not np.isnan(rho_oos)
+                        and (np.sign(rho_is) == np.sign(rho_oos))
+                        and abs(rho_oos) >= 0.02
+                    )
+                else:
+                    oos_consistent = False
 
         if abs(best_t) < 0.5:
             continue
@@ -548,6 +561,10 @@ def scan_conditional_anomalies(
         regime_filters.append(("HIGH_RVOL", d["relative_vol"] >= rv_q65, f"relative_vol >= {rv_q65}", f"relative_vol >= {rv_q65}"))
     if "supertrend_dir" in d.columns:
         regime_filters.append(("SUPERTREND_ALIGNED", d["supertrend_dir"] == 1, "supertrend_dir == 1", "supertrend_dir == -1"))
+    if "mtf_alignment_score" in d.columns:
+        regime_filters.append(("MTF_ALIGNED", d["mtf_alignment_score"] >= 0.3, "mtf_alignment_score >= 0.3", "mtf_alignment_score <= -0.3"))
+    if "meta_label_prob" in d.columns:
+        regime_filters.append(("META_CONFIDENT", d["meta_label_prob"] >= 0.55, "meta_label_prob >= 0.55", "meta_label_prob >= 0.55"))
     if "killzone_london" in d.columns and "killzone_ny" in d.columns:
         sess_mask = (d["killzone_london"] == 1) | (d["killzone_ny"] == 1)
         if int(sess_mask.sum()) >= 20:
@@ -696,10 +713,13 @@ def generate_empirical_briefing(
     data_path: str,
     output_path: Optional[str] = None,
     session_id: Optional[str] = None,
+    train_split: float = 0.70,
 ) -> Dict[str, Any]:
     """
     Executes model-free market profiling, library-wide feature IC ranking, and
-    2-factor quantile interaction discovery, writing `.nujin/sessions/<id>/empirical_briefing.json`.
+    2-factor quantile interaction discovery strictly on the In-Sample Discovery Slice
+    (`train_split = 0.70` by default) so the final 30% Out-of-Sample Holdout Vault
+    remains 100% uncontaminated for Gate 4 validation.
     """
     df = load_candles(data_path)
     asset_name = os.path.basename(data_path).replace(".csv", "")
@@ -711,10 +731,15 @@ def generate_empirical_briefing(
     else:
         resolved_sid = session_id or ""
 
-    hurst_data = compute_variance_ratios_and_hurst(df)
-    session_data = compute_session_hourly_matrix(df)
-    feature_ic_ranking = scan_library_feature_ic(df)
-    anomalies = scan_conditional_anomalies(df)
+    # Strictly mask the Out-of-Sample Holdout Vault during feature & threshold discovery
+    split_ratio = float(np.clip(train_split, 0.50, 1.0))
+    discovery_bars = max(min(len(df), 120), int(len(df) * split_ratio))
+    df_discovery = df.iloc[:discovery_bars].reset_index(drop=True)
+
+    hurst_data = compute_variance_ratios_and_hurst(df_discovery)
+    session_data = compute_session_hourly_matrix(df_discovery)
+    feature_ic_ranking = scan_library_feature_ic(df_discovery)
+    anomalies = scan_conditional_anomalies(df_discovery)
     edge_summary = summarize_edge_families(anomalies, hurst_data)
 
     briefing = {
@@ -722,6 +747,9 @@ def generate_empirical_briefing(
         "asset": asset_name,
         "dataset_path": data_path,
         "total_bars": len(df),
+        "discovery_in_sample_bars": len(df_discovery),
+        "holdout_vault_bars": len(df) - len(df_discovery),
+        "train_split": split_ratio,
         "macro_regime_characteristics": hurst_data,
         "top_predictive_library_features": feature_ic_ranking[:25],
         "edge_family_synthesis": edge_summary,

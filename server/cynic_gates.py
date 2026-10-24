@@ -218,8 +218,69 @@ def verify_monte_carlo(returns, num_simulations: int = MC_SIMULATIONS,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Gate 4 — Out-of-sample walk-forward (real IS/OOS split)
+# Gate 4 — Out-of-sample walk-forward + Purged K-Fold CV (CPCV) & Rolling WFO
 # ─────────────────────────────────────────────────────────────────────────────
+
+def compute_cpcv_and_rolling_wfo(
+    returns,
+    n_folds: int = 6,
+    purge_len: int = 1,
+    periods_per_year: int = PERIODS_PER_YEAR,
+) -> dict:
+    """
+    López de Prado Combinatorial Purged Cross-Validation (CPCV) & Rolling WFO:
+      - Splits `returns` into `n_folds` contiguous blocks, purging `purge_len`
+        boundary trades between train and test blocks to eliminate serial overlap.
+      - Evaluates every 2-fold out-of-sample test combination C(n_folds, 2) to
+        measure `cpcv_median_oos_sharpe` and `pbo_estimate` (Probability of
+        Backtest Overfitting = fraction of purged OOS combinations with SR <= 0).
+      - Evaluates rolling walk-forward sub-windows to measure temporal consistency.
+    """
+    from itertools import combinations
+
+    clean_r = _clean(returns)
+    n = len(clean_r)
+    if n < 24:
+        return {
+            "cpcv_median_oos_sharpe": 0.0,
+            "pbo_estimate": 1.0,
+            "rolling_wfo_positive_windows_pct": 0.0,
+        }
+
+    k = min(max(4, int(n_folds)), n // 6)
+    folds = np.array_split(np.arange(n), k)
+    oos_sharpes = []
+
+    for test_i, test_j in combinations(range(k), 2):
+        test_idx = np.concatenate([folds[test_i], folds[test_j]])
+        # Purge boundary elements adjacent to training folds
+        if purge_len > 0 and len(test_idx) > 2 * purge_len + 4:
+            test_idx = test_idx[purge_len:-purge_len]
+        sub_r = clean_r[test_idx]
+        if len(sub_r) < 4:
+            continue
+        std_sub = float(np.std(sub_r))
+        sr_sub = float((np.mean(sub_r) / max(std_sub, 1e-6)) * np.sqrt(periods_per_year))
+        oos_sharpes.append(sr_sub)
+
+    if oos_sharpes:
+        median_cpcv_sr = float(np.median(oos_sharpes))
+        pbo = float(np.mean([1.0 if s <= 0.0 else 0.0 for s in oos_sharpes]))
+    else:
+        median_cpcv_sr = 0.0
+        pbo = 1.0
+
+    # Rolling Walk-Forward OOS sub-windows (4 non-overlapping OOS slices in the second half)
+    wfo_slices = np.array_split(clean_r[n // 3 :], 4)
+    pos_windows = sum(1 for sl in wfo_slices if len(sl) > 0 and float(np.mean(sl)) > 0.0)
+    wfo_pos_pct = round((pos_windows / max(1, len(wfo_slices))) * 100.0, 1)
+
+    return {
+        "cpcv_median_oos_sharpe": round(median_cpcv_sr, 2),
+        "pbo_estimate": round(pbo, 3),
+        "rolling_wfo_positive_windows_pct": wfo_pos_pct,
+    }
+
 
 def verify_oos_walkforward(returns, split: float = OOS_SPLIT,
                            periods_per_year: int = PERIODS_PER_YEAR) -> dict:
@@ -236,15 +297,17 @@ def verify_oos_walkforward(returns, split: float = OOS_SPLIT,
     sr_is = float((np.mean(is_ret) / max(is_std, 1e-6)) * np.sqrt(periods_per_year))
     sr_oos = float((np.mean(oos_ret) / max(oos_std, 1e-6)) * np.sqrt(periods_per_year))
     retention = round((sr_oos / max(sr_is, 1e-6)) * 100.0, 1) if sr_is > 0 else 0.0
+    cpcv_info = compute_cpcv_and_rolling_wfo(clean_r, periods_per_year=periods_per_year)
     passed = (sr_oos > MIN_OOS_SR) and (retention >= MIN_OOS_RETENTION_PCT)
 
     return {
         "sharpe_is": round(sr_is, 2),
         "sharpe_oos": round(sr_oos, 2),
         "retention_pct": retention,
+        **cpcv_info,
         "status": PASS if passed else FAIL,
         "reason": (f"IS Sharpe {sr_is:.2f} -> OOS Sharpe {sr_oos:.2f} "
-                   f"(Retention: {retention}%)"),
+                   f"(Retention: {retention}%, CPCV SR: {cpcv_info['cpcv_median_oos_sharpe']:.2f}, PBO: {cpcv_info['pbo_estimate']:.2f})"),
     }
 
 

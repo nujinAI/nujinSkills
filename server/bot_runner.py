@@ -11,7 +11,7 @@ logger = logging.getLogger("BotRunner")
 class BotSupervisor:
     """
     Supervises background strategy runners, supporting concurrent execution
-    of multiple strategies in parallel (e.g. XAUUSD Scalper + BTC VSA Wick Rejection).
+    of multiple strategies in parallel with live-vs-backtest CUSUM drift monitoring.
     Seamlessly falls back to native Python Strategy Runners when freqtrade is not on PATH.
     """
     def __init__(self):
@@ -193,6 +193,20 @@ class BotSupervisor:
     def check_signal_cannibalization(self, new_signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Delegates to module-level check_signal_cannibalization."""
         return check_signal_cannibalization(new_signal)
+
+    def check_live_drift_and_quarantine(self, auto_quarantine: bool = True) -> List[Dict[str, Any]]:
+        """Evaluates CUSUM / Monte Carlo envelope drift across active strategies and demotes decaying live runners to paper."""
+        from server.drift_monitor import audit_and_quarantine_live_strategies
+
+        reports = audit_and_quarantine_live_strategies(auto_quarantine=auto_quarantine)
+        if auto_quarantine:
+            for rep in reports:
+                s_name = rep.get("strategy", "")
+                if rep.get("status") == "QUARANTINE" and s_name in self.runners:
+                    if self.runners[s_name].get("mode") == "live":
+                        self.runners[s_name]["mode"] = "paper"
+                        logger.warning(f"[BotRunner] Auto-quarantined '{s_name}' to paper mode: {rep.get('reason')}")
+        return reports
 
 def check_signal_cannibalization(new_signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
