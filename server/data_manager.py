@@ -11,6 +11,8 @@ import numpy as np
 
 logger = logging.getLogger("DataManager")
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+MARKET_DIR = os.path.join(_ROOT, "data", "market")
+CATALOG_PATH = os.path.join(MARKET_DIR, "catalog.json")
 
 # Institutional TradingView WebSocket Client
 try:
@@ -35,6 +37,98 @@ def resolve_market_symbol(symbol: str) -> str:
     if "SOL" in upper:
         return "BINANCE:SOLUSDT"
     return upper
+
+
+def canonical_market_slug(symbol: str) -> str:
+    """Returns a clean filesystem slug for a symbol (e.g., XAUUSD, BTCUSDT, SP500)."""
+    tv_sym = resolve_market_symbol(symbol)
+    if tv_sym == "OANDA:XAUUSD":
+        return "XAUUSD"
+    if tv_sym == "CME_MINI:ES1!":
+        return "SP500"
+    if ":" in tv_sym:
+        tv_sym = tv_sym.split(":", 1)[1]
+    return "".join(c for c in tv_sym.upper() if c.isalnum()) or "BTCUSDT"
+
+
+def get_market_dataset_path(symbol: str, timeframe: str = "15m", check_legacy: bool = True) -> str:
+    """
+    Single Source of Truth resolver for persistent market OHLCV datasets.
+    Canonical path: `data/market/<SLUG>_<TF>.csv`
+    """
+    slug = canonical_market_slug(symbol)
+    tf = (timeframe or "15m").lower().strip()
+    os.makedirs(MARKET_DIR, exist_ok=True)
+    canon_path = os.path.join(MARKET_DIR, f"{slug}_{tf}.csv")
+    if os.path.exists(canon_path) or not check_legacy:
+        return canon_path
+
+    # Check legacy paths in data/ for seamless backward compatibility
+    legacy_candidates = []
+    if slug == "XAUUSD":
+        legacy_candidates.append(os.path.join(_ROOT, "data", f"xauusd_candles_{tf}.csv"))
+        if tf == "1m":
+            legacy_candidates.append(os.path.join(_ROOT, "data", "xauusd_candles_1m.csv"))
+    elif slug == "SP500":
+        legacy_candidates.append(os.path.join(_ROOT, "data", f"sp500_candles_{tf}.csv"))
+        legacy_candidates.append(os.path.join(_ROOT, "data", "sp500_candles_1m.csv"))
+    elif slug == "BTCUSDT":
+        if tf == "15m":
+            legacy_candidates.append(os.path.join(_ROOT, "data", "candles_15m.csv"))
+        legacy_candidates.append(os.path.join(_ROOT, "data", f"btc_candles_{tf}.csv"))
+
+    for cand in legacy_candidates:
+        if os.path.exists(cand):
+            return cand
+
+    return canon_path
+
+
+def update_market_catalog(symbol: str, timeframe: str, path: str, df: pd.DataFrame, source: str = "live") -> None:
+    """Updates `data/market/catalog.json` with dataset metadata."""
+    try:
+        os.makedirs(MARKET_DIR, exist_ok=True)
+        catalog: Dict[str, Any] = {}
+        if os.path.exists(CATALOG_PATH):
+            try:
+                with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+                    catalog = json.load(f)
+            except Exception:
+                catalog = {}
+
+        slug = canonical_market_slug(symbol)
+        tf = (timeframe or "15m").lower().strip()
+        key = f"{slug}_{tf}"
+        t_col = "timestamp" if "timestamp" in df.columns else ("time" if "time" in df.columns else None)
+        start_ts = int(df[t_col].iloc[0]) if (t_col and len(df) > 0) else 0
+        end_ts = int(df[t_col].iloc[-1]) if (t_col and len(df) > 0) else 0
+
+        catalog[key] = {
+            "symbol": resolve_market_symbol(symbol),
+            "slug": slug,
+            "timeframe": tf,
+            "path": os.path.relpath(path, _ROOT),
+            "rows": int(len(df)),
+            "start_timestamp": start_ts,
+            "end_timestamp": end_ts,
+            "source": source,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(CATALOG_PATH, "w", encoding="utf-8") as f:
+            json.dump(catalog, f, indent=2)
+    except Exception as e:
+        logger.debug(f"[DataManager] Catalog update note: {e}")
+
+
+def get_market_catalog() -> Dict[str, Any]:
+    """Returns the persistent market data catalog."""
+    if os.path.exists(CATALOG_PATH):
+        try:
+            with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
 
 
 def get_oanda_spot_quote() -> Dict[str, Any]:
@@ -79,7 +173,7 @@ def get_oanda_spot_quote() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[DataManager] Error fetching live OANDA quote: {e}")
         fallback_p = 4335.00
-        csv_path = os.path.join(_ROOT, "data", "xauusd_candles_1m.csv")
+        csv_path = get_market_dataset_path("XAU/USD", "1m")
         if os.path.exists(csv_path):
             try:
                 with open(csv_path, "r", encoding="utf-8") as f:
@@ -232,14 +326,30 @@ def fetch_candles_via_tv(symbol: str, timeframe: str = "1m", count: int = 2000) 
         return []
 
 
+def _save_canonical_and_legacy(symbol: str, timeframe: str, df: pd.DataFrame, legacy_path: Optional[str] = None, source: str = "live") -> None:
+    """Persists OHLCV DataFrame to the canonical `data/market/<SLUG>_<TF>.csv` store and updates catalog."""
+    canon_path = get_market_dataset_path(symbol, timeframe, check_legacy=False)
+    os.makedirs(os.path.dirname(canon_path), exist_ok=True)
+    df.to_csv(canon_path, index=False)
+    update_market_catalog(symbol, timeframe, canon_path, df, source=source)
+    if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(canon_path):
+        try:
+            os.makedirs(os.path.dirname(legacy_path), exist_ok=True)
+            df.to_csv(legacy_path, index=False)
+        except Exception:
+            pass
+
+
 def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refresh: bool = False) -> List[Dict[str, Any]]:
     """
     Fetches genuine OANDA:XAUUSD spot candles.
     Reads persistent clean CSV cache from disk, or refreshes from TradingView WebSocket.
     Resamples cleanly to 5m, 15m, 1h as needed.
     """
-    csv_path = os.path.join(_ROOT, "data", "xauusd_candles_1m.csv")
-    csv_5m_path = os.path.join(_ROOT, "data", "xauusd_candles_5m.csv")
+    csv_path = get_market_dataset_path("XAU/USD", "1m")
+    legacy_1m = os.path.join(_ROOT, "data", "xauusd_candles_1m.csv")
+    csv_5m_path = get_market_dataset_path("XAU/USD", "5m")
+    legacy_5m = os.path.join(_ROOT, "data", "xauusd_candles_5m.csv")
     now_ts = int(time.time())
 
     # 1. Check if cached CSV exists and is fresh (within 120 seconds)
@@ -251,7 +361,6 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
             if len(df) >= 100:
                 last_ts = int(df.iloc[-1][time_col])
                 if (now_ts - last_ts) <= 120:
-                    # Maintain mirror-perfect 5m resampled cache from the full 1m history
                     try:
                         if not os.path.exists(csv_5m_path) or (os.path.getmtime(csv_path) > os.path.getmtime(csv_5m_path)):
                             full_records = df.to_dict(orient="records")
@@ -270,22 +379,7 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
                             resampled_full_5m = resample_candles(full_bars, "5m")
                             if resampled_full_5m and len(resampled_full_5m) > 50:
                                 df_new_5m = pd.DataFrame(resampled_full_5m)
-                                if os.path.exists(csv_5m_path):
-                                    try:
-                                        df_old_5m = pd.read_csv(csv_5m_path)
-                                        if "timestamp" not in df_old_5m.columns and "time" in df_old_5m.columns:
-                                            df_old_5m["timestamp"] = df_old_5m["time"]
-                                        cols = ["timestamp", "open", "high", "low", "close", "volume"]
-                                        for c in cols:
-                                            if c not in df_old_5m.columns and c in df_new_5m.columns:
-                                                df_old_5m[c] = df_new_5m[c]
-                                        df_combined = pd.concat([df_old_5m[cols], df_new_5m[cols]], ignore_index=True)
-                                        df_combined.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
-                                        df_combined.sort_values(by="timestamp", inplace=True)
-                                        df_new_5m = df_combined
-                                    except Exception:
-                                        pass
-                                df_new_5m.to_csv(csv_5m_path, index=False)
+                                _save_canonical_and_legacy("XAU/USD", "5m", df_new_5m, legacy_5m, source="resampled_1m")
                     except Exception as e_full_5m:
                         logger.warning(f"[DataManager] Could not sync 5m resampled cache: {e_full_5m}")
 
@@ -330,13 +424,12 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
                     df_merged = df_fresh
                 df_merged.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
                 df_merged.sort_values(by="timestamp", inplace=True)
-                df_merged.to_csv(csv_path, index=False)
             else:
-                os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-                df_fresh.to_csv(csv_path, index=False)
                 df_merged = df_fresh
 
-            df_to_return = df_merged if ('df_merged' in locals() and not df_merged.empty) else df_fresh
+            _save_canonical_and_legacy("XAU/USD", "1m", df_merged, legacy_1m, source="oanda_tv")
+
+            df_to_return = df_merged if not df_merged.empty else df_fresh
             records = df_to_return.tail(count * 5).to_dict(orient="records") if (count and count * 5 < len(df_to_return)) else df_to_return.to_dict(orient="records")
             all_bars = [
                 {
@@ -351,7 +444,6 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
                 for r in records
             ]
 
-            # Also update 5m resampled cache file so both timeframes are always mirror-perfect
             try:
                 full_records = df_to_return.to_dict(orient="records")
                 full_bars = [
@@ -369,22 +461,7 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
                 resampled_5m = resample_candles(full_bars, "5m")
                 if resampled_5m:
                     df_5m = pd.DataFrame(resampled_5m)
-                    if os.path.exists(csv_5m_path):
-                        try:
-                            df_old_5m = pd.read_csv(csv_5m_path)
-                            if "timestamp" not in df_old_5m.columns and "time" in df_old_5m.columns:
-                                df_old_5m["timestamp"] = df_old_5m["time"]
-                            cols = ["timestamp", "open", "high", "low", "close", "volume"]
-                            for c in cols:
-                                if c not in df_old_5m.columns and c in df_5m.columns:
-                                    df_old_5m[c] = df_5m[c]
-                            df_combined = pd.concat([df_old_5m[cols], df_5m[cols]], ignore_index=True)
-                            df_combined.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
-                            df_combined.sort_values(by="timestamp", inplace=True)
-                            df_5m = df_combined
-                        except Exception:
-                            pass
-                    df_5m.to_csv(csv_5m_path, index=False)
+                    _save_canonical_and_legacy("XAU/USD", "5m", df_5m, legacy_5m, source="resampled_1m")
             except Exception as e_5m:
                 logger.warning(f"[DataManager] Could not save resampled 5m cache: {e_5m}")
 
@@ -403,7 +480,6 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
     # 3. Fallback to existing disk CSV
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path)
-        time_col = "timestamp" if "timestamp" in df.columns else "time"
         records = df.tail(count * 5).to_dict(orient="records") if (count and count > 0) else df.to_dict(orient="records")
         candles = [
             {
@@ -464,7 +540,8 @@ def fetch_real_sp500_candles(interval: str = "1m", count: int = 2880) -> List[Di
     Fetches genuine S&P 500 E-mini futures (ES) candles.
     Reads clean CSV cache or pulls from TradingView WS (CME_MINI:ES1!).
     """
-    csv_path = os.path.join(_ROOT, "data", "sp500_candles_1m.csv")
+    csv_path = get_market_dataset_path("SP500", interval)
+    legacy_path = os.path.join(_ROOT, "data", "sp500_candles_1m.csv")
     now_ts = int(time.time())
 
     if os.path.exists(csv_path):
@@ -502,12 +579,10 @@ def fetch_real_sp500_candles(interval: str = "1m", count: int = 2880) -> List[Di
                 df_merged = pd.concat([df_old, df_fresh], ignore_index=True)
                 df_merged.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
                 df_merged.sort_values(by="timestamp", inplace=True)
-                df_merged.to_csv(csv_path, index=False)
             else:
-                os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-                df_fresh.to_csv(csv_path, index=False)
                 df_merged = df_fresh
-            df_to_return = df_merged if ('df_merged' in locals() and not df_merged.empty) else df_fresh
+            _save_canonical_and_legacy("SP500", interval, df_merged, legacy_path if interval == "1m" else None, source="cme_tv")
+            df_to_return = df_merged if not df_merged.empty else df_fresh
             records = df_to_return.tail(count).to_dict(orient="records") if (count and count < len(df_to_return)) else df_to_return.to_dict(orient="records")
             return [
                 {
@@ -555,7 +630,8 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
         return fetch_real_sp500_candles(interval=interval, count=count)
 
     # 1. Check local disk CSV if available
-    csv_path = os.path.join(_ROOT, "data", "candles_15m.csv") if interval == "15m" else os.path.join(_ROOT, "data", f"btc_candles_{interval}.csv")
+    csv_path = get_market_dataset_path(symbol, interval)
+    legacy_path = os.path.join(_ROOT, "data", "candles_15m.csv") if interval == "15m" else os.path.join(_ROOT, "data", f"btc_candles_{interval}.csv")
     if os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path)
@@ -590,10 +666,9 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
                 df_merged = pd.concat([df_old, df_fresh], ignore_index=True)
                 df_merged.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
                 df_merged.sort_values(by="timestamp", inplace=True)
-                df_merged.to_csv(csv_path, index=False)
             else:
-                os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-                df_fresh.to_csv(csv_path, index=False)
+                df_merged = df_fresh
+            _save_canonical_and_legacy(symbol, interval, df_merged, legacy_path, source="binance_tv")
         except Exception:
             pass
         return fresh[-count:] if count else fresh
@@ -617,6 +692,9 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
                 }
                 for item in raw
             ]
+            if candles:
+                df_rest = pd.DataFrame(candles)
+                _save_canonical_and_legacy(symbol, interval, df_rest, legacy_path, source="binance_rest")
             return candles
     except Exception as e:
         logger.warning(f"[DataManager] Binance REST fallback error for {pair}: {e}")
@@ -640,13 +718,13 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
     return []
 
 
-def sync_30d_candles(symbol: str = "BTC/USDT", output_path: str = "") -> str:
-    """Synchronizes real market data (10,000+ candles) and updates output_path CSV."""
+def sync_30d_candles(symbol: str = "BTC/USDT", output_path: str = "", timeframe: str = "15m") -> str:
+    """Synchronizes real market data (10,000+ candles) and updates canonical + output_path CSV."""
     if not output_path:
-        output_path = os.path.join(_ROOT, "data", "candles_15m.csv")
-    candles = fetch_candles_via_tv(resolve_market_symbol(symbol), "15m", 10000)
+        output_path = get_market_dataset_path(symbol, timeframe, check_legacy=False)
+    candles = fetch_candles_via_tv(resolve_market_symbol(symbol), timeframe, 10000)
     if not candles:
-        candles = fetch_real_binance_klines(symbol=symbol, interval="15m", count=5000)
+        candles = fetch_real_binance_klines(symbol=symbol, interval=timeframe, count=5000)
     if candles:
         df = pd.DataFrame(candles)
         if "time" in df.columns and "timestamp" not in df.columns:
@@ -659,6 +737,7 @@ def sync_30d_candles(symbol: str = "BTC/USDT", output_path: str = "") -> str:
                 pass
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         df.to_csv(output_path, index=False)
+        _save_canonical_and_legacy(symbol, timeframe, df, output_path, source="sync_30d")
         logger.info(f"[DataManager] Synchronized {output_path} with {len(df)} authentic candles")
     return output_path
 
@@ -666,7 +745,7 @@ def sync_30d_candles(symbol: str = "BTC/USDT", output_path: str = "") -> str:
 def sync_xauusd_scalp_candles(output_path: str = "") -> str:
     """Synchronizes real institutional OANDA Cash Spot Gold (XAUUSD) 1m scalping dataset."""
     if not output_path:
-        output_path = os.path.join(_ROOT, "data", "xauusd_candles_1m.csv")
+        output_path = get_market_dataset_path("XAU/USD", "1m", check_legacy=False)
     candles = fetch_candles_via_tv("OANDA:XAUUSD", "1m", 10000)
     if candles:
         df = pd.DataFrame(candles)
@@ -681,5 +760,6 @@ def sync_xauusd_scalp_candles(output_path: str = "") -> str:
                 pass
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         df.to_csv(output_path, index=False)
+        _save_canonical_and_legacy("XAU/USD", "1m", df, output_path, source="sync_xauusd_1m")
         logger.info(f"[DataManager] Synchronized {output_path} with {len(df)} authentic 1m OANDA Gold candles")
     return output_path

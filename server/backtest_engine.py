@@ -190,11 +190,71 @@ def resolve_asset_friction(symbol: str, price: float) -> Tuple[float, float, flo
         slippage_pts = price * 0.0001
     return spread_pts, fee_pct, slippage_pts
 
-def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, timeframe_override: Optional[str] = None, days: Optional[int] = 30) -> dict:
+def compute_strategy_parameter_stability_matrix(
+    df_c: pd.DataFrame,
+    strat_inst: Any,
+    observed_sr: float,
+    symbol: str = "BTC/USDT",
+) -> Optional[np.ndarray]:
+    """
+    Computes a genuine 2x2 perturbed Sharpe matrix around the strategy's
+    entry/exit signals and stop/target parameters so Gate 2
+    (`gate_2_parameter_stability`) can be evaluated from real perturbed runs.
+    """
+    if strat_inst is None or len(df_c) < 60:
+        return None
+    try:
+        from tools.vectorized_screener import simulate_trades_fast
+
+        enter_long = (df_c.get("enter_long", pd.Series(0, index=df_c.index)) == 1)
+        enter_short = (df_c.get("enter_short", pd.Series(0, index=df_c.index)) == 1)
+        exit_long = (df_c.get("exit_long", pd.Series(0, index=df_c.index)) == 1)
+        exit_short = (df_c.get("exit_short", pd.Series(0, index=df_c.index)) == 1)
+
+        base_sl = abs(float(getattr(strat_inst, "stoploss", -0.015)))
+        roi_dict = getattr(strat_inst, "minimal_roi", {}) or {}
+        base_tp = float(roi_dict.get("0", roi_dict.get(0, max(base_sl * 1.8, 0.025)))) if isinstance(roi_dict, dict) else max(base_sl * 1.8, 0.025)
+        base_bars = int(getattr(strat_inst, "max_bars_held", getattr(strat_inst, "time_invalidation_bars", 16)) or 16)
+        risk_pct = float(getattr(strat_inst, "risk_per_trade", getattr(strat_inst, "risk_per_trade_pct", 0.0045)) or 0.0045)
+
+        sl_factors = [0.92, 1.08]
+        tp_factors = [0.92, 1.08]
+        matrix: List[List[float]] = []
+
+        for sl_f in sl_factors:
+            row: List[float] = []
+            for tp_f in tp_factors:
+                rets, _ = simulate_trades_fast(
+                    df_c,
+                    enter_long=enter_long,
+                    enter_short=enter_short,
+                    exit_long=exit_long,
+                    exit_short=exit_short,
+                    stoploss_pct=max(0.002, base_sl * sl_f),
+                    takeprofit_pct=max(0.004, base_tp * tp_f),
+                    max_bars_held=max(4, int(round(base_bars * tp_f))),
+                    risk_per_trade_pct=risk_pct,
+                )
+                if len(rets) >= 5:
+                    m_r = float(np.mean(rets))
+                    s_r = float(np.std(rets, ddof=1)) or 1e-6
+                    sr_p = float((m_r / s_r) * trade_annualization_factor())
+                else:
+                    sr_p = 0.0
+                row.append(sr_p)
+            matrix.append(row)
+        return np.asarray(matrix, dtype=float)
+    except Exception as e:
+        logger.debug(f"[BacktestEngine] Parameter perturbation matrix warning: {e}")
+        return None
+
+
+def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, timeframe_override: Optional[str] = None, days: Optional[int] = None) -> dict:
     """
     Executes real quantitative dual-directional (LONG & SHORT) backtest and DSR cynic audit.
     Zero hardcoded strategy logic: dynamically evaluates strategy definitions and rules
     loaded from strategies/*.py, data/strategies.json, and data/state.json as Single Source of Truth.
+    Defaults to evaluating the full available historical dataset unless `days` is explicitly provided.
     """
     curr_sys_state = state_manager.get()
     if not strategy_name:
@@ -371,22 +431,33 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         trail_pos = 0.0035
         trail_offset = 0.0070
 
-        # Check data/final_rules.json
+        # Check session best_rule.json or data/final_rules.json
+        from server.indicators import compute_all_standard_features
+        from server.session_store import get_session_paths
+        df_c = compute_all_standard_features(df_c, window=20)
+        session_rule_path = get_session_paths(create_if_missing=False).get("best_rule", "")
         final_rules_path = os.path.join(data_dir, "final_rules.json")
-        entry_rule = "lower_wick > 0.40 and volume_zscore > 1.0"
-        if os.path.exists(final_rules_path):
-            try:
-                with open(final_rules_path, "r") as rf:
-                    f_rules = json.load(rf)
-                    entry_rule = f_rules.get("entry_long", entry_rule)
-                    stoploss_pct = float(f_rules.get("stop_loss_pct", stoploss_pct))
-            except Exception:
-                pass
+        entry_rule = "ema_9 > ema_21 and ema_21 > ema_50 and adx_14 > 20"
+        short_rule = "ema_9 < ema_21 and ema_21 < ema_50 and adx_14 > 20"
+        for cand_rule_path in (session_rule_path, final_rules_path):
+            if cand_rule_path and os.path.exists(cand_rule_path):
+                try:
+                    with open(cand_rule_path, "r") as rf:
+                        f_rules = json.load(rf)
+                        entry_rule = f_rules.get("entry_long", entry_rule)
+                        short_rule = f_rules.get("entry_short", short_rule)
+                        stoploss_pct = float(f_rules.get("stoploss_pct", f_rules.get("stop_loss_pct", stoploss_pct)))
+                        break
+                except Exception:
+                    pass
         try:
             df_c['enter_long'] = df_c.eval(entry_rule).astype(int)
         except Exception:
-            df_c['enter_long'] = ((df_c['lower_wick'] > 0.40) & (df_c['volume_zscore'] > 1.0)).astype(int)
-        df_c['enter_short'] = ((df_c['upper_wick'] > 0.40) & (df_c['volume_zscore'] > 1.0)).astype(int)
+            df_c['enter_long'] = 0
+        try:
+            df_c['enter_short'] = df_c.eval(short_rule).astype(int)
+        except Exception:
+            df_c['enter_short'] = 0
 
     # Ensure signals exist
     if 'enter_long' not in df_c.columns:
@@ -894,15 +965,27 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
     # Carlo, OOS walk-forward, regime survival, friction/noise floor, noise
     # jitter, equity linearity) is computed by server/cynic_gates.py.
     #
-    # The previous inline matrix omitted linearity, noise jitter and the
-    # friction gate entirely, and its parameter-stability entry was
-    # synthesised from the observed Sharpe so it could never fail.
-    # returns_arr comes from a real backtest, so spread/slippage/fees are
-    # already reflected in the fills: do not charge friction a second time.
+    # Compute genuine perturbed parameter stability matrix around the strategy's
+    # active parameters so Gate 2 is evaluated from real perturbed runs.
+    perturbed_matrix = compute_strategy_parameter_stability_matrix(
+        df_c=df_c,
+        strat_inst=strat_inst,
+        observed_sr=sharpe,
+        symbol=symbol,
+    )
+    stop_dists_bps = np.array([
+        abs(float(tr.get("entry_price", 1.0)) - float(tr.get("stop_loss", 1.0)))
+        / max(float(tr.get("entry_price", 1.0)), 1e-8)
+        * 10000.0
+        for tr in trades_detail
+    ], dtype=float)
+
     falsification_gates = evaluate_gates(
         returns_arr,
         n_trials=trials_penalized,
         strategy_name=clean_name,
+        metric_matrix=perturbed_matrix,
+        observed_sr=sharpe,
         regime_breakdown=regime_breakdown,
         returns_are_net=True,
     )

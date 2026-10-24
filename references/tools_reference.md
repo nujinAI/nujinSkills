@@ -2,102 +2,112 @@
 
 This document details every tool available in `nujinSkills/tools/`.
 Always invoke tools using the project virtualenv Python:
-`nujinSkills/.venv/bin/python3 tools/<tool_name>.py [args]` (or `./.venv/bin/python3` if inside `nujinSkills/`).
+`nujinSkills/.venv/bin/python tools/<tool_name>.py [args]` (or `.venv/bin/python` if inside `nujinSkills/`).
 
-> **Unified Data Architecture:** All agent-generated features, briefings, returns, rules, and research states live strictly inside `.nujin/`. Use `--id <experiment_name>` across any tool to isolate a strategy's research files in `.nujin/experiments/<experiment_name>/`. Raw market candles stay in `data/`, and strategies stay in `strategies/`.
+> **Per-Session Workspace Isolation & Persistent Data Architecture:**
+> - **Market Data & Runtime State:** Persistent historical OHLCV datasets live in `data/market/` (indexed by `data/market/catalog.json`) and `data/`. Live runtime state lives in `data/state.json`, `data/strategies.json`, and `data/signals.json`.
+> - **Dedicated Per-Session Workspaces:** All research artifacts (features, empirical briefings, candidate returns, best rules, and DSR trial ledgers) are isolated per session inside `.nujin/sessions/<session_id>/` via `server/session_store.py`. Pass `--new-session` to start a clean session or `--id <session_id>` (`--session <session_id>`) across any tool so a new user request is never limited or biased by older sessions.
 
 ---
 
-## 1. Empirical Discovery & Feature Extraction
+## 0. Preflight Verification
 
-### `anomaly_scanner.py`
-Empirical quantitative market anomaly & statistical discovery engine. Calculates Lo-MacKinlay Variance Ratios, Hurst exponent, conditional forward returns, and alpha decay curves.
+### `preflight.py`
+Runs the full production-readiness gate: byte-compiles `server/`, `tools/`, and `tests/`, executes the hermetic `pytest` suite, and verifies that `tools/validation_cynic.py` and `tools/cynic_auditor.py` agree on the canonical 8-gate verdict.
 - **Usage:**
   ```bash
-  tools/anomaly_scanner.py [--data PATH] [--output PATH] [--json]
+  python -m tools.preflight [--json]
+  ```
+
+---
+
+## 1. Empirical Discovery & Composable Feature Extraction
+
+### `data_miner.py`
+Unified CLI that runs both the Multi-Paradigm Statistical Anomaly Scanner (`anomaly_scanner.py`) and the Composable Feature & Indicator Miner (`feature_miner.py`) in one step inside an isolated session.
+- **Usage:**
+  ```bash
+  tools/data_miner.py --input PATH [--output PATH] [--id SESSION_ID] [--new-session] [--window INT] [--htf-data PATH] [--indicators LIST] [--custom JSON]
+  ```
+- **Example:**
+  ```bash
+  tools/data_miner.py --input data/candles_15m.csv --new-session --indicators "ema_34,hma_55,rsi_7"
+  ```
+
+---
+
+### `anomaly_scanner.py`
+Multi-Paradigm Statistical & Edge Family Discovery Engine. Calculates Lo-MacKinlay Variance Ratios, Hurst exponent, session hourly drift matrices, and evaluates conditional forward returns (net of friction) across all **6 Orthogonal Edge Families** (`TREND_CONTINUATION`, `MOMENTUM_BREAKOUT`, `STRUCTURAL_PULLBACK`, `MEAN_REVERSION`, `SESSION_TIME_EDGE`, `MICROSTRUCTURE_FLOW`), recommending the top-performing archetype (`recommended_archetype`).
+- **Usage:**
+  ```bash
+  tools/anomaly_scanner.py [--data PATH] [--id SESSION_ID] [--new-session] [--output PATH] [--json]
   ```
 - **Arguments:**
   - `--data`: Path to OHLCV candle CSV (default: `data/candles_15m.csv`).
-  - `--output`: Path to write empirical JSON briefing (default: `.nujin/empirical_briefing.json`).
+  - `--id` / `--session`: Session ID to isolate the briefing in `.nujin/sessions/<id>/empirical_briefing.json`.
+  - `--new-session`: Create and activate a brand-new isolated session.
+  - `--output`: Explicit output JSON path.
   - `--json`: Output raw JSON to stdout.
-- **Example:**
-  ```bash
-  tools/anomaly_scanner.py --data data/xauusd_candles_5m.csv --output .nujin/empirical_briefing.json
-  ```
 
 ---
 
 ### `feature_miner.py`
-Scalable multi-feature extractor. Computes rolling volatility, ATR, Bollinger Bands, Donchian channels, RSI, MACD, Volume Z-Scores, Fair Value Gaps (FVG), liquidity sweep rejections, and performs Higher-Timeframe (HTF) joins with zero lookahead bias.
+Composable Standard + Custom Indicator & Multi-Timeframe Feature Miner powered by `server/indicators.py`. Computes all standard indicators (`SMA`, `EMA`, `WMA`, `HMA`, `KAMA`, `Supertrend`, causal `Donchian`, `Bollinger`, `Keltner`, `TTM Squeeze`, `RSI`, `MACD`, `Stochastic`, `CCI`, `Williams %R`, `ROC`, `ADX`, `ATR`, `Z-Score`, `Hurst Proxy`, `Slope`, `AVWAP`, `OBV`, `CMF`), arbitrary parameterized indicators, custom user formulas, and causal Higher-Timeframe (`join_asof`) merges.
 - **Usage:**
   ```bash
-  tools/feature_miner.py --input PATH --output PATH [--window INT] [--htf-data HTF_PATH] [--htf-prefix PREFIX]
+  tools/feature_miner.py --input PATH [--id SESSION_ID] [--new-session] [--output PATH] [--window INT] [--htf-data HTF_PATH] [--htf-prefix PREFIX] [--indicators LIST] [--custom JSON]
   ```
 - **Arguments:**
   - `--input`: Path to input OHLCV CSV file (required).
-  - `--output`: Path for extracted features CSV (required).
+  - `--id` / `--session`: Session ID to isolate features in `.nujin/sessions/<id>/features.csv`.
+  - `--new-session`: Create a fresh isolated session for this run.
+  - `--output`: Explicit output CSV path.
   - `--window`: Rolling window size for baseline metrics (default: `20`).
-  - `--htf-data`: Path to Higher Timeframe CSV (e.g. `data/xauusd_candles_5m.csv` or `data/candles_1h.csv`) to join HTF context via backward as-of merge.
-  - `--htf-prefix`: Column prefix for HTF features (default: `htf_`).
-- **Example:**
-  ```bash
-  tools/feature_miner.py --input data/xauusd_candles_1m.csv --output data/features.csv --htf-data data/xauusd_candles_5m.csv --window 20
-  ```
+  - `--htf-data`: Optional Higher Timeframe CSV joined via backward `join_asof` (zero lookahead bias).
+  - `--indicators`: Comma-separated dynamic parameterized indicators (e.g. `"ema_34,hma_55,rsi_5,donchian_upper_40"`).
+  - `--custom`: JSON object of custom indicator formulas (e.g. `'{"trend_gap": "(ema_9 - ema_21) / atr_14"}'`).
 
 ---
 
-## 2. Autonomous Search & Screening Loops
+## 2. Autonomous Search & Vectorized Screening Loops
 
-### `autoresearch_miner.py` (symlink: `nujin_miner.py`)
-Complete autonomous research loop engine with state tracking in `.nujin/state.json`. Manages hypothesis iteration, automated mutations, plateau breakers, and tool self-improvement.
+### `autoresearch_miner.py` (alias: `nujin_miner.py`)
+Multi-Paradigm Autonomous Quant Research & Strategy Evolution Engine. Operates inside `.nujin/sessions/<session_id>/`, evaluates a 3x3 parameter perturbation grid for Gate 2 (`gate_2_parameter_stability`), and records trials to the session-scoped `trial_ledger.jsonl`.
 - **Usage:**
   ```bash
   tools/autoresearch_miner.py {init,scan,step,run,status,improve-tool} [options]
   ```
 - **Actions:**
-  - `init`: Initialize research state for a target and archetype.
+  - `init`: Initialize an isolated research session. Default `--archetype auto` selects the best family from `empirical_briefing.json`.
     ```bash
-    tools/autoresearch_miner.py init --target "BTC Volatility Breakout" --archetype momentum_breakout
+    tools/autoresearch_miner.py init --new-session --target "BTC Multi-Scale Trend" --archetype auto
     ```
-    *(Archetypes: `mean_reversion`, `trend_following`, `momentum_breakout`, `price_action`, `smc_liquidity`, `custom`)*
-  - `scan`: Run empirical anomaly scan on raw candles.
-    ```bash
-    tools/autoresearch_miner.py scan --data data/candles_15m.csv
-    ```
-  - `step`: Run a single iterative hypothesis mutation and backtest step.
-    ```bash
-    tools/autoresearch_miner.py step --features data/features.csv
-    ```
-  - `run`: Run $N$ continuous automated hypothesis discovery cycles.
-    ```bash
-    tools/autoresearch_miner.py run --cycles 10 --features data/features.csv
-    ```
-  - `status`: Display current research state, best rule, and plateau counter.
-    ```bash
-    tools/autoresearch_miner.py status
-    ```
-  - `improve-tool`: Self-audit and benchmark an internal tool script.
-    ```bash
-    tools/autoresearch_miner.py improve-tool --tool feature_miner.py
-    ```
+    *(Supported archetypes: `auto`, `trend_following`, `momentum_breakout`, `volatility_squeeze`, `mtf_pullback`, `zscore_reversion`, `vwap_reversion`, `mean_reversion`, `session_breakout`, `price_action`, `smc_liquidity`, `custom`)*
+  - `scan`: Run multi-paradigm empirical anomaly scan on raw candles.
+  - `step`: Run a single hypothesis evaluation, 3x3 parameter perturbation check, and rule mutation step.
+  - `run`: Run $N$ continuous automated discovery cycles.
+  - `status`: Display current session state, best rules, and recent cycle history.
 
 ---
 
 ### `vectorized_screener.py`
-Ultra-fast VectorBT coarse filter evaluating candidate entry/exit logic against feature datasets with realistic fee and slippage friction.
+Fast Vectorized & Risk-Normalized Strategy Screener. Automatically resolves any dynamic standard indicator (`ema_34`, `hma_21`, `supertrend_dir`, `donchian_upper_20`, `zscore_20`, etc.) or custom formula via `server/indicators.py` and simulates trades with stop-loss, take-profit, trailing stop, and constant-risk position sizing (`risk_per_trade_pct`) for linear equity curves ($R^2 \ge 0.85$).
 - **Usage:**
   ```bash
-  tools/vectorized_screener.py [--data PATH] [--rules JSON_STR] [--fee-bps FLOAT] [--slippage-bps FLOAT] [--output PATH]
+  tools/vectorized_screener.py [--data PATH] [--rules JSON_STR] [--strategy NAME] [--id SESSION_ID] [--fee-bps FLOAT] [--slippage-bps FLOAT] [--output PATH]
   ```
-- **Arguments:**
-  - `--data`: Input features CSV file path (default: `data/candles_15m.csv`).
-  - `--rules`: Rule dict or JSON string specifying strategy entry/exit conditions.
-  - `--fee-bps`: Taker fee in basis points (default: `5.0`).
-  - `--slippage-bps`: Slippage in basis points (default: `2.0`).
-  - `--output`: Output JSON path for trade return series.
 - **Example:**
   ```bash
-  tools/vectorized_screener.py --data data/features.csv --rules '{"entry_long": "ret_zscore < -2.0", "exit": "bars >= 6"}' --output data/candidate_returns.json
+  tools/vectorized_screener.py --data data/candles_15m.csv --id my_session --rules '{"entry_long": "ema_9 > ema_21 and adx_14 > 20", "entry_short": "ema_9 < ema_21 and adx_14 > 20", "stoploss_pct": 0.015, "takeprofit_pct": 0.035}'
+  ```
+
+---
+
+### `strategy_search_engine.py`
+Multi-Paradigm Iterative Search Engine that sweeps across orthogonal strategy families and stop/target ratios inside an isolated session workspace.
+- **Usage:**
+  ```bash
+  tools/strategy_search_engine.py --features PATH [--target-sharpe FLOAT] [--max-dd FLOAT] [--timeframe TF] [--id SESSION_ID] [--new-session]
   ```
 
 ---
@@ -105,48 +115,34 @@ Ultra-fast VectorBT coarse filter evaluating candidate entry/exit logic against 
 ## 3. Adversarial Cynic Audit (Falsification)
 
 ### `cynic_auditor.py` (and `validation_cynic.py`)
-Canonical **8-Gate** Adversarial Falsification Auditor. All gate mathematics lives in
-[`server/cynic_gates.py`](../server/cynic_gates.py); both CLIs are presentation layers over it, so the
-agent-facing auditor and the deployment path can never disagree.
+Canonical **8-Gate** Adversarial Falsification Auditor powered by [`server/cynic_gates.py`](../server/cynic_gates.py).
+Evaluates:
+1. `gate_1_dsr` ($\text{DSR} \ge 0.95$)
+2. `gate_2_parameter_stability` (real perturbed plateau)
+3. `gate_3_monte_carlo` ($\text{MDD}_{99} \le 3.0\%$, tail ratio $\le 2.5$)
+4. `gate_4_walk_forward` ($SR_{OOS} > 1.0$, retention $\ge 30\%$)
+5. `gate_5_regime_survival` ($\ge 50/100$ across Bull, Bear, Range)
+6. `gate_6_friction` (net expectancy $> 0$ after 5 bps fee + 2 bps slippage; stops $\ge 10\text{ bps}$)
+7. `gate_7_noise_jitter` ($\ge 80\%$ Sharpe retention)
+8. `gate_8_equity_linearity` ($R^2 \ge 0.85$, positive slope, K-Ratio)
 
-Evaluates Deflated Sharpe Ratio ($\ge 0.95$), parameter stability, 1,000-run Monte Carlo trade-order
-permutations ($\text{MDD}_{99} \le 3.0\%$), out-of-sample walk-forward, regime survival, friction &
-microstructure noise floor, synthetic noise jitter ($\ge 80\%$ Sharpe retention) and equity linearity
-($R^2 \ge 0.85$). Each gate returns `PASS`, `FAIL` or `INCONCLUSIVE`; `INCONCLUSIVE` **never** counts as
-a pass, and the verdict is `APPROVED` only when all 8 gates pass.
 - **Usage:**
   ```bash
-  tools/cynic_auditor.py [--id NAME] [--returns PATH] [--strategy NAME] [--spec PATH] [--trials INT] [--strict] [--json]
+  tools/cynic_auditor.py [--id SESSION_ID] [--returns PATH] [--strategy NAME] [--spec PATH] [--trials INT] [--strict] [--json]
   ```
-- **Arguments:**
-  - `--id`: Experiment ID to audit in `.nujin/experiments/<id>/`.
-  - `--returns`: JSON file containing candidate trade returns series (array of floats).
-  - `--strategy`: Strategy name in `strategies/` to run a real backtest audit on.
-  - `--spec`: Strategy specification JSON path (default: `.nujin/best_rule.json`).
-  - `--trials`: Cumulative trial count across discovery iterations (penalizes DSR).
-  - `--strict`: Exit with non-zero exit code if any gate fails.
-  - `--json`: Output raw JSON report instead of ASCII table.
-- **Example:**
+- **Examples:**
   ```bash
-  tools/cynic_auditor.py --returns data/candidate_returns.json --trials 50 --strict
+  tools/cynic_auditor.py --id my_session --trials 50 --strict
+  tools/cynic_auditor.py --strategy MyStrategy --strict
   ```
 
 ---
 
 ### `portfolio_cynic.py`
-Portfolio-level correlation and regime orthogonality auditor. Rejects strategies correlated ($\rho \ge 0.50$) with currently active strategies to prevent portfolio crowding.
+Portfolio-level correlation and regime orthogonality auditor. Rejects strategies correlated ($\rho \ge 0.50$) with currently active strategies.
 - **Usage:**
   ```bash
   tools/portfolio_cynic.py [--strategies NAMES] [--data PATH] [--threshold FLOAT] [--json]
-  ```
-- **Arguments:**
-  - `--strategies`: Comma-separated strategy names (default: all strategies).
-  - `--data`: Candle CSV dataset.
-  - `--threshold`: Correlation rejection cutoff (default: `0.50`).
-  - `--json`: Output raw JSON report.
-- **Example:**
-  ```bash
-  tools/portfolio_cynic.py --data data/candles_15m.csv --threshold 0.50
   ```
 
 ---
@@ -154,38 +150,22 @@ Portfolio-level correlation and regime orthogonality auditor. Rejects strategies
 ## 4. Code Generation & Strategy Management
 
 ### `strategy_emitter.py`
-Generates clean, production-ready standalone Python strategy classes compatible with both the live running bot's engine and standalone backtesting. Emitted classes include `populate_indicators`, `populate_entry_trend`, `populate_exit_trend`, and a self-contained `run_backtest(df)` method.
+Generates standalone Python strategy classes (`strategies/<StrategyName>.py`) wired to `server.indicators` so any standard or custom indicator, dynamic stop/target, and risk-normalized position sizing works out of the box.
 - **Usage:**
   ```bash
   tools/strategy_emitter.py --thesis "THESIS_TEXT" --rules RULES_JSON_OR_PATH [--framework {nujin,freqtrade,jesse}] [--out PATH]
-  ```
-- **Arguments:**
-  - `--thesis`: Economic rationale and thesis description (required).
-  - `--rules`: Rules JSON string or file path (e.g. `.nujin/best_rule.json`).
-  - `--framework`: Target framework (`nujin` [default], `freqtrade`, `jesse`).
-  - `--out`: Target output Python file path (defaults to `strategies/<StrategyName>.py`).
-- **Example:**
-  ```bash
-  tools/strategy_emitter.py --thesis "XAUUSD Session Volatility Absorption" --rules .nujin/best_rule.json --framework nujin --out strategies/XauusdVolAbsorber.py
   ```
 
 ---
 
 ### `strategy_manager.py`
-Central registry and lifecycle manager for all strategies across core and plugin directories.
-- **Actions:**
-  - `list`: List all discovered strategies with their operational status and metrics.
-  - `plugins`: Discover and inspect strategies from dynamic plugins (in `plugins/`).
-  - `status`: Update operational status of a strategy (`ACTIVE_LIVE`, `CRON_BACKTEST`, `DEACTIVATED`).
-  - `rank`: Rank strategies by Sharpe ratio, win rate, and profit factor.
-  - `insights`: Generate institutional performance insights for registered strategies.
-  - `add`: Add and register a new strategy file.
-  - `sync`: Synchronize strategy metadata with the live runtime state.
+Central registry and lifecycle manager (`data/strategies.json`) for all strategies across `strategies/` and `plugins/`.
+- **Actions:** `list`, `plugins`, `status`, `backtest`, `cron`, `rank`, `insights`, `register`, `summary`, `portfolio`, `correlation`, `drift`, `signals`, `sync`, `remove`, `add`.
 - **Examples:**
   ```bash
   tools/strategy_manager.py list
-  tools/strategy_manager.py plugins
   tools/strategy_manager.py rank
+  tools/strategy_manager.py insights MyStrategy
   tools/strategy_manager.py status --strategy MyStrategy --status ACTIVE_LIVE
   ```
 
@@ -194,43 +174,14 @@ Central registry and lifecycle manager for all strategies across core and plugin
 ## 5. Live Bot Supervision & Telemetry
 
 ### `bot_control.py`
-Non-disruptive supervisor CLI for the live trading bot.
-- **Actions:**
-  - `status`: Query live bot process, active strategies, broker connectivity, and execution mode.
-  - `deploy`: Hot-deploy a strategy into execution without restarting the server.
-  - `stop`: Deactivate a specific running strategy or stop execution.
-  - `broker`: Inspect active broker account balances and open positions.
+Non-disruptive supervisor CLI for the live trading bot (`status`, `deploy`, `stop`, `broker`).
 - **Examples:**
   ```bash
   tools/bot_control.py status
   tools/bot_control.py deploy --strategy MyStrategy --mode paper
   ```
 
----
-
-### `state_control.py`
-Unified state inspection and signal control CLI. Interfaces directly with the live server state.
-- **Actions:**
-  - `get`: Read state or a dotted key path (e.g. `backtest_summary.sharpe`).
-  - `patch`: Merge-patch JSON updates into the live runtime state.
-  - `signals`: List recently generated signals with timestamps and prices.
-  - `signal-stats`: Query real-time win rate, Profit Factor, Sharpe ratio, and net PnL.
-  - `signal-close`: Manually close an open position.
-- **Examples:**
-  ```bash
-  tools/state_control.py get --key active_strategy
-  tools/state_control.py signal-stats
-  ```
-
----
-
-### `ui_dispatcher.py` & `telegram_broadcast.py`
-Live visual telemetry and notification dispatches.
-- **UI Dispatcher:** Broadcasts events to the Cockpit frontend via WebSocket:
-  ```bash
-  tools/ui_dispatcher.py --event UPSERT_WIDGET --payload '{"widget_id": "cynic_card", "payload": {"status": "PASSED"}}'
-  ```
-- **Telegram Broadcast:** Sends reports and alerts to subscribed Telegram channels:
-  ```bash
-  tools/telegram_broadcast.py broadcast --type update -m "New alpha strategy promoted to paper trading."
-  ```
+### `state_control.py`, `ui_dispatcher.py`, & `telegram_broadcast.py`
+- Inspect live state & signals: `tools/state_control.py signal-stats`
+- Dispatch Cockpit UI widgets: `tools/ui_dispatcher.py --event UPSERT_WIDGET --payload '{...}'`
+- Broadcast Telegram alerts: `tools/telegram_broadcast.py broadcast --type alert --title "Alert" --message "Deployed"`

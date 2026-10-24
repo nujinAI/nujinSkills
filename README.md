@@ -2,7 +2,7 @@
 
 [![System: NujinAI](https://img.shields.io/badge/System-NujinAI-blue.svg)](SKILL.md)
 [![Quant Protocol](https://img.shields.io/badge/Methodology-Universal%20Quant-emerald.svg)](references/quant_protocol.md)
-[![Audit: 6--Gate Cynic](https://img.shields.io/badge/Audit-6--Gate%20Cynic%20%7C%20R%C2%B2%20%E2%89%A5%200.85-amber.svg)](references/cynic_audit.md)
+[![Audit: 8--Gate Cynic](https://img.shields.io/badge/Audit-8--Gate%20Cynic%20%7C%20R%C2%B2%20%E2%89%A5%200.85-amber.svg)](references/cynic_audit.md)
 [![Market Invariants](https://img.shields.io/badge/Invariants-Auction%20%26%20Wyckoff-teal.svg)](references/microstructure_protocol.md)
 [![Tools Reference](https://img.shields.io/badge/Tools-CLI%20Reference-purple.svg)](references/tools_reference.md)
 [![Bot Operations](https://img.shields.io/badge/Bot-Live%20Supervision-cyan.svg)](references/bot_operations.md)
@@ -47,7 +47,7 @@ Instead of getting bogged down in boilerplate code, manual data joining, or curv
    * Solves single-timeframe myopia through a rigorous 3-tier hierarchy: **HTF** (Macro Regime & Bias) $\rightarrow$ **MTF** (Structural Zone / Setup) $\rightarrow$ **LTF** (Execution Trigger & Precise Invalidation).
 
 6. **Unified Closed-Loop AI Quantitative Compiler**
-   * The AI directly authors native Python strategies inheriting `IStrategy`, verifies all 6 Cynic Gates in closed-loop iteration, and hot-deploys them to the live running engine and dual-screen telemetry dashboard.
+   * The AI directly authors native Python strategies inheriting `IStrategy`, verifies all 8 Cynic Gates in closed-loop iteration, and hot-deploys them to the live running engine and dual-screen telemetry dashboard.
 
 ---
 
@@ -105,33 +105,34 @@ The agent reads [`SKILL.md`](SKILL.md), invokes the specialized CLI tools, and e
 
 ---
 
-## 📁 Unified `.nujin/` Data Architecture
+## 📁 Unified Data Catalog & Per-Session Isolation Architecture
 
-All agent-generated data is strictly consolidated inside `.nujin/`, keeping root directories completely clean:
+Market data is persisted as a single source of truth in `data/`, while all research artifacts are isolated per session inside `.nujin/sessions/<session_id>/` so a new user request is never limited or biased by prior sessions:
 
 ```
-nujin/
-├── data/                               <- RAW MARKET FEEDS ONLY (Untouched historical CSVs)
-│   ├── candles_15m.csv
-│   └── xauusd_candles_1m.csv
+nujinSkills/
+├── data/                               <- PERSISTENT MARKET DATA & LIVE RUNTIME STATE
+│   ├── market/                         <- Persistent Historical Market Data Catalog
+│   │   ├── catalog.json                (Dataset registry: bar counts, date ranges, hashes)
+│   │   ├── BTCUSDT_15m.csv
+│   │   └── XAUUSD_1m.csv
+│   ├── state.json                      (Cockpit live state — Single Source of Truth)
+│   ├── strategies.json                 (Strategy registry, rankings, and drift history)
+│   └── signals.json                    (Live/paper execution signal store)
 │
-├── .nujin/                             <- ALL GENERATED RESEARCH DATA & STATE ONLY
-│   ├── features.csv                    (Latest mined features)
-│   ├── empirical_briefing.json         (Latest empirical anomaly briefing)
-│   ├── candidate_returns.json          (Latest backtest return series)
-│   ├── best_rule.json                  (Latest promoted rule specification)
-│   │
-│   └── experiments/                    <- ISOLATED EXPERIMENT SCOPES (--id <name>)
-│       ├── btc_momentum_15m/           (Completely isolated research files)
+├── .nujin/                             <- DEDICATED PER-SESSION RESEARCH WORKSPACES
+│   ├── active_session.json             (Pointer to current active research session)
+│   └── sessions/                       <- ISOLATED SESSION SCOPES (--new-session or --id <id>)
+│       ├── 20261024_btcusdt_15m/       (Completely isolated research & trial ledger)
+│       │   ├── session_meta.json
+│       │   ├── empirical_briefing.json
 │       │   ├── features.csv
-│       │   ├── briefing.json
-│       │   ├── state.json
-│       │   ├── rules.json
-│       │   ├── best_rules.json
+│       │   ├── best_rule.json
 │       │   ├── candidate_returns.json
-│       │   └── results.jsonl
+│       │   ├── results.jsonl
+│       │   └── trial_ledger.jsonl      (Session-scoped DSR trial accounting)
 │       │
-│       └── xauusd_scalp_1m/            (Zero collision with other strategies)
+│       └── 20261024_xauusd_1m/         (Zero collision or DSR penalty spillover)
 │
 └── strategies/                         <- STANDALONE PYTHON STRATEGY CODE ONLY
     ├── XauLiquidityWallsDisplacementScalper.py

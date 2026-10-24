@@ -288,7 +288,8 @@ def rank_strategies(endpoint: str, as_json: bool = False):
         win = f"{bt.get('win_rate', 0.0) * 100:.1f}%" if bt.get('win_rate', 0.0) <= 1.0 else f"{bt.get('win_rate', 0.0):.1f}%"
         dd = f"{bt.get('max_drawdown', 0.0) * 100:.2f}%" if bt.get('max_drawdown', 0.0) <= 1.0 else f"{bt.get('max_drawdown', 0.0):.2f}%"
         pf = f"{bt.get('profit_factor', 0.0):.2f}"
-        gates = f"{rb.get('gates_passed', 0)}/5"
+        gates_total = rb.get("gates_total", 8)
+        gates = f"{rb.get('gates_passed', 0)}/{gates_total}"
         print(f"{rank_str:<5} {tier:<24} {score:<6} {sub_str:<16} {name:<28} {sharpe:<8} {dsr:<8} {win:<8} {dd:<8} {pf:<6} {gates}")
 
     print("-" * 108)
@@ -299,7 +300,7 @@ def rank_strategies(endpoint: str, as_json: bool = False):
 def show_insights(strategy_name: Optional[str], endpoint: str, as_json: bool = False):
     """
     Displays an in-depth quantitative breakdown of a strategy's ranking, tier rationale,
-    sub-scores (Edge, Robustness, Risk, Drift), and 5-gate cynic audit compliance.
+    sub-scores (Edge, Robustness, Risk, Drift), and 8-gate cynic audit compliance.
     """
     from server.state_manager import strategy_registry
     strats = strategy_registry.get_all(sync=False)

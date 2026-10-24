@@ -1,131 +1,91 @@
-# Institutional Quant Protocol — Universal Alpha Discovery & Strategy Engineering
+# Institutional Quant Protocol — Intent-Aware Alpha Discovery & Composable Strategy Engineering
 
-This document establishes the end-to-end standard for quantitative research, hypothesis formulation, multi-timeframe architecture, and strategy engineering in NujinAI.
+This document establishes the end-to-end standard for quantitative research, intent routing, composable indicator engineering, linear equity curve optimization, and adversarial falsification in NujinAI.
 
 ---
 
 ## 🏛️ 1. Core Quantitative Principles
 
-A strategy is accepted for production only if it demonstrates **positive mathematical expectancy**, **economic causality**, and **statistical resilience** across changing market environments.
+A strategy is accepted for production only if it demonstrates **positive mathematical expectancy**, **economic causality**, **linear equity progression ($R^2 \ge 0.85$)**, and **statistical resilience** across all 8 canonical Cynic gates.
 
-### 1.1 Universal Hypothesis Modeling
-Nujin is designed to build and optimize strategies for **any concept, market, or hypothesis requested by the user** (or discovered through data exploration). 
+### 1.1 Dedicated Per-Session Isolation (`.nujin/sessions/<session_id>/`)
+Every user request or research initiative operates inside its own dedicated session workspace (`.nujin/sessions/<session_id>/`, managed by `server/session_store.py`):
+- **Zero Cross-Session Contamination:** A new user request is never limited, biased, or overwritten by features, rules, or return series generated during an older request.
+- **Session-Scoped DSR Trial Accounting:** Each session maintains its own `trial_ledger.jsonl` via `server/trial_ledger.py`. Searching 100 hypotheses in Session A never inflates the $N_{\text{trials}}$ multiple-testing penalty for a brand-new strategy in Session B.
 
-Regardless of the underlying trading philosophy—whether Price Action, Market Structure, Order Flow, Statistical Arbitrage, Trend Following, Scalping, Volatility Models, Macro Dynamics, or novel mathematical formulations—the protocol standardizes how that concept is translated into a systematic system:
+### 1.2 Intent-Aware Routing: User-Directed Hypothesis vs. Open Discovery
+Before running any scanner or miner, classify the user's request into one of two operating modes:
+- **Mode A — User-Directed Hypothesis (Standard or Custom Indicators):**
+  When the user specifies an indicator, concept, or formula (e.g., *"Build a Supertrend + RSI strategy"*, *"Test a 9/21/50 EMA pullback"*, or *"Create a custom Keltner/Bollinger squeeze oscillator"*), directly construct those indicators via `server/indicators.py` (`--indicators` or `--custom`), screen the exact hypothesis, and refine its regime filter and risk/exit structure to maximize equity linearity.
+- **Mode B — Open-Ended Multi-Paradigm Alpha Discovery:**
+  When the user asks Nujin to *find an edge* on an asset/timeframe without prescribing indicators, execute `tools/anomaly_scanner.py` to screen the `TA-Lib` / `ta` feature universe via Spearman Rank IC and mine empirical quantile & 2-factor interaction rules net of friction.
 
-1. **Formalize the Core Mechanism:** Clearly articulate the market dynamic or economic inefficiency being targeted.
-2. **Translate to Objective Conditions:** Convert subjective or qualitative notions into unambiguous, mathematically verifiable rules and features.
-3. **Multi-Timeframe Structure:** Embed the rules into a hierarchical Higher/Mid/Lower timeframe structure for context, confirmation, and precision.
-4. **Enforce Execution Realism:** Account for spread, taker fees, slippage, and latency from day one.
-5. **Adversarial Falsification:** Subject the candidate to the 8-Gate Cynic Audit before deployment.
+### 1.3 The 6 Orthogonal Edge Families
+Every open discovery scan evaluates six independent structural mechanisms:
+1. **`TREND_CONTINUATION` (`trend_following`):** Multi-scale moving average alignment (`EMA`, `HMA`, `KAMA`), `Supertrend` direction, `ADX` trend strength, and rolling linear regression slope (`slope_20`).
+2. **`MOMENTUM_BREAKOUT` (`momentum_breakout` / `volatility_squeeze`):** Causal `Donchian` channel breakouts (`shift(1)`), `TTM Squeeze` / Bollinger-inside-Keltner volatility compression release (`vol_compression`), and Rate-of-Change (`ROC`) surges.
+3. **`STRUCTURAL_PULLBACK` (`mtf_pullback`):** Counter-trend value retracements (`close <= ema_21`, `RSI` dip) within a dominant Higher-Timeframe trend (`ema_50 > ema_200`).
+4. **`MEAN_REVERSION` (`zscore_reversion` / `vwap_reversion`):** Statistical overextension beyond $2\sigma$ (`zscore_20`, `avwap_zscore`, `bb_pct_b`) in low-Hurst ($H < 0.45$) regimes.
+5. **`SESSION_TIME_EDGE` (`session_breakout`):** Institutional liquidity injection at London Open (`killzone_london`), NY Open (`killzone_ny`), or Asian range breakouts.
+6. **`MICROSTRUCTURE_FLOW` (`smc_liquidity`):** Order-flow effort vs. result (`volume_zscore`, `cmf_20`, `obv`), Fair Value Gaps (`fvg_bullish`/`bearish`), and trapped inventory sweeps.
 
-### 1.2 Mathematical Expectancy & Risk Asymmetry
-Every strategy must produce positive mathematical expectancy after all execution friction:
+### 1.4 Composable Standard + Custom Indicator Architecture (`server/indicators.py`)
+Strategies are composed from three modular building blocks:
+$$\text{Strategy} = \underbrace{\text{Regime Filter}}_{\text{Hurst / ADX / HTF Trend / Vol}} + \underbrace{\text{Setup \& Trigger}}_{\text{Standard or Custom Indicators}} + \underbrace{\text{Dynamic Exit \& Risk Sizing}}_{\text{R-Multiple / Trail / Half-Life}}$$
 
-$$E = (P_{\text{win}} \times \overline{\text{Win Size}}) - (P_{\text{loss}} \times \overline{\text{Loss Size}}) - \text{Friction}$$
+- **Standard Parameterized Indicators:** Any column token such as `sma_50`, `ema_34`, `wma_20`, `hma_21`, `kama_10`, `rsi_7`, `roc_14`, `cci_20`, `willr_14`, `stoch_k_14`, `adx_14`, `atr_14`, `donchian_upper_55`, `supertrend_dir`, `ttm_squeeze`, `zscore_50`, `slope_20`, or `cmf_20` is dynamically resolved on the fly by `ensure_dynamic_indicators()`.
+- **Custom Mathematical Formulas:** Arbitrary expressions over any combination of columns (`--custom '{"custom_osc": "(ema_9 - ema_21) / atr_14"}'`) are evaluated vectorially without boilerplate.
 
-- **Asymmetric Risk-to-Reward ($R:R$):** Prioritize setups with favorable payoff ratios ($\frac{\overline{\text{Win}}}{\overline{\text{Loss}}} \ge 1.5$ to $3.0+$).
-- **Structural Invalidation:** Invalidation points (stop losses) must be defined by objective market structure (swing extremes, structural boundaries, volatility thresholds), never arbitrary percentage or fixed-dollar stops.
-- **Avoid Negative Skew:** High win-rate systems with small gains and fat-tailed, catastrophic losses are strictly rejected.
-
-### 1.3 Microstructure Noise Floor & Physical Execution Realism
-A systematic strategy must never attempt to trade inside an asset's microstructure noise band. Any stop loss, trailing stop, or profit target must strictly respect the physical execution floor:
+### 1.5 Mathematical Expectancy, Microstructure Noise Floor & Friction Realism
+Every strategy must produce positive mathematical expectancy after full round-trip friction:
+$$E = (P_{\text{win}} \times \overline{\text{Win Size}}) - (P_{\text{loss}} \times \overline{\text{Loss Size}}) - \text{Friction} > 0$$
 
 1. **Minimum Stop / Trailing Distance:**
-   $$\text{Stop Distance} \ge \max\left(3.0 \times \text{Typical Spread}, \; 1.5 \times \text{ATR}(14)\right)$$
-   - Across all asset classes (Crypto, Forex, Indices, Commodities), an invalidation buffer tighter than $3\times$ the bid-ask spread or $1.5\times$ ATR is within random Brownian noise. Live bid-ask bounce and standard spread widening will liquidate the position before any market trend can unfold.
-2. **Minimum Holding Horizon:**
-   - $\text{min\_bars\_held} \ge 3$ bars on the execution timeframe. Micro-scalping targeting sub-candle tick fluctuations is disqualified to prevent overfitting to historical bar geometry.
-3. **Full Round-Trip Friction Accounting:**
-   - Long entries fill at Ask ($\text{Price} + \frac{1}{2}\text{Spread}$); Long exits fill at Bid ($\text{Price} - \frac{1}{2}\text{Spread}$).
-   - Short entries fill at Bid ($\text{Price} - \frac{1}{2}\text{Spread}$); Short exits fill at Ask ($\text{Price} + \frac{1}{2}\text{Spread}$).
-   - Expected edge per trade must exceed $2.5\times$ total round-trip friction ($\text{Spread} + \text{Taker Fee} + \text{Slippage}$).
+   $$\text{Stop Distance} \ge \max\left(3.0 \times \text{Typical Spread}, \; 1.5 \times \text{ATR}(14), \; 10\text{ bps}\right)$$
+2. **Full Round-Trip Friction Accounting:**
+   - Default crypto/index/FX screening deducts 5 bps fee + 2 bps slippage per side; asset-aware backtests apply realistic bid-ask spread, slippage, and taker fees (`resolve_asset_friction` in `server/backtest_engine.py`).
 
-### 1.4 Equity Curve Linearity & Stability Mandate ($R^2 \ge 0.85$, target $\ge 0.90$, K-Ratio)
-To achieve smooth compounding without erratic swings or long flatlined drawdowns across any asset class:
-
-1. **Linear Regression Goodness-of-Fit ($R^2 \ge 0.90$):**
-   The cumulative net equity curve must conform closely to a constant upward trendline:
-   $$R^2 = 1 - \frac{\sum (\text{Equity}_t - \widehat{\text{Equity}}_t)^2}{\sum (\text{Equity}_t - \overline{\text{Equity}})^2} \ge 0.85 \quad (\text{Target} \ge 0.90)$$
-   Strategies with erratic return spikes ($R^2 < 0.70$) or stagnant recovery phases are penalized and rejected.
-2. **K-Ratio Consistency (Lars Kestner $\ge 1.5$):**
-   Measures return consistency relative to the standard error of the equity curve's slope:
+### 1.6 Risk-Normalized Position Sizing & Linear Equity Curve Engineering ($R^2 \ge 0.85$)
+A strategy cannot achieve a linear equity curve ($R^2 \ge 0.85$, $K\text{-Ratio} \ge 1.5$) if its per-trade account risk fluctuates wildly with market volatility.
+1. **Constant-Risk Normalization (`risk_per_trade_pct`):**
+   $$\text{Position Size} = \frac{\text{Account Equity} \times \text{Risk Fraction (e.g. } 0.45\%\text{)}}{\max(|\text{Entry Price} - \text{Stop Loss}|, \; \text{Noise Floor})}$$
+   Every trade risks the exact same percentage of equity ($1R = 0.45\%$). A $1R$ stop-loss always impacts equity by $-0.45\%$, and a $2.5R$ target always adds $+1.125\%$ (less friction), eliminating volatility-spike equity distortions.
+2. **Linearity Goodness-of-Fit ($R^2 \ge 0.85$, Target $\ge 0.90$):**
+   $$R^2 = 1 - \frac{\sum (\text{Equity}_t - \widehat{\text{Equity}}_t)^2}{\sum (\text{Equity}_t - \overline{\text{Equity}})^2} \ge 0.85$$
+3. **K-Ratio Consistency ($\ge 1.5$):**
    $$\text{K-Ratio} = \frac{\text{Slope}}{\text{SE}(\text{Slope})} \times \frac{\sqrt{N}}{T} \ge 1.5$$
-   Guarantees that profitability is distributed steadily across independent trade sequences rather than generated by a few outlier market events.
-3. **Linearity Fitness Objective Function:**
-   Autonomous miners optimize for smooth compounding rather than raw unpenalized profit:
-   $$\text{Fitness} = \text{Net Expectancy (bps)} \times R^2 \times \min(\text{DSR}, 1.0)$$
 
-### 1.5 Universal Market Invariants & Economic Causality
-Systematic alpha originates from three objective, physical invariants of market price formation:
-
-1. **The Incomplete Auction Invariant (Steidlmayer / Auction Market Theory):**
-   Markets continuously rotate between **Balance / Value Acceptance** (efficient two-sided trade, low Hurst $H < 0.45$) and **Imbalance / Price Discovery** (directional expansion seeking new value, high Hurst $H > 0.55$). Testing outside the Value Area (`value_area_high` / `value_area_low`) without volume acceptance triggers a Failed Auction, rapidly reverting back to mean value.
-
-2. **The Cause & Effect Invariant (Wyckoff / Volatility Clustering):**
-   Volatility mathematically clusters (ARCH/GARCH): periods of low variance precede explosive expansion. The asymmetric payoff of any breakout or trend continuation scales inversely with the preceding volatility compression (`vol_compression < 0.70` indicates energy coiling).
-
-3. **The Effort vs. Result Invariant (Absorption & Trapped Liquidity):**
-   Volume measures aggressive market order effort; candle displacement measures the result. When massive aggressive volume stalls at structural extremes due to passive limit liquidity, aggressors become trapped offside, serving as forced market liquidity for high-expectancy reversals.
-
-### 1.6 Invalidation-Based Volatility Position Sizing
-Fixed lot sizing or arbitrary contract sizing introduces uncontrolled variance across changing volatility regimes. The institutional standard links position size directly to structural invalidation distance:
-
-$$\text{Position Size} = \frac{\text{Account Equity} \times \text{Risk Fraction}}{\max(|\text{Entry Price} - \text{Structural Stop Loss}|, \; \text{Microstructure Noise Floor}) \times \text{Point Value}}$$
-
-- **Risk Uniformity:** Every position risks the exact same percentage of portfolio equity (e.g. 0.50% or \$50 on a \$10k account) regardless of market volatility.
-- **Volatility Parity:** When market conditions are calm and structural invalidation is tight (e.g., at the extreme of an absorption wick), sizing expands safely. When volatility is wide, sizing contracts, protecting capital automatically.
-
-### 1.7 Alpha Half-Life & Time-Based Trade Invalidation (The Stale-Trade Rule)
-Quantitative edges have a finite temporal duration (alpha half-life). Holding a trade that fails to develop directionally introduces dead-money drag and uncompensated overnight/rollover risk:
-
-1. **Maximum Holding Horizon ($N_{\text{max}}$ Bars):**
-   A strategy specifies a maximum bar horizon (`time_invalidation_bars`, e.g. 12 to 24 bars on 5m data) for a trade to demonstrate profit.
-2. **Momentum Progress Gate:**
-   If price has not achieved at least $+0.5 \times \text{ATR}$ or triggered the initial trailing ratchet within the holding window, the original entry catalyst has evaporated.
-3. **Active Capital Scavenging:**
-   The strategy executes a time-based exit (`EXIT_TIME_EXPIRATION`), cutting inventory risk, eliminating chop exposure, and shortening recovery drawdown periods.
-
-### 1.8 Continuous Quality Control & CUSUM Alpha Degradation Monitoring
-Post-deployment, market regimes drift and competitive crowding causes alpha decay. The engine enforces statistical process control (SPC) using the Page's Cumulative Sum (CUSUM) test:
-
-$$S_t = \max\left(0, \; S_{t-1} + (\mu_{\text{expected}} - R_t - k)\right)$$
-
-Where:
-- $\mu_{\text{expected}}$ is the expected mean trade return from the out-of-sample backtest.
-- $R_t$ is the actual live return of trade $t$.
-- $k$ is the allowable slack parameter ($k = 0.5 \times \sigma$).
-- **Degradation Threshold:** When $S_t \ge 2.5 \times \sigma$, the system automatically issues a `CRITICAL_ALERT: ALPHA_DEGRADED` and transitions the runner to `SAFE_MODE` or pauses new entries to trigger an autonomous re-mining cycle.
+### 1.7 Continuous Quality Control & CUSUM Alpha Degradation Monitoring
+Post-deployment, Page's Cumulative Sum (CUSUM) test monitors live trade returns against expected backtest expectancy:
+$$S_t = \max\left(0, \; S_{t-1} + (\mu_{\text{expected}} - R_t - k)\right), \quad k = 0.5\sigma$$
+When $S_t \ge 2.5\sigma$, the engine raises `CRITICAL_ALERT: ALPHA_DEGRADED` and halts new entries.
 
 ---
 
 ## 🔭 2. Institutional Multi-Timeframe (MTF) Architecture
 
-Professional systematic strategies integrate multiple horizons to avoid trading noise in isolation. Nujin standardizes a 3-tier confluence framework:
-
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 1. HIGHER TIMEFRAME (HTF) — Context, Macro Regime & Dominant Bias     │
-│    • Horizons: Daily, 4-Hour, or 1-Hour                                │
-│    • Purpose: Establish overall market regime (Bull, Bear, Range),     │
-│      dominant structural direction, major liquidity boundaries, or     │
-│      macro volatility states.                                          │
+│    • Horizons: Daily, 4-Hour, or 1-Hour (joined via causal join_asof)  │
+│    • Purpose: Establish market regime (Bull, Bear, Range), Hurst H,    │
+│      and macro directional bias.                                       │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ Condition: Trade only in alignment
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 2. MID TIMEFRAME (MTF) — Structural Setup & Key Interaction Zone      │
+│ 2. MID TIMEFRAME (MTF) — Structural Setup & Value Interaction Zone     │
 │    • Horizons: 15-Minute or 5-Minute                                   │
-│    • Purpose: Identify structural shifts, value area retests, key      │
-│      level interactions, pattern completions, or dynamic conditions.   │
+│    • Purpose: Identify volatility squeeze, channel breakout, trend     │
+│      pullback, or statistical envelope extreme.                        │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ Condition: Setup confirmed
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 3. LOWER TIMEFRAME (LTF) — Execution Trigger & Precise Invalidation    │
-│    • Horizons: 1-Minute, 15-Second, or Tick Series                     │
-│    • Purpose: Fine-tune entry timing, capture local confirmation,      │
-│      and anchor a tight structural stop loss for high R:R execution.   │
+│ 3. LOWER TIMEFRAME (LTF) — Execution Trigger & Risk-Normalized Sizing  │
+│    • Horizons: 15-Minute, 5-Minute, or 1-Minute                        │
+│    • Purpose: Confirm trigger on bar close, anchor structural stop     │
+│      above noise floor, and size position for constant 1R risk.        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -133,62 +93,36 @@ Professional systematic strategies integrate multiple horizons to avoid trading 
 
 ## 🔬 3. Stage-by-Stage Alpha Discovery Pipeline
 
-### Stage 1: Empirical Anomaly Discovery & Statistical Profiling
-Examine underlying series behavior before finalizing rule parameters:
-1. **Variance Ratio Test ($VR$):**
-   - $VR < 0.95$: Mean-reverting behavior (boundary interaction / reversal mechanics).
-   - $VR > 1.05$: Trending persistence (breakout and trend-following mechanics).
-   - $VR \approx 1.00$: Random walk characteristics.
-2. **Hurst Exponent ($H$):**
-   - $H < 0.45$: Anti-persistent (mean-reverting).
-   - $H > 0.55$: Persistent (momentum / trend).
-3. **Conditional Forward Returns:**
-   - Verify that conditional states yield statistically significant forward returns ($t\text{-stat} > 2.0, p < 0.05$).
-4. **Alpha Half-Life Decay:**
-   - Measure the duration over which the predictive edge decays to establish optimal holding bounds (`max_bars_held`).
+### Stage 1: Session Initialization, Intent Routing & Market Characterization
+1. Create or specify a dedicated session (`--new-session` or `--id <session_id>`).
+2. Run `tools/anomaly_scanner.py --data <path> --id <session_id>` to compute:
+   - Lo-MacKinlay Variance Ratios ($VR$) and multi-horizon Hurst Exponent ($H$).
+   - Conditional forward returns (net of friction) and alpha half-life across all **6 Orthogonal Edge Families**.
+   - Session hourly volatility and directional drift matrix.
+3. Extract features via `tools/feature_miner.py --input <path> --id <session_id>` (including any `--indicators` or `--custom` formulas requested by the user).
 
-### Stage 2: Hypothesis Synthesis & Iterative Optimization Loop
-1. **Rule Formulation:**
-   - Construct precise entry triggers, structural invalidation (stop loss), profit targets, and exit rules.
-2. **Sample Size & Multi-Year Historical Depth:**
-   - Require statistically meaningful sample sizes (**$N \ge 100$ to $500+$ trades**) evaluated across multi-year data.
-   - Must cover diverse market regimes: Trending (Bull and Bear), Volatility Shocks, and Extended Low-Volatility Consolidation.
-3. **In-Sample (IS) vs. Out-of-Sample (OOS) Partitioning:**
-   - Partition data into In-Sample (for search/optimization) and Out-of-Sample (blind testing).
-   - Alternatively apply Combinatorial Purged Cross-Validation (CPCV) with purging and embargoing to eliminate lookahead leakage.
-4. **Iterative Autonomous Search:**
-   - Execute vectorized screening via `tools/vectorized_screener.py` or continuous cycles via `tools/autoresearch_miner.py`.
-   - Leverage multi-scale features including trend, volatility, and auction microstructure proxies ([`references/microstructure_protocol.md`](microstructure_protocol.md)).
-   - If progress halts ($N \ge 5$ iterations without improvement), trigger the **Plateau Breaker** to expand the feature space, mutate rules, or adjust timeframes.
-5. **Search Accounting (Trial Ledger):**
-   - Every evaluated hypothesis is appended to `.nujin/trial_ledger.jsonl` via `server/trial_ledger.py` — backtests record `kind="backtest"`, miner cycles record `kind="miner_step"`, each keyed by a stable rule fingerprint.
-   - DSR's $N_{trials}$ is **read from this ledger**, never inferred from the number of trades. Inferring it from trade count made the multiple-testing penalty arbitrary and the gate weaker than it appeared. Distinct hypotheses count once; re-auditing the same strategy does not inflate $N$.
-   - The ledger is also the evidence a future Probability-of-Backtest-Overfitting (PBO/CSCV) check requires.
+### Stage 2: Composable Strategy Synthesis & Iterative Optimization Loop
+1. **Synthesize Candidate Rules:**
+   - Combine a Regime Filter + Setup/Trigger + Exit/Stop/Target structure.
+2. **Vectorized Screening & Evolution:**
+   - Screen rules rapidly with `tools/vectorized_screener.py --id <session_id>` or iterate via `tools/autoresearch_miner.py run --id <session_id> --archetype auto`.
+   - Every evaluated hypothesis is recorded in the session's `.nujin/sessions/<session_id>/trial_ledger.jsonl`.
 
-### Stage 3: Adversarial Cynic Audit (Falsification)
-Every candidate must pass all **8 canonical gates** before strategy synthesis. The mathematics is
-implemented once in `server/cynic_gates.py`; see [`references/cynic_audit.md`](cynic_audit.md) for the
-full specification.
-1. **Deflated Sharpe Ratio (DSR):** $\text{DSR} \ge 0.95$, penalised for total trial count ($N_{trials}$) and non-normal skew/kurtosis ($\ge 30$ trades).
-2. **Parameter Stability Surface:** Real perturbed re-runs must form a plateau ($\min(M) > 0.40\,\widehat{SR}$ and $\text{mean}(M) > 0.70\,\widehat{SR}$). Without genuine re-runs the gate reports `INCONCLUSIVE`, never `PASS`.
+### Stage 3: Full-History Backtest & 8-Gate Adversarial Cynic Audit
+Every candidate must pass all **8 canonical gates** in `server/cynic_gates.py` (see [`references/cynic_audit.md`](cynic_audit.md)):
+1. **Deflated Sharpe Ratio (DSR):** $\text{DSR} \ge 0.95$, penalized by session $N_{\text{trials}}$ and return skew/kurtosis ($\ge 30$ trades).
+2. **Parameter Stability Surface:** Perturbed parameter grid ($2\times 2$ or $3\times 3$) must form a stable plateau ($\min(M) > 0.40\,\widehat{SR}$ and $\text{mean}(M) > 0.70\,\widehat{SR}$). Automatically computed by `server/backtest_engine.py` and `tools/autoresearch_miner.py`.
 3. **Monte Carlo MDD:** 1,000 trade-order permutations must yield $\text{MDD}_{99} \le 3.0\%$ with tail ratio $\le 2.5$.
 4. **Out-of-Sample Walk-Forward:** 70/30 chronological split; $SR_{OOS} > 1.0$ and retention $\ge 30\%$.
 5. **Market Regime Survival:** Score $\ge 50/100$ across Bull / Bear / Range (or $\ge 2$ of 3 temporal slices positive).
-6. **Execution Friction & Noise Floor:** Net expectancy $> 0$ after 5 bps fee + 2 bps slippage (not re-charged when returns already embed friction); stops must clear the 10 bps microstructure floor.
+6. **Execution Friction & Noise Floor:** Net expectancy $> 0$ after 5 bps fee + 2 bps slippage; stops must clear the 10 bps microstructure floor.
 7. **Noise Perturbation Jitter:** Sharpe retention $\ge 80\%$ under seeded synthetic noise.
 8. **Equity Curve Linearity Standard:** $R^2 \ge 0.85$ with positive slope (target $R^2 \ge 0.90$, $K\text{-Ratio} \ge 1.5$).
 
-A gate that cannot be evaluated returns `INCONCLUSIVE` and does **not** count as passed. The candidate is
-`APPROVED` only when all 8 gates report `PASS`; any `FAIL` renders the verdict `REJECTED`.
+A gate that cannot be evaluated returns `INCONCLUSIVE` and **never counts as passed**. The candidate is `APPROVED` only when all 8 gates report `PASS`.
 
-### Stage 4: Native AI Strategy Synthesis, Closed-Loop Cynic Verification & Live Hot-Deployment
-1. **Unified Native AI Strategy Synthesis:**
-   - The AI Agent directly authors or refactors native production Python strategy classes inheriting `IStrategy`.
-   - Complete expressiveness with zero template ceilings: implements multi-bar state machines, MTF zone tracking, custom liquidity confirmations (wicks, absorptions, momentum), microstructure noise floor protection ($\ge \max(3\times \text{Spread}, 1.5\times \text{ATR})$), and visual indicator manifests (`chart_indicators`).
-2. **Closed-Loop Cynic Compiler Loop:**
-   - The emitted strategy is immediately evaluated via `tools/cynic_auditor.py --strategy <Name> --strict`.
-   - If any gate reports `FAIL` or `INCONCLUSIVE` (e.g. noise floor, an unevaluated parameter plateau, or $R^2 < 0.85$ linearity), the AI Agent iterates on the strategy rules and logic until all 8 gates report `PASS`.
-3. **Portfolio Correlation Audit:**
-   - Verify low pairwise return correlation ($< 0.50$) with existing active strategies (`tools/portfolio_cynic.py`).
-4. **Hot Deployment:**
-   - Register into `strategy_manager.py` and deploy via `tools/bot_control.py` in paper mode before live capital allocation.
+### Stage 4: Strategy Emission, Portfolio Orthogonality & Live Hot-Deployment
+1. Emit or author the production strategy in `strategies/<StrategyName>.py` (`tools/strategy_emitter.py`).
+2. Run closed-loop verification: `tools/cynic_auditor.py --strategy <StrategyName> --strict`.
+3. Verify portfolio orthogonality ($\rho < 0.50$) against existing active strategies via `tools/portfolio_cynic.py`.
+4. Register and hot-deploy via `tools/strategy_manager.py` and `tools/bot_control.py`.
