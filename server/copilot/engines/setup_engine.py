@@ -52,17 +52,18 @@ def formulate_trade_setup(
     if direction == "LONG":
         entry = curr_price
         if demand_zones:
-            # Stop loss anchored below the demand zone with 0.25 ATR buffer
-            stop_loss = round(demand_zones[0].price_low - (0.25 * atr), 2)
+            # Stop loss anchored below the demand zone with 0.2 ATR buffer
+            stop_loss = round(demand_zones[0].price_low - (0.2 * atr), 2)
         else:
             stop_loss = round(entry - (1.5 * atr), 2)
 
-        if supply_zones and supply_zones[0].price_low > entry:
+        # Target: Overhead supply zone floor, or at least 2.5x Risk
+        risk = max(abs(entry - stop_loss), 1.0)
+        if supply_zones and supply_zones[0].price_low > entry + (1.2 * risk):
             take_profit = round(supply_zones[0].price_low, 2)
         else:
-            take_profit = round(entry + (3.0 * atr), 2)
+            take_profit = round(entry + (2.5 * risk), 2)
 
-        risk = max(abs(entry - stop_loss), 1.0)
         reward = max(abs(take_profit - entry), 1.0)
         rr = round(reward / risk, 2)
 
