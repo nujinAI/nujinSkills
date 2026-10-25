@@ -2,8 +2,8 @@
 name: nujinskills
 description: >-
   Autonomous quantitative research, composable strategy engineering, and systematic trading engine for NujinAI.
-  Enforces hypothesis-driven strategy modeling (SMC, Order Blocks, Order Flow, Price Action, MTF Trend, StatArb, or custom indicators),
-  per-session workspace isolation, a persistent market data catalog, TA-Lib/ta library indicator composition,
+  Enforces hypothesis-driven strategy modeling across any user thesis or quantitative paradigm,
+  per-session workspace isolation, a persistent market data catalog, dynamic TA-Lib/ta library indicator composition,
   causal multi-timeframe & cross-asset alignment, risk-normalized linear equity curve engineering (R^2 >= 0.85),
   and adversarial falsification via the 8-Gate Cynic audit (DSR >= 0.95, CPCV/PBO, Monte Carlo MDD <= 3.0%).
 ---
@@ -16,7 +16,7 @@ description: >-
 ## 1. Core Operating Principles
 
 1. **Hypothesis-Driven Strategy Engineering:**
-   - When a user requests a specific trading concept—such as **Smart Money Concepts (SMC), Order Blocks, Fair Value Gaps (FVG), Order Flow Imbalances, Volume Profile/Delta, MTF Trend Continuation, Volatility Squeezes, or StatArb**—faithfully model that exact premise in Python.
+   - Model whatever trading hypothesis, economic causal premise, or technical concept the user requests directly in Python.
    - When given an open request (*"find an edge"*, *"build a profitable strategy on XAUUSD"*), formulate creative, economically causal hypotheses from market structure, session liquidity, volatility transitions, or momentum exhaustion.
    - The strategy's entry, exit, and risk logic are authored directly in Python (`strategies/<Name>.py` or vectorized rules); the **8-Gate Cynic Audit** serves as the sole objective mathematical judge.
 
@@ -64,7 +64,7 @@ description: >-
 [ STEP 1: Session Init & Strategy Authoring ]
   Create isolated session (.nujin/sessions/<id>/).
   Author Python strategy class in strategies/<Name>.py based on the user's concept
-  (or creative hypothesis: SMC, order blocks, order flow, MTF trend, volatility compression).
+  (or quantitative market hypothesis: order flow, MTF trend, volatility compression, mean reversion).
                      │
                      ▼
 [ STEP 2: Fast Vectorized Screening & Initial Verification ]
@@ -101,7 +101,7 @@ Run using project virtualenv Python: `.venv/bin/python tools/<tool>.py`
 | Strategy Ranking & Tiers | `python tools/strategy_manager.py rank` |
 | Deploy Trading Bot | `python tools/bot_control.py deploy --strategy strategies/<Name>.py --mode paper` |
 | Live CUSUM Drift Monitor | `python tools/drift_monitor.py --check-live` |
-| AI Chart Copilot & SMC Markup | `python tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m` |
+| AI Chart Copilot Live Markup | `python tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m --indicators "ema_20,ema_50"` |
 | Start Telemetry Server & Cockpit | `python tools/server_control.py start --port 8000 --daemon` / `python tools/frontend_control.py start --port 3000 --daemon` |
 
 ---
@@ -109,7 +109,7 @@ Run using project virtualenv Python: `.venv/bin/python tools/<tool>.py`
 ## 4. Deep Reference Guides
 Load reference files on demand:
 - [`references/quant_protocol.md`](references/quant_protocol.md) — Hypothesis formulation, MTF architecture, risk normalization, and linear equity curve engineering.
-- [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md) — AI Chart Copilot architecture, SMC market structure engine, and universal visual protocol.
+- [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md) — AI Chart Copilot architecture, dynamic multi-indicator visual engine, and universal visual protocol.
 - [`references/cynic_audit.md`](references/cynic_audit.md) — 8-Gate mathematical formulas, CPCV/PBO, and DSR specifications.
 - [`references/tools_reference.md`](references/tools_reference.md) — CLI flags and JSON schemas.
 - [`references/microstructure_protocol.md`](references/microstructure_protocol.md) — Market microstructure, auction dynamics, and order-flow mechanics.

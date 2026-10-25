@@ -15,7 +15,7 @@ Every user request or research initiative operates inside its own dedicated sess
 
 ### 1.2 Hypothesis-Driven Alpha Formulation (Unconstrained Strategy Modeling)
 Trading strategies originate from **sound market structure hypotheses**, not brute-force data dredging. The AI agent has complete flexibility to model any trading methodology:
-- **Smart Money Concepts (SMC) & Institutional Price Action:** Fair Value Gaps (FVG), Order Blocks, Liquidity Sweeps, and Premium/Discount market pricing.
+- **Auction Dynamics & Institutional Price Action:** Fair Value Gaps (FVG), Order Blocks, Liquidity Sweeps, and Premium/Discount market pricing.
 - **Order Flow & Volume Dynamics:** Cumulative Volume Delta (CVD) divergence, Volume Profile / Value Area shifts, and Volume-Price analysis.
 - **Multi-Timeframe Trend Continuation:** HTF directional alignment combined with lower-timeframe pullbacks to key dynamic moving averages or value boundaries.
 - **Volatility Transitions & Squeezes:** Bollinger inside Keltner compression followed by directional volatility release.
@@ -26,7 +26,7 @@ The agent designs the strategy to faithfully execute the hypothesis; the **8-Gat
 
 ### 1.3 Composable Indicator Architecture (`server/indicators.py`)
 Strategies are composed from modular building blocks:
-$$\text{Strategy} = \underbrace{\text{Regime Filter}}_{\text{HTF Trend / Volatility / Session}} + \underbrace{\text{Setup \& Trigger}}_{\text{SMC, Price Action, Indicators, Order Flow}} + \underbrace{\text{Dynamic Exit \& Risk Sizing}}_{\text{R-Multiple / VolTarget / Trailing Stop}}$$
+$$\text{Strategy} = \underbrace{\text{Regime Filter}}_{\text{HTF Trend / Volatility / Session}} + \underbrace{\text{Setup \& Trigger}}_{\text{Price Action, Indicators, Order Flow}} + \underbrace{\text{Dynamic Exit \& Risk Sizing}}_{\text{R-Multiple / VolTarget / Trailing Stop}}$$
 
 - **Standard Parameterized Indicators:** Any column token such as `sma_50`, `ema_34`, `wma_20`, `hma_21`, `kama_10`, `rsi_7`, `roc_14`, `cci_20`, `willr_14`, `stoch_k_14`, `adx_14`, `atr_14`, `donchian_upper_55`, `supertrend_dir`, `ttm_squeeze`, `zscore_50`, `slope_20`, or `cmf_20` is dynamically resolved on the fly by `ensure_dynamic_indicators()`.
 - **Custom Mathematical Formulas:** Arbitrary expressions over any combination of columns (`--custom '{"custom_osc": "(ema_9 - ema_21) / atr_14"}'`) are evaluated vectorially without boilerplate.

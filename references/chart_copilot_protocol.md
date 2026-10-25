@@ -8,7 +8,7 @@ The **Chart Copilot** enables NujinAI (Antigravity) and the user to collaborativ
 
 The system operates in two non-conflicting visual modes:
 - **Strategy Mode (Default):** Inspects historical strategy backtests, signals, and strategy-specific indicator manifests.
-- **AI Copilot Mode:** Autonomous live market vision powered by institutional Smart Money Concepts (SMC), Volume, and TA-Lib indicators.
+- **AI Copilot Mode:** Autonomous live market vision powered by quantitative market models, Volume, and TA-Lib indicators.
 
 ```
                       ┌────────────────────────────┐
@@ -19,7 +19,7 @@ The system operates in two non-conflicting visual modes:
                                     ▼
                       ┌────────────────────────────┐
                       │    tools/chart_copilot.py  │
-                      │   (Python SMC Math Engine) │
+                      │   (Dynamic TA-Lib & Quant Engine) │
                       └─────────────┬──────────────┘
                                     │
                     ┌───────────────┴───────────────┐
@@ -33,7 +33,7 @@ The system operates in two non-conflicting visual modes:
 
 ---
 
-## 2. Institutional SMC Visual Primitives
+## 2. Dynamic Visual Primitives
 
 ### 1. Structural Breaks (BOS & MSS)
 - **BOS (Break of Structure):** Trend continuation when a candle close breaks past a previous swing pivot in the direction of the trend.
