@@ -79,19 +79,19 @@
           />
           <!-- Origin Marker Point -->
           <circle :cx="st.x1" :cy="st.y" :r="st.type === 'LIQUIDITY' ? 2 : 2.5" :fill="st.color" />
-          <!-- Break Badge -->
+          <!-- Break Badge: Offset nicely so it never overlaps the candles -->
           <rect
-            :x="st.x2 - 18"
-            :y="st.direction === 'BULLISH' ? st.y - 15 : st.y + 3"
-            width="36"
-            height="13"
-            rx="2.5"
+            :x="st.x2 + 4"
+            :y="st.y - 8"
+            width="34"
+            height="15"
+            rx="3"
             :fill="st.color"
-            opacity="0.9"
+            opacity="0.95"
           />
           <text
-            :x="st.x2"
-            :y="st.direction === 'BULLISH' ? st.y - 5.5 : st.y + 12.5"
+            :x="st.x2 + 21"
+            :y="st.y + 3"
             fill="#ffffff"
             font-size="8.5"
             font-weight="bold"
@@ -115,17 +115,28 @@
             :stroke-dasharray="zbox.borderStyle === 'dashed' ? '4 2' : undefined"
             rx="2"
           />
-          <text
-            v-if="zbox.width > 24"
-            :x="zbox.x + 5"
-            :y="zbox.y + 11"
+          <!-- FVG badge tucked neatly on the top-left of the box -->
+          <rect
+            v-if="zbox.width > 30"
+            :x="zbox.x + 3"
+            :y="zbox.y + 2"
+            width="26"
+            height="12"
+            rx="2"
             :fill="zbox.borderColor"
-            font-size="9"
+            opacity="0.85"
+          />
+          <text
+            v-if="zbox.width > 30"
+            :x="zbox.x + 16"
+            :y="zbox.y + 10.5"
+            fill="#ffffff"
+            font-size="7.5"
             font-weight="bold"
             font-family="monospace"
-            opacity="0.9"
+            text-anchor="middle"
           >
-            {{ zbox.label }}
+            FVG
           </text>
         </g>
 
