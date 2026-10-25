@@ -101,7 +101,7 @@ Run using project virtualenv Python: `.venv/bin/python tools/<tool>.py`
 | Strategy Ranking & Tiers | `python tools/strategy_manager.py rank` |
 | Deploy Trading Bot | `python tools/bot_control.py deploy --strategy strategies/<Name>.py --mode paper` |
 | Live CUSUM Drift Monitor | `python tools/drift_monitor.py --check-live` |
-| AI Chart Copilot Live Markup | `python tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m --indicators "ema_20,ema_50"` |
+| AI Chart Copilot Live Dispatcher | `python tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m [--indicators "..."] [--no-zones] [--clear]` |
 | Start Telemetry Server & Cockpit | `python tools/server_control.py start --port 8000 --daemon` / `python tools/frontend_control.py start --port 3000 --daemon` |
 
 ---
