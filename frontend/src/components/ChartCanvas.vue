@@ -115,28 +115,28 @@
             :stroke-dasharray="zbox.borderStyle === 'dashed' ? '4 2' : undefined"
             rx="2"
           />
-          <!-- FVG badge tucked neatly on the top-left of the box -->
+          <!-- Dynamic Zone badge (e.g. DEMAND, SUPPLY, FVG) -->
           <rect
             v-if="zbox.width > 30"
             :x="zbox.x + 3"
             :y="zbox.y + 2"
-            width="26"
-            height="12"
+            :width="Math.max(32, (zbox.label || 'ZONE').length * 7)"
+            height="13"
             rx="2"
             :fill="zbox.borderColor"
-            opacity="0.85"
+            opacity="0.9"
           />
           <text
             v-if="zbox.width > 30"
-            :x="zbox.x + 16"
-            :y="zbox.y + 10.5"
+            :x="zbox.x + 3 + Math.max(32, (zbox.label || 'ZONE').length * 7) / 2"
+            :y="zbox.y + 11"
             fill="#ffffff"
             font-size="7.5"
             font-weight="bold"
             font-family="monospace"
             text-anchor="middle"
           >
-            FVG
+            {{ zbox.label || 'ZONE' }}
           </text>
         </g>
 
@@ -557,11 +557,21 @@ const renderedSetupBox = ref<RenderedSetupBox | null>(null);
 const backendPrimitives = ref<any>(null);
 let activeLevelLines: any[] = [];
 
-// Real-time live copilot listener: Update chart markup on the fly via WebSocket without any page reload or restart
+// Real-time live copilot listener: Update chart markup and switch symbol/timeframe dynamically on the fly
 watch(
   () => props.copilotMarkup,
   (newMarkup) => {
     if (!newMarkup) return;
+    // 1. If copilot specified a timeframe or symbol, adapt the chart view dynamically!
+    if (newMarkup.timeframe && newMarkup.timeframe !== selectedTimeframe.value) {
+      selectedTimeframe.value = newMarkup.timeframe;
+      loadCandles();
+    }
+    if (newMarkup.symbol && newMarkup.symbol !== selectedSymbol.value) {
+      selectedSymbol.value = newMarkup.symbol;
+      loadCandles();
+    }
+
     const prims = newMarkup.primitives || {};
     backendPrimitives.value = prims;
     rawPrimitiveBoxes.value = prims.boxes || [];

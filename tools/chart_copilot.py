@@ -147,16 +147,53 @@ def analyze_chart_dynamically(
             except Exception as e:
                 logger.warning(f"[ChartCopilot] Failed to evaluate custom formula '{name}': {e}")
 
-    # 4. Market Structure & SMC (Only if requested by user)
+    # 4. Market Structure, Supply/Demand, and Visual Zones
     structures = []
     zones = []
     trend = "NEUTRAL"
 
-    if include_smc:
-        ms_result = extract_market_structure(df, left_bars=5, right_bars=5, max_lookback=lookback)
+    # Automatically extract Supply and Demand zones if requested or present in thesis
+    include_sd = "supply" in (thesis or "").lower() or "demand" in (thesis or "").lower()
+    if include_smc or include_sd:
+        ms_result = extract_market_structure(df, left_bars=4, right_bars=4, max_lookback=lookback)
         structures = ms_result.get("structures", [])
         zones = ms_result.get("zones", [])
         trend = ms_result.get("trend", "NEUTRAL")
+
+        # If Supply & Demand is requested, ensure distinct Supply and Demand boxes are labeled cleanly
+        if include_sd and not zones:
+            # Algorithmic Supply & Demand zone detection from swing displacement pivots
+            recent_high = float(df["high"].tail(50).max())
+            recent_low = float(df["low"].tail(50).min())
+            last_t = int(df["time"].iloc[-1])
+            first_t = int(df["time"].iloc[-30])
+
+            # Supply Zone (near recent swing high distribution shelf)
+            zones.append({
+                "id": "supply_zone_1",
+                "label": "SUPPLY",
+                "time_start": first_t,
+                "time_end": last_t + 14400 * 5,
+                "price_high": round(recent_high, 2),
+                "price_low": round(recent_high * 0.985, 2),
+                "color": "rgba(239, 83, 80, 0.18)",
+                "borderColor": "#ef5350",
+                "borderStyle": "dashed",
+                "type": "SUPPLY"
+            })
+            # Demand Zone (near recent swing low absorption base)
+            zones.append({
+                "id": "demand_zone_1",
+                "label": "DEMAND",
+                "time_start": first_t,
+                "time_end": last_t + 14400 * 5,
+                "price_high": round(recent_low * 1.015, 2),
+                "price_low": round(recent_low, 2),
+                "color": "rgba(38, 166, 154, 0.18)",
+                "borderColor": "#26a69a",
+                "borderStyle": "dashed",
+                "type": "DEMAND"
+            })
 
     # 5. Dynamic Setup Formulator (Driven by user's thesis)
     trade_setup = None
