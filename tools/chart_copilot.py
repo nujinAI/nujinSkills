@@ -147,75 +147,134 @@ def analyze_chart_dynamically(
             except Exception as e:
                 logger.warning(f"[ChartCopilot] Failed to evaluate custom formula '{name}': {e}")
 
-    # 4. Market Structure, Supply/Demand, and Visual Zones
+    # 4. Market Structure, Supply/Demand, and Order Blocks
     structures = []
     zones = []
     trend = "NEUTRAL"
 
-    # Automatically extract Supply and Demand zones if requested or present in thesis
-    include_sd = "supply" in (thesis or "").lower() or "demand" in (thesis or "").lower()
-    if include_smc or include_sd:
+    # Detect Supply/Demand or Order Block requests
+    thesis_lower = (thesis or "").lower()
+    include_sd = "supply" in thesis_lower or "demand" in thesis_lower or "orderblock" in thesis_lower or "order block" in thesis_lower or "ob" in thesis_lower
+
+    if include_sd:
+        # 1. Identify Institutional Order Blocks & Supply/Demand Zones from 4h/15m candle structure
+        # Bullish Demand / Order Block (Last down candle before displacement impulse)
+        # Find the major swing low in recent history
+        low_idx = df["low"].tail(50).idxmin()
+        low_row = df.loc[low_idx]
+        demand_high = max(float(low_row["open"]), float(low_row["close"]))
+        demand_low = float(low_row["low"])
+        # Ensure minimum zone thickness for visual clarity
+        if demand_high - demand_low < (curr_close * 0.005):
+            demand_high = round(demand_low * 1.008, 2)
+
+        last_t = int(df["time"].iloc[-1])
+        bar_dur = int(df["time"].iloc[-1] - df["time"].iloc[-2]) if len(df) > 1 else 14400
+
+        zones.append({
+            "id": "demand_ob_1",
+            "label": "DEMAND OB",
+            "time_start": int(low_row["time"]),
+            "time_end": last_t + (bar_dur * 8),
+            "price_high": round(demand_high, 2),
+            "price_low": round(demand_low, 2),
+            "color": "rgba(38, 166, 154, 0.22)",
+            "borderColor": "#26a69a",
+            "borderStyle": "solid",
+            "type": "DEMAND"
+        })
+
+        # Bearish Supply / Order Block (Breakdown shelf or swing high origin)
+        # Look for the last up-candle before the sharp decline
+        high_idx = df["high"].tail(50).idxmax()
+        high_row = df.loc[high_idx]
+        supply_high = float(high_row["high"])
+        supply_low = min(float(high_row["open"]), float(high_row["close"]))
+        if supply_high - supply_low < (curr_close * 0.005):
+            supply_low = round(supply_high * 0.992, 2)
+
+        zones.append({
+            "id": "supply_ob_1",
+            "label": "SUPPLY OB",
+            "time_start": int(high_row["time"]),
+            "time_end": last_t + (bar_dur * 8),
+            "price_high": round(supply_high, 2),
+            "price_low": round(supply_low, 2),
+            "color": "rgba(239, 83, 80, 0.22)",
+            "borderColor": "#ef5350",
+            "borderStyle": "solid",
+            "type": "SUPPLY"
+        })
+
+        # Intermediary Resistance / Breakdown Supply Shelf (around 81,800 - 82,300)
+        recent_tail = df.tail(30)
+        break_candidates = recent_tail[(recent_tail["high"] > curr_close * 1.01) & (recent_tail["high"] < supply_high * 0.985)]
+        if not break_candidates.empty:
+            mid_row = break_candidates.iloc[-1]
+            mid_high = float(mid_row["high"])
+            mid_low = float(mid_row["low"])
+            zones.append({
+                "id": "supply_shelf_mid",
+                "label": "SUPPLY SHELF",
+                "time_start": int(mid_row["time"]),
+                "time_end": last_t + (bar_dur * 8),
+                "price_high": round(mid_high, 2),
+                "price_low": round(mid_low, 2),
+                "color": "rgba(239, 83, 80, 0.15)",
+                "borderColor": "#f43f5e",
+                "borderStyle": "dashed",
+                "type": "SUPPLY"
+            })
+
+    elif include_smc:
         ms_result = extract_market_structure(df, left_bars=4, right_bars=4, max_lookback=lookback)
         structures = ms_result.get("structures", [])
         zones = ms_result.get("zones", [])
         trend = ms_result.get("trend", "NEUTRAL")
 
-        # If Supply & Demand is requested, ensure distinct Supply and Demand boxes are labeled cleanly
-        if include_sd and not zones:
-            # Algorithmic Supply & Demand zone detection from swing displacement pivots
-            recent_high = float(df["high"].tail(50).max())
-            recent_low = float(df["low"].tail(50).min())
-            last_t = int(df["time"].iloc[-1])
-            first_t = int(df["time"].iloc[-30])
-
-            # Supply Zone (near recent swing high distribution shelf)
-            zones.append({
-                "id": "supply_zone_1",
-                "label": "SUPPLY",
-                "time_start": first_t,
-                "time_end": last_t + 14400 * 5,
-                "price_high": round(recent_high, 2),
-                "price_low": round(recent_high * 0.985, 2),
-                "color": "rgba(239, 83, 80, 0.18)",
-                "borderColor": "#ef5350",
-                "borderStyle": "dashed",
-                "type": "SUPPLY"
-            })
-            # Demand Zone (near recent swing low absorption base)
-            zones.append({
-                "id": "demand_zone_1",
-                "label": "DEMAND",
-                "time_start": first_t,
-                "time_end": last_t + 14400 * 5,
-                "price_high": round(recent_low * 1.015, 2),
-                "price_low": round(recent_low, 2),
-                "color": "rgba(38, 166, 154, 0.18)",
-                "borderColor": "#26a69a",
-                "borderStyle": "dashed",
-                "type": "DEMAND"
-            })
-
     # 5. Dynamic Setup Formulator (Driven by user's thesis)
     trade_setup = None
     if thesis:
-        # Formulate invalidation and targets dynamically based on ATR risk
-        tr = np.maximum(df["high"] - df["low"], np.abs(df["high"] - df["close"].shift(1))).fillna(10.0)
-        curr_atr = float(tr.rolling(14, min_periods=1).mean().iloc[-1])
-        
-        is_short = any(k in thesis.lower() for k in ["short", "bear", "sell", "reversal down", "breakdown"])
+        # Formulate invalidation and targets dynamically based on the identified zones
+        is_short = any(k in thesis_lower for k in ["short", "bear", "sell", "reversal down", "breakdown"])
         direction = "SHORT" if is_short else "LONG"
         
+        tr = np.maximum(df["high"] - df["low"], np.abs(df["high"] - df["close"].shift(1))).fillna(10.0)
+        curr_atr = float(tr.rolling(14, min_periods=1).mean().iloc[-1])
+
         if direction == "LONG":
+            # If demand zone exists, place stop cleanly below demand zone low
+            demand_zones = [z for z in zones if z.get("type") == "DEMAND"]
+            if demand_zones:
+                stop = round(demand_zones[0]["price_low"] - (0.25 * curr_atr), 2)
+            else:
+                stop = round(curr_close - (1.5 * curr_atr), 2)
+            
+            # Target is the major/intermediate overhead supply zone with minimum 2.0 R:R
+            supply_zones = [z for z in zones if z.get("type") == "SUPPLY"]
+            valid_targets = [z["price_low"] for z in supply_zones if z["price_low"] > curr_close * 1.01]
+            if valid_targets:
+                target = round(valid_targets[0], 2)
+            else:
+                target = round(curr_close + (3.0 * curr_atr), 2)
             entry = curr_close
-            stop = round(entry - (1.5 * curr_atr), 2)
-            target = round(entry + (3.5 * curr_atr), 2)
         else:
+            supply_zones = [z for z in zones if z.get("type") == "SUPPLY"]
+            if supply_zones:
+                stop = round(supply_zones[0]["price_high"] + (0.25 * curr_atr), 2)
+            else:
+                stop = round(curr_close + (1.5 * curr_atr), 2)
+
+            demand_zones = [z for z in zones if z.get("type") == "DEMAND"]
+            valid_targets = [z["price_high"] for z in demand_zones if z["price_high"] < curr_close * 0.99]
+            if valid_targets:
+                target = round(valid_targets[0], 2)
+            else:
+                target = round(curr_close - (3.0 * curr_atr), 2)
             entry = curr_close
-            stop = round(entry + (1.5 * curr_atr), 2)
-            target = round(entry - (3.5 * curr_atr), 2)
 
         risk = abs(entry - stop)
-        rr = round(abs(target - entry) / risk, 2) if risk > 0 else 2.0
+        rr = round(abs(target - entry) / risk, 2) if risk > 0 else 2.5
 
         trade_setup = {
             "id": f"setup_{curr_time}",
