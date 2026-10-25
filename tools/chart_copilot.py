@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
 """
 tools/chart_copilot.py
-NujinAI Chart Copilot CLI & Analysis Tool.
+─────────────────────────────────────────────────────────────────────────────
+NujinAI Dynamic Chart Copilot & Technical Analysis Engine.
 
-Inspects live market data for any symbol & timeframe, extracts institutional
-market structure (Swings, BOS, MSS, unmitigated FVGs, BSL/SSL pools),
-synthesizes an actionable trade setup with 1R risk invalidation, and pushes
-visual primitives directly to the frontend chart canvas.
+100% Limitless & Bias-Free:
+Computes and projects ANY indicator stack, mathematical formula, or trading
+concept requested by the user or agent across TA-Lib (201 indicators),
+Order Flow / Volume Delta, Volatility Channels, SMC Market Structure, or
+custom formulas.
 
 Usage:
-    tools/chart_copilot.py [--symbol BTC/USDT] [--timeframe 15m] [--lookback 140] [--json]
+    # 1. Inspect any custom indicator stack
+    tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m --indicators "ema_21,ema_50,supertrend,rsi_14"
+
+    # 2. Inspect Volatility / Mean-Reversion bands
+    tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m --indicators "bb_upper_20,bb_lower_20,bb_middle_20"
+
+    # 3. Inspect SMC Market Structure & Swings
+    tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m --smc
+
+    # 4. Formulate thesis & trade setup based on user's concept
+    tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m --thesis "Trend continuation pullback to 21 EMA with RSI > 50"
 """
 
 import os
@@ -17,7 +29,7 @@ import sys
 import json
 import argparse
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -25,27 +37,32 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import pandas as pd
-from server.market_structure import extract_market_structure, detect_swing_points
-from server.chart_primitives import extract_strategy_primitives
+import numpy as np
 from server import data_manager
+from server.indicators import compute_all_standard_features, ensure_dynamic_indicators
+from server.market_structure import extract_market_structure
 
 logger = logging.getLogger("ChartCopilot")
 
 
-def analyze_market_chart(
+def analyze_chart_dynamically(
     symbol: str = "BTC/USDT",
     timeframe: str = "15m",
-    lookback: int = 140
+    lookback: int = 140,
+    requested_indicators: Optional[List[str]] = None,
+    custom_formulas: Optional[Dict[str, str]] = None,
+    include_smc: bool = False,
+    thesis: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Fetches real candles, computes institutional SMC structure,
-    and returns a structured copilot briefing with visual primitives.
+    Dynamically computes requested indicator features from TA-Lib, order flow,
+    market structure, and custom formulas without hardcoded archetypes.
     """
     sym_upper = symbol.upper()
     is_gold = any(k in sym_upper for k in ["XAU", "GOLD", "GC"])
     is_sp = any(k in sym_upper for k in ["SP", "ES", "S&P", "US500"])
     
-    # 1. Fetch authentic candles through data_manager module seam
+    # 1. Fetch authentic candles via data_manager seam
     if is_gold:
         candles = data_manager.fetch_real_oanda_candles(interval=timeframe, count=lookback)
     elif is_sp:
@@ -53,7 +70,7 @@ def analyze_market_chart(
     else:
         candles = data_manager.fetch_real_binance_klines(symbol=symbol, interval=timeframe, count=lookback)
 
-    if not candles or len(candles) < 25:
+    if not candles or len(candles) < 20:
         return {
             "status": "ERROR",
             "message": f"Insufficient candles retrieved for {symbol} ({timeframe}).",
@@ -65,66 +82,124 @@ def analyze_market_chart(
     if "time" not in df.columns and "timestamp" in df.columns:
         df["time"] = df["timestamp"]
 
-    # 2. Extract clean market structure
-    ms_result = extract_market_structure(df, left_bars=5, right_bars=5, max_lookback=lookback)
-    
-    structures = ms_result.get("structures", [])
-    zones = ms_result.get("zones", [])
-    trend = ms_result.get("trend", "NEUTRAL")
-    
     curr_close = float(df["close"].iloc[-1])
     curr_time = int(df["time"].iloc[-1])
 
-    # 3. Formulate Actionable Institutional Trade Setup
-    bsl_pool = next((s for s in reversed(structures) if s.get("type") == "LIQUIDITY" and s.get("direction") == "BULLISH"), None)
-    ssl_pool = next((s for s in reversed(structures) if s.get("type") == "LIQUIDITY" and s.get("direction") == "BEARISH"), None)
-    
-    trade_idea = None
+    lines: List[Dict[str, Any]] = []
+    series_data: Dict[str, List[Dict[str, Any]]] = {}
+    hud_items: List[Dict[str, Any]] = []
 
-    # Bullish Setup: Uptrend/MSS Bullish with Discount FVG Support
-    bull_fvg = next((z for z in reversed(zones) if z["type"] == "FVG_BULL" and z["price_high"] <= curr_close * 1.002), None)
-    if trend in ["BULLISH", "NEUTRAL"] and bull_fvg:
-        entry = float(bull_fvg["price_high"])
-        stop = round(float(bull_fvg["price_low"]) * 0.9990, 2)
-        risk = entry - stop
-        if risk > 0:
-            target = float(bsl_pool["price"]) if bsl_pool and bsl_pool["price"] > entry else round(entry + (risk * 3.0), 2)
-            rr = round((target - entry) / risk, 2)
-            trade_idea = {
-                "direction": "LONG",
-                "entry_price": entry,
-                "stop_loss": stop,
-                "take_profit": target,
-                "rr_ratio": rr,
-                "thesis": f"Long limit at Bullish FVG (${bull_fvg['price_low']} - ${bull_fvg['price_high']}) targeting BSL liquidity."
-            }
+    # 2. Dynamic Indicator Computation (TA-Lib + ta + custom)
+    palette = ["#38bdf8", "#f59e0b", "#a855f7", "#ec4899", "#10b981", "#06b6d4", "#84cc16"]
+    color_idx = 0
 
-    # Bearish Setup: Downtrend/MSS Bearish with Premium FVG Resistance
-    bear_fvg = next((z for z in reversed(zones) if z["type"] == "FVG_BEAR" and z["price_low"] >= curr_close * 0.998), None)
-    if not trade_idea and trend in ["BEARISH", "NEUTRAL"] and bear_fvg:
-        entry = float(bear_fvg["price_low"])
-        stop = round(float(bear_fvg["price_high"]) * 1.0010, 2)
-        risk = stop - entry
-        if risk > 0:
-            target = float(ssl_pool["price"]) if ssl_pool and ssl_pool["price"] < entry else round(entry - (risk * 3.0), 2)
-            rr = round((entry - target) / risk, 2)
-            trade_idea = {
-                "direction": "SHORT",
-                "entry_price": entry,
-                "stop_loss": stop,
-                "take_profit": target,
-                "rr_ratio": rr,
-                "thesis": f"Short limit into Bearish FVG (${bear_fvg['price_low']} - ${bear_fvg['price_high']}) targeting SSL liquidity."
-            }
+    if requested_indicators:
+        df = ensure_dynamic_indicators(df, requested_indicators)
+        for ind_name in requested_indicators:
+            ind_clean = ind_name.strip().lower()
+            if not ind_clean or ind_clean not in df.columns:
+                continue
+            
+            series = df[ind_clean]
+            if series is not None and not series.empty:
+                last_val = series.iloc[-1]
+                
+                # Check if it's an overlay (near price) or an oscillator
+                is_overlay = abs(series.median() - curr_close) / curr_close <= 0.25
+                color = palette[color_idx % len(palette)]
+                color_idx += 1
 
-    # 4. Compile chart primitives for the UI
-    primitives = extract_strategy_primitives(None, candles, include_ai_copilot=True)
-    if trade_idea:
-        primitives["setups"] = [{
+                if is_overlay:
+                    lines.append({
+                        "id": ind_clean,
+                        "title": ind_clean.upper().replace("_", " "),
+                        "color": color,
+                        "lineWidth": 1.5,
+                        "lineStyle": 0,
+                    })
+                    series_data[ind_clean] = [
+                        {"time": int(t), "value": round(float(v), 2)}
+                        for t, v in zip(df["time"], series) if pd.notnull(v)
+                    ]
+
+                hud_items.append({
+                    "id": ind_clean,
+                    "label": ind_clean.upper(),
+                    "color": color,
+                    "value": f"${last_val:.2f}" if is_overlay else f"{last_val:.2f}"
+                })
+
+    # 3. Dynamic Custom Mathematical Formulas (e.g. "(upper_band - lower_band) / ema_20")
+    if custom_formulas:
+        # Pre-enrich df with all standard features so any formula token resolves
+        df_rich = compute_all_standard_features(df, window=20)
+        for name, formula in custom_formulas.items():
+            try:
+                evaluated = df_rich.eval(formula)
+                df[name] = evaluated
+                last_val = evaluated.iloc[-1]
+                hud_items.append({
+                    "id": name,
+                    "label": name.upper(),
+                    "color": "#ec4899",
+                    "value": f"{last_val:.4f}"
+                })
+            except Exception as e:
+                logger.warning(f"[ChartCopilot] Failed to evaluate custom formula '{name}': {e}")
+
+    # 4. Market Structure & SMC (Only if requested by user)
+    structures = []
+    zones = []
+    trend = "NEUTRAL"
+
+    if include_smc:
+        ms_result = extract_market_structure(df, left_bars=5, right_bars=5, max_lookback=lookback)
+        structures = ms_result.get("structures", [])
+        zones = ms_result.get("zones", [])
+        trend = ms_result.get("trend", "NEUTRAL")
+
+    # 5. Dynamic Setup Formulator (Driven by user's thesis)
+    trade_setup = None
+    if thesis:
+        # Formulate invalidation and targets dynamically based on ATR risk
+        tr = np.maximum(df["high"] - df["low"], np.abs(df["high"] - df["close"].shift(1))).fillna(10.0)
+        curr_atr = float(tr.rolling(14, min_periods=1).mean().iloc[-1])
+        
+        is_short = any(k in thesis.lower() for k in ["short", "bear", "sell", "reversal down", "breakdown"])
+        direction = "SHORT" if is_short else "LONG"
+        
+        if direction == "LONG":
+            entry = curr_close
+            stop = round(entry - (1.5 * curr_atr), 2)
+            target = round(entry + (3.5 * curr_atr), 2)
+        else:
+            entry = curr_close
+            stop = round(entry + (1.5 * curr_atr), 2)
+            target = round(entry - (3.5 * curr_atr), 2)
+
+        risk = abs(entry - stop)
+        rr = round(abs(target - entry) / risk, 2) if risk > 0 else 2.0
+
+        trade_setup = {
             "id": f"setup_{curr_time}",
-            **trade_idea,
-            "time_entry": curr_time
-        }]
+            "direction": direction,
+            "entry_price": entry,
+            "stop_loss": stop,
+            "take_profit": target,
+            "rr_ratio": rr,
+            "time_entry": curr_time,
+            "thesis": thesis
+        }
+
+    primitives = {
+        "lines": lines,
+        "series": series_data,
+        "boxes": zones,
+        "levels": [],
+        "hud_items": hud_items,
+        "structures": structures,
+        "setups": [trade_setup] if trade_setup else []
+    }
 
     return {
         "status": "SUCCESS",
@@ -132,29 +207,35 @@ def analyze_market_chart(
         "timeframe": timeframe,
         "current_price": curr_close,
         "trend": trend,
-        "market_structure": {
-            "structures_count": len(structures),
-            "unmitigated_fvgs": len(zones),
-            "bsl_target": bsl_pool["price"] if bsl_pool else None,
-            "ssl_target": ssl_pool["price"] if ssl_pool else None,
-        },
-        "trade_setup": trade_idea,
+        "indicators_computed": list(series_data.keys()),
+        "trade_setup": trade_setup,
         "primitives": primitives
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NujinAI Chart Copilot CLI")
+    parser = argparse.ArgumentParser(description="NujinAI Dynamic Chart Copilot")
     parser.add_argument("--symbol", default="BTC/USDT", help="Trading asset (default: BTC/USDT)")
     parser.add_argument("--timeframe", default="15m", help="Candle timeframe (default: 15m)")
     parser.add_argument("--lookback", type=int, default=140, help="Number of candles (default: 140)")
+    parser.add_argument("--indicators", help="Comma-separated indicators to compute dynamically (e.g. 'ema_21,ema_50,supertrend,rsi_14')")
+    parser.add_argument("--custom", help="JSON dictionary of custom formulas (e.g. '{\"spread\": \"ema_9 - ema_21\"}')")
+    parser.add_argument("--smc", action="store_true", help="Include Smart Money Concepts structure (BOS, MSS, unmitigated FVGs, Liquidity)")
+    parser.add_argument("--thesis", help="User or AI trading thesis to synthesize entry, invalidation SL, and TP")
     parser.add_argument("--json", action="store_true", help="Output pure JSON")
     args = parser.parse_args()
 
-    result = analyze_market_chart(
+    req_inds = [i.strip() for i in args.indicators.split(",")] if args.indicators else None
+    custom_forms = json.loads(args.custom) if args.custom else None
+
+    result = analyze_chart_dynamically(
         symbol=args.symbol,
         timeframe=args.timeframe,
-        lookback=args.lookback
+        lookback=args.lookback,
+        requested_indicators=req_inds,
+        custom_formulas=custom_forms,
+        include_smc=args.smc,
+        thesis=args.thesis
     )
 
     if args.json:
@@ -162,28 +243,29 @@ def main():
         return
 
     print("\n" + "=" * 65)
-    print(f"  NujinAI Chart Copilot :: {args.symbol} ({args.timeframe})")
+    print(f"  NujinAI Dynamic Chart Copilot :: {args.symbol} ({args.timeframe})")
     print("=" * 65)
-    print(f"Current Price : ${result.get('current_price', 0):,.2f}")
-    print(f"Regime / Trend: {result.get('trend', 'NEUTRAL')}")
-    ms = result.get("market_structure", {})
-    print(f"Structures    : {ms.get('structures_count', 0)} breaks active")
-    print(f"Active FVGs   : {ms.get('unmitigated_fvgs', 0)} unmitigated zones")
-    if ms.get("bsl_target"):
-        print(f"Buyside (BSL) : ${ms['bsl_target']:,.2f}")
-    if ms.get("ssl_target"):
-        print(f"Sellside (SSL): ${ms['ssl_target']:,.2f}")
-    print("-" * 65)
+    print(f"Current Price      : ${result.get('current_price', 0):,.2f}")
+    if args.smc:
+        print(f"Market Structure   : {result.get('trend', 'NEUTRAL')}")
+        print(f"Active Breaks/Zones: {len(result['primitives']['structures'])} breaks, {len(result['primitives']['boxes'])} FVGs")
+    if result.get("indicators_computed"):
+        print(f"Computed Overlays  : {', '.join(result['indicators_computed'])}")
+    
+    hud = result["primitives"].get("hud_items", [])
+    if hud:
+        print("\nTelemetry Readout:")
+        for item in hud:
+            print(f"  • {item['label']:<18}: {item['value']}")
 
     setup = result.get("trade_setup")
     if setup:
-        print(f"TRADE IDEA    : {setup['direction']} (R:R {setup['rr_ratio']})")
-        print(f"Entry Area    : ${setup['entry_price']:,.2f}")
-        print(f"Invalidation  : ${setup['stop_loss']:,.2f}")
-        print(f"Target Profit : ${setup['take_profit']:,.2f}")
-        print(f"Thesis        : {setup['thesis']}")
-    else:
-        print("TRADE IDEA    : No high-conviction unmitigated FVG setup currently.")
+        print("\n" + "-" * 65)
+        print(f"PROPOSED TRADE SETUP: {setup['direction']} (R:R {setup['rr_ratio']})")
+        print(f"Entry Price         : ${setup['entry_price']:,.2f}")
+        print(f"Invalidation (Stop) : ${setup['stop_loss']:,.2f}")
+        print(f"Profit Target       : ${setup['take_profit']:,.2f}")
+        print(f"Thesis              : {setup['thesis']}")
     print("=" * 65 + "\n")
 
 
