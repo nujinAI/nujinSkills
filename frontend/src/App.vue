@@ -31,6 +31,7 @@
         :strategies="strategies"
         :isActiveScreen="activeScreen === 'CHART'"
         :latestMarketTick="latestMarketTick"
+        :copilotMarkup="copilotMarkup"
         @selectStrategy="handleSelectStrategy"
         @dismissSignal="targetedSignal = null"
       />
@@ -194,6 +195,7 @@ const {
   distributionAnalytics,
   latestDiscoveredStrategy,
   latestMarketTick,
+  copilotMarkup,
 } = useWebSocket();
 
 const activeState = computed(() => liveSystemState.value);

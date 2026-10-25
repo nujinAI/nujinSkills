@@ -365,6 +365,7 @@ const props = withDefaults(
     strategies?: StrategyItem[];
     isActiveScreen?: boolean;
     latestMarketTick?: any;
+    copilotMarkup?: any;
   }>(),
   {
     theme: 'dark',
@@ -373,6 +374,7 @@ const props = withDefaults(
     tradesDetail: () => [],
     strategies: () => [],
     isActiveScreen: true,
+    copilotMarkup: null,
   }
 );
 
@@ -554,6 +556,25 @@ const renderedStructures = ref<RenderedStructure[]>([]);
 const renderedSetupBox = ref<RenderedSetupBox | null>(null);
 const backendPrimitives = ref<any>(null);
 let activeLevelLines: any[] = [];
+
+// Real-time live copilot listener: Update chart markup on the fly via WebSocket without any page reload or restart
+watch(
+  () => props.copilotMarkup,
+  (newMarkup) => {
+    if (!newMarkup) return;
+    const prims = newMarkup.primitives || {};
+    backendPrimitives.value = prims;
+    rawPrimitiveBoxes.value = prims.boxes || [];
+    rawPrimitiveStructures.value = prims.structures || [];
+    rawPrimitiveSetups.value = prims.setups || [];
+    applyPrimitiveLevels(prims.levels || []);
+    applyStrategyIndicators();
+    nextTick(() => {
+      updateBoxCoordinates();
+    });
+  },
+  { deep: true }
+);
 
 let periodicSyncTimer: any = null;
 let resizeObserver: ResizeObserver | null = null;

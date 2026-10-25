@@ -71,6 +71,7 @@ export function useWebSocket() {
   const distributionAnalytics = ref<DistributionAnalytics | null>(null);
   const latestDiscoveredStrategy = ref<DiscoveredStrategyPayload | null>(null);
   const latestMarketTick = ref<MarketTickPayload | null>(null);
+  const copilotMarkup = ref<any | null>(null);
 
   const widgets = computed(() => Object.values(widgetsMap.value));
 
@@ -212,6 +213,11 @@ export function useWebSocket() {
               };
               break;
             }
+            case 'COPILOT_MARKUP': {
+              console.log('[WS] 🧠 COPILOT_MARKUP received:', payload);
+              copilotMarkup.value = payload;
+              break;
+            }
             default:
               break;
           }
@@ -316,5 +322,6 @@ export function useWebSocket() {
     distributionAnalytics,
     latestDiscoveredStrategy,
     latestMarketTick,
+    copilotMarkup,
   };
 }

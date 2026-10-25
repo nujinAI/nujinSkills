@@ -462,31 +462,62 @@ async def close_signal_position(req: CloseSignalRequest):
 @app.post("/api/chart/copilot")
 async def chart_copilot_markup(payload: Dict[str, Any] = Body(...)):
     """
-    NujinAI Chart Copilot Endpoint.
-    Analyzes visible market structure, unmitigated zones, liquidity pools,
-    and synthesizes an actionable trade setup with visual primitives for the chart.
+    NujinAI Dynamic Chart Copilot Endpoint.
+    Analyzes any requested indicator stack, custom formulas, or SMC structure,
+    and broadcasts the visual primitives live to all connected browser charts.
     """
-    symbol = payload.get("symbol", "XAUUSD")
+    symbol = payload.get("symbol", "BTC/USDT")
     timeframe = payload.get("timeframe", "15m")
-    candles = payload.get("candles", [])
+    lookback = payload.get("lookback", 140)
+    requested_indicators = payload.get("indicators")
+    custom_formulas = payload.get("custom")
+    include_smc = payload.get("smc", False)
+    thesis = payload.get("thesis")
+    action = payload.get("action", "ANALYZE") # ANALYZE or CLEAR
 
-    if not candles:
-        # Load latest candles for requested symbol & timeframe
-        res = await get_candles(symbol=symbol, timeframe=timeframe, count=250)
-        candles = res.get("data", [])
+    if action == "CLEAR":
+        empty_prims = {
+            "lines": [],
+            "series": {},
+            "boxes": [],
+            "levels": [],
+            "hud_items": [],
+            "structures": [],
+            "setups": []
+        }
+        await manager.broadcast({
+            "event_type": "COPILOT_MARKUP",
+            "payload": {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "primitives": empty_prims
+            }
+        })
+        return {"status": "SUCCESS", "action": "CLEAR", "primitives": empty_prims}
 
-    if not candles:
-        return {"status": "ERROR", "message": "No candle data available for copilot analysis."}
+    from tools.chart_copilot import analyze_chart_dynamically
+    res = analyze_chart_dynamically(
+        symbol=symbol,
+        timeframe=timeframe,
+        lookback=lookback,
+        requested_indicators=requested_indicators,
+        custom_formulas=custom_formulas,
+        include_smc=include_smc,
+        thesis=thesis
+    )
 
-    from server.chart_primitives import extract_strategy_primitives
-    primitives = extract_strategy_primitives(None, candles, include_ai_copilot=True)
-    
-    return {
-        "status": "SUCCESS",
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "primitives": primitives
-    }
+    if res.get("status") == "SUCCESS":
+        # Broadcast live to WebSocket clients
+        await manager.broadcast({
+            "event_type": "COPILOT_MARKUP",
+            "payload": {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "primitives": res.get("primitives", {})
+            }
+        })
+
+    return res
 
 @app.get("/api/status")
 async def get_system_status():
