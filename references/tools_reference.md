@@ -63,26 +63,7 @@ Composable Standard + Custom Indicator & Multi-Timeframe Feature Miner powered b
 
 ---
 
-## 2. Autonomous Search & Vectorized Screening Loops
-
-### `autoresearch_miner.py` (alias: `nujin_miner.py`)
-Multi-Paradigm Autonomous Quant Research & Strategy Evolution Engine. Operates inside `.nujin/sessions/<session_id>/`, evaluates a 3x3 parameter perturbation grid for Gate 2 (`gate_2_parameter_stability`), and records trials to the session-scoped `trial_ledger.jsonl`.
-- **Usage:**
-  ```bash
-  tools/autoresearch_miner.py {init,scan,step,run,status,improve-tool} [options]
-  ```
-- **Actions:**
-  - `init`: Initialize an isolated research session. Default `--archetype auto` selects the best family from `empirical_briefing.json`.
-    ```bash
-    tools/autoresearch_miner.py init --new-session --target "BTC Multi-Scale Trend" --archetype auto
-    ```
-    *(Supported archetypes: `auto`, `trend_following`, `momentum_breakout`, `volatility_squeeze`, `mtf_pullback`, `zscore_reversion`, `vwap_reversion`, `mean_reversion`, `session_breakout`, `price_action`, `smc_liquidity`, `custom`)*
-  - `scan`: Run multi-paradigm empirical anomaly scan on raw candles.
-  - `step`: Run a single hypothesis evaluation, 3x3 parameter perturbation check, and rule mutation step.
-  - `run`: Run $N$ continuous automated discovery cycles.
-  - `status`: Display current session state, best rules, and recent cycle history.
-
----
+## 2. Strategy Synthesis & Fast Vectorized Screening
 
 ### `vectorized_screener.py`
 Fast Vectorized & Risk-Normalized Strategy Screener. Automatically resolves any dynamic standard indicator (`ema_34`, `hma_21`, `supertrend_dir`, `donchian_upper_20`, `zscore_20`, etc.) or custom formula via `server/indicators.py` and simulates trades with stop-loss, take-profit, trailing stop, and constant-risk position sizing (`risk_per_trade_pct`) for linear equity curves ($R^2 \ge 0.85$).
@@ -97,11 +78,11 @@ Fast Vectorized & Risk-Normalized Strategy Screener. Automatically resolves any 
 
 ---
 
-### `strategy_search_engine.py`
-Multi-Paradigm Iterative Search Engine that sweeps across orthogonal strategy families and stop/target ratios inside an isolated session workspace.
+### `strategy_emitter.py`
+Synthesizes verified vectorized rules into standalone, production-ready Python strategy classes (`strategies/<Name>.py`).
 - **Usage:**
   ```bash
-  tools/strategy_search_engine.py --features PATH [--target-sharpe FLOAT] [--max-dd FLOAT] [--timeframe TF] [--id SESSION_ID] [--new-session]
+  tools/strategy_emitter.py --thesis "<Thesis Description>" --rules .nujin/sessions/<session_id>/best_rule.json --out strategies/<Name>.py
   ```
 
 ---

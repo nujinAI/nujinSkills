@@ -161,16 +161,14 @@ Invoke all tools using the project virtualenv (`.venv/bin/python3 tools/<tool>.p
   python tools/feature_miner.py --input data/xauusd_candles_1m.csv --id my_alpha --htf-data data/xauusd_candles_5m.csv --window 20
   ```
 
-### 2. Search & Iterative Optimization Loop
-* **Autonomous Research Engine (Full loop or single steps):**
+### 2. Strategy Synthesis & Fast Vectorized Screening
+* **Fast Vectorized Screener (Risk-Normalized Sizing & Pessimistic Intrabar Fill):**
   ```bash
-  python tools/autoresearch_miner.py init --id my_alpha --target "XAUUSD Scalper"
-  python tools/autoresearch_miner.py run --id my_alpha --cycles 5
-  python tools/autoresearch_miner.py status
+  python tools/vectorized_screener.py --id my_alpha --rules '{"entry_long": "ema_9 > ema_21 and adx_14 > 20", "entry_short": "ema_9 < ema_21 and adx_14 > 20", "stoploss_pct": 0.015, "takeprofit_pct": 0.035}'
   ```
-* **Fast Vectorized Screener (Condition Filter with Friction):**
+* **Full-History Backtesting Simulation:**
   ```bash
-  python tools/vectorized_screener.py --id my_alpha --rules '{"entry_long": "ret_zscore < -2.0", "exit": "bars >= 6"}'
+  python server/backtest_engine.py --strategy MyStrategy --timeframe 15m
   ```
 
 ### 3. Adversarial Cynic Audit (Falsification)
