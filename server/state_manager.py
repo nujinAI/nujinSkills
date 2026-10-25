@@ -28,6 +28,7 @@ import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+import numpy as np
 
 from server.cynic_gates import GATE_KEYS
 from server.constants import (
@@ -126,6 +127,19 @@ def _read_json_locked(path: str, default: Any) -> Any:
         return deepcopy(default)
 
 
+class _NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        if isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        return super().default(obj)
+
+
 def _write_json_locked(path: str, data: Any) -> None:
     """Write JSON to a file under an exclusive lock (atomic tmp-then-rename)."""
     _ensure_dir(path)
@@ -134,7 +148,7 @@ def _write_json_locked(path: str, data: Any) -> None:
         with open(tmp_path, "w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             try:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, indent=2, cls=_NumpyEncoder)
                 f.flush()
                 os.fsync(f.fileno())
             finally:

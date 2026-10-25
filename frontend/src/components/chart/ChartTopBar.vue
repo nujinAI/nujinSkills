@@ -1,21 +1,43 @@
 <template>
   <div class="h-11 bg-base-200/95 backdrop-blur-md border-b border-base-content/10 px-3 flex items-center justify-between z-20 text-xs shrink-0 gap-2 font-mono select-none">
-    <!-- ── Left: Strategy Selector Dropdown & Symbol ── -->
+    <!-- ── Left: Strategy / Copilot Selector Dropdown & Symbol ── -->
     <div class="flex items-center gap-2 shrink-0">
-      <!-- Strategy Selector -->
-      <div class="dropdown dropdown-bottom" v-if="strategies && strategies.length > 0">
-        <label tabindex="0" class="btn btn-xs btn-outline btn-primary gap-1.5 font-bold font-mono tracking-tight shadow-sm hover:scale-[1.01] transition-transform">
-          <Sparkles class="w-3 h-3 text-primary shrink-0" />
-          <span class="truncate max-w-[150px] sm:max-w-[220px]">{{ cleanStrategyName }}</span>
+      <!-- Strategy & Copilot Selector Dropdown -->
+      <div class="dropdown dropdown-bottom">
+        <label tabindex="0" class="btn btn-xs gap-1.5 font-bold font-mono tracking-tight shadow-sm hover:scale-[1.01] transition-all" :class="isCopilotActive ? 'btn-secondary text-secondary-content ring-1 ring-secondary' : 'btn-outline btn-primary'">
+          <Bot v-if="isCopilotActive" class="w-3.5 h-3.5 text-secondary-content shrink-0" />
+          <Sparkles v-else class="w-3.5 h-3.5 text-primary shrink-0" />
+          <span class="truncate max-w-[150px] sm:max-w-[220px]">{{ isCopilotActive ? 'AI Copilot' : cleanStrategyName }}</span>
+          <span v-if="isCopilotActive" class="badge badge-xs badge-primary text-[8px] font-bold px-1">ACTIVE</span>
           <ChevronDown class="w-3 h-3 opacity-60 shrink-0" />
         </label>
         <ul tabindex="0" class="dropdown-content menu p-1.5 shadow-2xl bg-base-300 rounded-box w-72 max-h-80 overflow-y-auto z-50 border border-base-content/15 text-xs space-y-0.5">
-          <li class="menu-title text-[10px] uppercase font-bold text-base-content/50 px-2 py-1">Active Quant Strategies</li>
+          <!-- AI Copilot Vision Mode Entry -->
+          <li class="menu-title text-[10px] uppercase font-bold text-secondary px-2 py-0.5">Interactive Visual Intelligence</li>
+          <li>
+            <button 
+              @click="emit('selectCopilot')"
+              class="flex items-center justify-between py-2 px-2 rounded-md transition-colors"
+              :class="isCopilotActive ? 'active font-bold bg-secondary/15 text-secondary border border-secondary/30' : 'hover:bg-base-200 text-base-content'"
+            >
+              <div class="flex items-center gap-2 truncate">
+                <span class="w-2 h-2 rounded-full" :class="isCopilotActive ? 'bg-secondary animate-ping' : 'bg-secondary/60'" />
+                <span class="truncate font-mono font-bold">🤖 AI Copilot</span>
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                <span class="badge badge-xs text-[9px] font-mono" :class="isCopilotActive ? 'badge-secondary font-bold' : 'badge-neutral'">CANVAS</span>
+                <span v-if="isCopilotActive" class="text-secondary font-bold ml-1">✓</span>
+              </div>
+            </button>
+          </li>
+
+          <!-- Quant Strategies Divider -->
+          <li class="menu-title text-[10px] uppercase font-bold text-base-content/50 px-2 pt-2 pb-0.5">Automated Quant Strategies</li>
           <li v-for="strat in strategies" :key="strat.name">
             <button 
               @click="emit('selectStrategy', strat.name)"
               class="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-base-200"
-              :class="strat.name === selectedStrategy ? 'active font-bold bg-primary/10 text-primary' : ''"
+              :class="!isCopilotActive && strat.name === selectedStrategy ? 'active font-bold bg-primary/10 text-primary' : ''"
             >
               <div class="flex items-center gap-2 truncate">
                 <span class="w-1.5 h-1.5 rounded-full" :class="strat.name.toLowerCase().includes('sp') || strat.name.toLowerCase().includes('opening') ? 'bg-success' : (strat.name.toLowerCase().includes('xau') ? 'bg-warning' : 'bg-info')" />
@@ -24,7 +46,7 @@
               <div class="flex items-center gap-1 shrink-0">
                 <span class="badge badge-xs badge-neutral text-[9px] font-mono opacity-80">{{ strat.timeframe || '1m' }}</span>
                 <span v-if="strat.name === activeStrategy" class="badge badge-xs badge-success text-[9px] font-bold">BOT</span>
-                <span v-if="strat.name === selectedStrategy" class="text-primary font-bold ml-1">✓</span>
+                <span v-if="!isCopilotActive && strat.name === selectedStrategy" class="text-primary font-bold ml-1">✓</span>
               </div>
             </button>
           </li>
@@ -38,20 +60,6 @@
           {{ isSpStrategy ? 'CME ES' : (isGoldStrategy ? 'Spot' : 'Binance') }} {{ selectedTimeframe || '1m' }}
         </span>
       </div>
-
-      <!-- AI Copilot Vision Button (Antigravity Visual Mode) -->
-      <button
-        @click="emit('toggleCopilot')"
-        class="btn btn-xs gap-1 font-bold font-mono tracking-tight shadow-sm border transition-all"
-        :class="isCopilotActive ? 'btn-secondary text-secondary-content shadow-secondary/20 ring-1 ring-secondary' : 'btn-ghost border-base-content/20 text-base-content/80 hover:bg-base-300'"
-        title="Toggle Antigravity AI Copilot Vision (Market Structure, BOS/MSS Breaks, FVGs & Live Setups)"
-      >
-        <span class="w-1.5 h-1.5 rounded-full" :class="isCopilotActive ? 'bg-secondary-content animate-ping' : 'bg-secondary'" />
-        <span>AI Copilot</span>
-        <span class="badge badge-xs text-[9px] font-bold ml-0.5" :class="isCopilotActive ? 'badge-primary text-primary-content' : 'badge-neutral'">
-          {{ isCopilotActive ? 'ON' : 'OFF' }}
-        </span>
-      </button>
     </div>
 
     <!-- ── Center: Trades & Jumps Navigator ── -->
@@ -348,7 +356,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { Sparkles, ChevronDown, Search } from 'lucide-vue-next';
+import { Sparkles, Bot, ChevronDown, Search } from 'lucide-vue-next';
 import type { InspectableSignal } from '../../types';
 import { formatPrice } from '../../utils/formatters';
 
@@ -372,6 +380,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'selectStrategy', stratName: string): void;
+  (e: 'selectCopilot'): void;
   (e: 'toggleCopilot'): void;
   (e: 'prevJump'): void;
   (e: 'nextJump'): void;

@@ -18,7 +18,8 @@
       :isWsConnected="isWsConnected"
       :isCopilotActive="isCopilotActive"
       @toggleCopilot="toggleCopilotMode"
-      @selectStrategy="emit('selectStrategy', $event)"
+      @selectCopilot="selectCopilotMode"
+      @selectStrategy="handleSelectStrategyFromBar"
       @prevJump="prevJump"
       @nextJump="nextJump"
       @jumpToIndex="jumpToIndex"
@@ -546,7 +547,17 @@ interface RenderedSetupBox {
 const isCopilotActive = ref<boolean>(true);
 const toggleCopilotMode = () => {
   isCopilotActive.value = !isCopilotActive.value;
+  applyStrategyIndicators();
   updateBoxCoordinates();
+};
+const selectCopilotMode = () => {
+  isCopilotActive.value = true;
+  applyStrategyIndicators();
+  updateBoxCoordinates();
+};
+const handleSelectStrategyFromBar = (stratName: string) => {
+  isCopilotActive.value = false;
+  emit('selectStrategy', stratName);
 };
 const rawPrimitiveBoxes = ref<any[]>([]);
 const rawPrimitiveStructures = ref<any[]>([]);
@@ -991,6 +1002,11 @@ const allInspectableSignals = computed<InspectableSignal[]>(() => {
 
 // ── Unified Chart Markers (Backtest Trades + All Live Signals Entry & Exit) ──
 const allChartMarkers = computed(() => {
+  // If in pure AI Copilot mode, do not show strategy backtest/live trade markers
+  if (isCopilotActive.value) {
+    return [];
+  }
+
   const result: any[] = [];
 
   // 1. Backtest trade markers
@@ -1935,8 +1951,8 @@ const applyStrategyIndicators = () => {
     timeIndexMap.set(Number(c.time), idx);
   });
 
-  // 2. Level 3 Universal Primitives path: If backend provided dynamic indicator lines
-  if (backendPrimitives.value && backendPrimitives.value.lines && backendPrimitives.value.lines.length > 0) {
+  // 2. Level 3 Universal Primitives path: If copilot is active or backend provided dynamic indicator lines
+  if (isCopilotActive.value && backendPrimitives.value && backendPrimitives.value.lines && backendPrimitives.value.lines.length > 0) {
     const rawPLines = backendPrimitives.value.lines;
     // Filter out non-price indicators (e.g. volume, oscillators) to strictly protect the candlestick price scale
     const closeMedian = rawCandles.value.length > 0 ? Number(rawCandles.value[Math.floor(rawCandles.value.length / 2)].close) : 1;
@@ -1995,7 +2011,18 @@ const applyStrategyIndicators = () => {
     return;
   }
 
-  // 3. Built-in profile fallback (null when no strategy selected)
+  // 3. If in pure AI Copilot mode without custom lines, keep canvas completely clean from strategy indicators
+  if (isCopilotActive.value) {
+    for (const [id, s] of activeIndicatorSeries.entries()) {
+      try { chart.removeSeries(s); } catch (e) {}
+      activeIndicatorSeries.delete(id);
+    }
+    currentProfile.value = null;
+    currentHudItems.value = backendPrimitives.value?.hud_items || [];
+    return;
+  }
+
+  // 4. Built-in profile fallback (null when no strategy selected)
   const profile = getStrategyIndicatorProfile(props.selectedStrategy);
 
   // No strategy selected: clear all indicator series and HUD, render clean chart
