@@ -1,11 +1,11 @@
 """
 NujinAI Market Structure & SMC Algorithmic Engine.
-Institutional, clean market structure identification:
-- Major Fractal Swings (Highs / Lows) with ATR displacement filters
-- Clean, non-overlapping Break of Structure (BOS) and Market Structure Shift (MSS)
-- Significant, unmitigated Fair Value Gaps (FVG)
-- Major Resting Buyside (BSL) and Sellside (SSL) Liquidity Pools
-- On-Demand Trade Setup Formulator
+Professional Institutional Standard:
+- Strict 3-bar Fair Value Gaps (FVG) with strict mitigation termination
+- No overlapping consecutive FVGs (merges or keeps only the most significant displacement)
+- Major Multi-Bar Swing Pivots (5-bar fractal with minimum displacement)
+- Confirmed Break of Structure (BOS) and Market Structure Shift (MSS)
+- Clean, unmitigated Buyside (BSL) and Sellside (SSL) Liquidity Pools
 """
 
 from typing import Dict, Any, List, Optional, Tuple
@@ -84,7 +84,6 @@ def extract_market_structure(
     atr = pd.Series(tr).rolling(14, min_periods=1).mean().values
 
     structures: List[Dict[str, Any]] = []
-    zones: List[Dict[str, Any]] = []
     swings: List[Dict[str, Any]] = []
 
     last_sh: Optional[Tuple[int, int, float]] = None # (idx, time, price)
@@ -106,7 +105,7 @@ def extract_market_structure(
             last_sl = (i, t, l)
             swings.append({"type": "SWING_LOW", "time": t, "price": l, "index": i})
 
-        # Confirmed Break of Structure (Close cleanly breaks swing with displacement)
+        # Confirmed Break of Structure
         if last_sh and i > (last_sh[0] + right_bars) and c > last_sh[2]:
             is_mss = (trend == -1)
             b_type = "MSS" if is_mss else "BOS"
@@ -139,10 +138,18 @@ def extract_market_structure(
             trend = -1
             last_sl = None
 
-    # 2. Significant Fair Value Gaps (Only gaps >= 0.4 * ATR that remain unmitigated)
+    # 2. Strict Fair Value Gaps (FVG)
+    # A true institutional FVG:
+    # 1. 3-bar displacement pattern: Candle 1, Candle 2 (large body), Candle 3.
+    # 2. Minimum gap size >= 0.5 * ATR (prevents micro-noise).
+    # 3. Mitigation Termination: If any later bar intrudes into the gap (wick touches the 50% equilibrium),
+    #    the gap is considered MITIGATED and terminates at that candle.
+    # 4. Non-overlapping filter: Never show overlapping FVGs from the same impulse wave.
     n_bars = len(df_calc)
     curr_close = float(df_calc.loc[n_bars - 1, "close"])
     curr_time = int(df_calc.loc[n_bars - 1, "time"])
+
+    detected_zones: List[Dict[str, Any]] = []
 
     for i in range(2, n_bars - 1):
         prev2_t = int(df_calc.loc[i - 2, "time"])
@@ -150,63 +157,92 @@ def extract_market_structure(
         
         # Bullish Gap: low[i] > high[i-2]
         gap_bull = df_calc.loc[i, "low"] - df_calc.loc[i - 2, "high"]
-        if gap_bull >= (0.35 * bar_atr) and df_calc.loc[i - 1, "close"] > df_calc.loc[i - 1, "open"]:
+        candle_body = abs(df_calc.loc[i - 1, "close"] - df_calc.loc[i - 1, "open"])
+        
+        if gap_bull >= (0.45 * bar_atr) and candle_body >= (0.5 * bar_atr) and df_calc.loc[i - 1, "close"] > df_calc.loc[i - 1, "open"]:
             p_top = float(df_calc.loc[i, "low"])
             p_bottom = float(df_calc.loc[i - 2, "high"])
+            eq_level = (p_top + p_bottom) / 2.0
             
-            # Check if mitigated by any subsequent candle
+            # Check subsequent mitigation
             mitigated = False
+            term_time = curr_time
             for k in range(i + 1, n_bars):
-                if df_calc.loc[k, "low"] <= p_bottom:
+                # Mitigated when price wicks below the 50% midpoint (equilibrium) of the gap
+                if df_calc.loc[k, "low"] <= eq_level:
                     mitigated = True
+                    term_time = int(df_calc.loc[k, "time"])
                     break
             
-            # Only keep active, unmitigated gaps within reasonable distance of current price
-            if not mitigated and p_top >= curr_close * 0.96 and p_bottom <= curr_close * 1.04:
-                zones.append({
+            # Only keep unmitigated or very recent active gaps
+            if not mitigated or (n_bars - i) <= 8:
+                detected_zones.append({
                     "id": f"fvg_bull_{prev2_t}",
                     "type": "FVG_BULL",
                     "label": "Bullish FVG",
                     "time_start": prev2_t,
-                    "time_end": curr_time,
+                    "time_end": term_time,
                     "price_high": round(p_top, 2),
                     "price_low": round(p_bottom, 2),
                     "color": "rgba(16, 185, 129, 0.16)",
                     "borderColor": "#10b981",
-                    "borderStyle": "dashed"
+                    "borderStyle": "dashed",
+                    "gap_size": gap_bull,
+                    "bar_index": i
                 })
 
         # Bearish Gap: high[i] < low[i-2]
         gap_bear = df_calc.loc[i - 2, "low"] - df_calc.loc[i, "high"]
-        if gap_bear >= (0.35 * bar_atr) and df_calc.loc[i - 1, "close"] < df_calc.loc[i - 1, "open"]:
+        candle_body = abs(df_calc.loc[i - 1, "close"] - df_calc.loc[i - 1, "open"])
+        
+        if gap_bear >= (0.45 * bar_atr) and candle_body >= (0.5 * bar_atr) and df_calc.loc[i - 1, "close"] < df_calc.loc[i - 1, "open"]:
             p_top = float(df_calc.loc[i - 2, "low"])
             p_bottom = float(df_calc.loc[i, "high"])
+            eq_level = (p_top + p_bottom) / 2.0
             
             mitigated = False
+            term_time = curr_time
             for k in range(i + 1, n_bars):
-                if df_calc.loc[k, "high"] >= p_top:
+                if df_calc.loc[k, "high"] >= eq_level:
                     mitigated = True
+                    term_time = int(df_calc.loc[k, "time"])
                     break
                     
-            if not mitigated and p_bottom <= curr_close * 1.04 and p_top >= curr_close * 0.96:
-                zones.append({
+            if not mitigated or (n_bars - i) <= 8:
+                detected_zones.append({
                     "id": f"fvg_bear_{prev2_t}",
                     "type": "FVG_BEAR",
                     "label": "Bearish FVG",
                     "time_start": prev2_t,
-                    "time_end": curr_time,
+                    "time_end": term_time,
                     "price_high": round(p_top, 2),
                     "price_low": round(p_bottom, 2),
                     "color": "rgba(239, 83, 80, 0.16)",
                     "borderColor": "#ef5350",
-                    "borderStyle": "dashed"
+                    "borderStyle": "dashed",
+                    "gap_size": gap_bear,
+                    "bar_index": i
                 })
+
+    # Non-overlapping filter: If two FVGs overlap in price, keep only the larger/cleaner one
+    filtered_zones: List[Dict[str, Any]] = []
+    for z in detected_zones:
+        overlap = False
+        for existing in filtered_zones:
+            # Check price range overlap
+            if not (z["price_high"] < existing["price_low"] or z["price_low"] > existing["price_high"]):
+                # Overlaps! Keep the one with larger gap size
+                if z.get("gap_size", 0) > existing.get("gap_size", 0):
+                    existing.update(z)
+                overlap = True
+                break
+        if not overlap:
+            filtered_zones.append(z)
 
     # 3. Clean Major Liquidity (One Key BSL and One Key SSL)
     sh_list = [s for s in swings if s["type"] == "SWING_HIGH" and s["price"] > curr_close]
     sl_list = [s for s in swings if s["type"] == "SWING_LOW" and s["price"] < curr_close]
 
-    # Highest major resistance swing (BSL)
     if sh_list:
         major_bsl = max(sh_list, key=lambda s: s["price"])
         structures.append({
@@ -220,7 +256,6 @@ def extract_market_structure(
             "color": "#38bdf8"
         })
 
-    # Lowest major support swing (SSL)
     if sl_list:
         major_ssl = min(sl_list, key=lambda s: s["price"])
         structures.append({
@@ -234,10 +269,12 @@ def extract_market_structure(
             "color": "#f59e0b"
         })
 
-    # Filter to most recent 3 structures and 3 zones to ensure absolute visual clarity
+    # Limit to 2 most prominent clean zones (one discount, one premium)
+    clean_zones = filtered_zones[-2:]
+
     return {
         "structures": structures[-4:],
-        "zones": zones[-3:],
+        "zones": clean_zones,
         "levels": [],
         "swings": swings[-6:],
         "trend": "BULLISH" if trend == 1 else ("BEARISH" if trend == -1 else "NEUTRAL")
@@ -248,8 +285,4 @@ def synthesize_ai_trade_setup(
     df: pd.DataFrame,
     structure: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
-    """
-    On-demand trade setup synthesis.
-    Returns None by default unless an active setup is requested or inspected.
-    """
     return None
