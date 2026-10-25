@@ -582,6 +582,16 @@ onMounted(() => {
       // Handled dynamically by managedStrategies watcher
     });
 
+  // Hydrate active copilot markup on initial load or reload
+  fetch('/api/chart/copilot')
+    .then((r) => r.json())
+    .then((markup) => {
+      if (markup && markup.primitives) {
+        copilotMarkup.value = markup;
+      }
+    })
+    .catch(() => {});
+
   window.addEventListener('keydown', handleKeyDown);
 
   // Periodic polling safety net & window focus auto-refresh (only fallback when WS disconnected)
