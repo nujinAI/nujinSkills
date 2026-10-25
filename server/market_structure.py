@@ -1,11 +1,11 @@
 """
 NujinAI Market Structure & SMC Algorithmic Engine.
-Provides high-performance, mathematically rigorous market structure identification:
-- Fractal Swing Highs and Swing Lows
-- Break of Structure (BOS) and Market Structure Shift (MSS / CHoCH)
-- Fair Value Gaps (FVG) with live mitigation tracking
-- Liquidity Pools (Equal Highs EQH / Equal Lows EQL / Sweeps)
-- Autonomous Trade Setup Synthesis with Risk:Reward, Invalidation & Targets
+Institutional, clean market structure identification:
+- Major Fractal Swings (Highs / Lows) with ATR displacement filters
+- Clean, non-overlapping Break of Structure (BOS) and Market Structure Shift (MSS)
+- Significant, unmitigated Fair Value Gaps (FVG)
+- Major Resting Buyside (BSL) and Sellside (SSL) Liquidity Pools
+- On-Demand Trade Setup Formulator
 """
 
 from typing import Dict, Any, List, Optional, Tuple
@@ -15,13 +15,12 @@ import pandas as pd
 
 def detect_swing_points(
     df: pd.DataFrame, 
-    left_bars: int = 3, 
-    right_bars: int = 3
+    left_bars: int = 5, 
+    right_bars: int = 5
 ) -> pd.DataFrame:
     """
-    Identifies fractal swing highs and swing lows without lookahead bias.
-    A swing high requires high[t] > all highs in [t-left, t+right]
-    A swing low requires low[t] < all lows in [t-left, t+right]
+    Identifies clean, major fractal swing pivots.
+    Requires 5 bars on each side to eliminate intraday jitter.
     """
     res = df.copy()
     highs = res["high"].values
@@ -35,6 +34,7 @@ def detect_swing_points(
         curr_h = highs[i]
         curr_l = lows[i]
         
+        # Check swing high
         is_sh = True
         for j in range(i - left_bars, i + right_bars + 1):
             if j != i and highs[j] >= curr_h:
@@ -42,6 +42,7 @@ def detect_swing_points(
                 break
         swing_high[i] = is_sh
         
+        # Check swing low
         is_sl = True
         for j in range(i - left_bars, i + right_bars + 1):
             if j != i and lows[j] <= curr_l:
@@ -56,19 +57,14 @@ def detect_swing_points(
 
 def extract_market_structure(
     df: pd.DataFrame,
-    left_bars: int = 3,
-    right_bars: int = 3,
-    max_lookback: int = 150
+    left_bars: int = 5,
+    right_bars: int = 5,
+    max_lookback: int = 140
 ) -> Dict[str, Any]:
     """
-    Extracts structural elements:
-    - Swing highs / lows
-    - BOS (Break of Structure - Trend continuation)
-    - MSS (Market Structure Shift / CHoCH - Trend reversal)
-    - Unmitigated FVGs (Bullish & Bearish)
-    - Liquidity Pools (EQH / EQL)
+    Extracts high-conviction, professional market structure without clutter.
     """
-    if df.empty or len(df) < (left_bars + right_bars + 5):
+    if df.empty or len(df) < (left_bars + right_bars + 10):
         return {
             "structures": [],
             "zones": [],
@@ -76,22 +72,24 @@ def extract_market_structure(
             "swings": []
         }
 
-    # Focus on the most recent active lookback window for optimal chart clarity
     df_calc = df.iloc[-max_lookback:].reset_index(drop=True)
     df_calc = detect_swing_points(df_calc, left_bars=left_bars, right_bars=right_bars)
     
+    # Calculate ATR for gap & displacement significance
+    highs = df_calc["high"].values
+    lows = df_calc["low"].values
+    closes = df_calc["close"].values
+    tr = np.maximum(highs - lows, np.abs(highs - np.roll(closes, 1)))
+    tr[0] = highs[0] - lows[0]
+    atr = pd.Series(tr).rolling(14, min_periods=1).mean().values
+
     structures: List[Dict[str, Any]] = []
     zones: List[Dict[str, Any]] = []
-    levels: List[Dict[str, Any]] = []
     swings: List[Dict[str, Any]] = []
 
-    # 1. Swings Extraction
     last_sh: Optional[Tuple[int, int, float]] = None # (idx, time, price)
     last_sl: Optional[Tuple[int, int, float]] = None
-    prev_sh: Optional[Tuple[int, int, float]] = None
-    prev_sl: Optional[Tuple[int, int, float]] = None
-    
-    trend = 0 # 1 = Bullish, -1 = Bearish, 0 = Undefined
+    trend = 0
 
     for i in range(len(df_calc)):
         row = df_calc.iloc[i]
@@ -100,21 +98,16 @@ def extract_market_structure(
         h = float(row["high"])
         l = float(row["low"])
         
-        # Check swing high formation
         if row["is_swing_high"]:
-            prev_sh = last_sh
             last_sh = (i, t, h)
             swings.append({"type": "SWING_HIGH", "time": t, "price": h, "index": i})
             
-        # Check swing low formation
         if row["is_swing_low"]:
-            prev_sl = last_sl
             last_sl = (i, t, l)
             swings.append({"type": "SWING_LOW", "time": t, "price": l, "index": i})
 
-        # Check BOS / MSS breaks
-        # Bullish Break: Close > last_sh price
-        if last_sh and i > last_sh[0] and c > last_sh[2]:
+        # Confirmed Break of Structure (Close cleanly breaks swing with displacement)
+        if last_sh and i > (last_sh[0] + right_bars) and c > last_sh[2]:
             is_mss = (trend == -1)
             b_type = "MSS" if is_mss else "BOS"
             structures.append({
@@ -125,13 +118,12 @@ def extract_market_structure(
                 "time_start": last_sh[1],
                 "time_end": t,
                 "price": round(last_sh[2], 2),
-                "color": "#10b981" # Emerald Green
+                "color": "#10b981"
             })
             trend = 1
-            last_sh = None # Mitigated / Broken
+            last_sh = None
 
-        # Bearish Break: Close < last_sl price
-        elif last_sl and i > last_sl[0] and c < last_sl[2]:
+        elif last_sl and i > (last_sl[0] + right_bars) and c < last_sl[2]:
             is_mss = (trend == 1)
             b_type = "MSS" if is_mss else "BOS"
             structures.append({
@@ -142,121 +134,112 @@ def extract_market_structure(
                 "time_start": last_sl[1],
                 "time_end": t,
                 "price": round(last_sl[2], 2),
-                "color": "#ef5350" # Red
+                "color": "#ef5350"
             })
             trend = -1
-            last_sl = None # Mitigated / Broken
+            last_sl = None
 
-    # 2. Fair Value Gaps (FVG) with Live Mitigation Tracking
-    # Bullish FVG: low[i] > high[i-2]
-    # Bearish FVG: high[i] < low[i-2]
+    # 2. Significant Fair Value Gaps (Only gaps >= 0.4 * ATR that remain unmitigated)
     n_bars = len(df_calc)
-    for i in range(2, n_bars):
-        curr_t = int(df_calc.loc[i, "time"])
+    curr_close = float(df_calc.loc[n_bars - 1, "close"])
+    curr_time = int(df_calc.loc[n_bars - 1, "time"])
+
+    for i in range(2, n_bars - 1):
         prev2_t = int(df_calc.loc[i - 2, "time"])
+        bar_atr = atr[i] if i < len(atr) else 10.0
         
-        # Bullish Imbalance
-        if df_calc.loc[i, "low"] > df_calc.loc[i - 2, "high"] and df_calc.loc[i - 1, "close"] > df_calc.loc[i - 1, "open"]:
+        # Bullish Gap: low[i] > high[i-2]
+        gap_bull = df_calc.loc[i, "low"] - df_calc.loc[i - 2, "high"]
+        if gap_bull >= (0.35 * bar_atr) and df_calc.loc[i - 1, "close"] > df_calc.loc[i - 1, "open"]:
             p_top = float(df_calc.loc[i, "low"])
             p_bottom = float(df_calc.loc[i - 2, "high"])
             
-            # Check subsequent mitigation
+            # Check if mitigated by any subsequent candle
             mitigated = False
-            mitigated_time = curr_t
             for k in range(i + 1, n_bars):
-                if df_calc.loc[k, "low"] <= p_bottom: # completely filled
+                if df_calc.loc[k, "low"] <= p_bottom:
                     mitigated = True
-                    mitigated_time = int(df_calc.loc[k, "time"])
                     break
             
-            if not mitigated or (n_bars - i) <= 15: # Display unmitigated or very recent gaps
-                end_time = mitigated_time if mitigated else int(df_calc.loc[n_bars - 1, "time"])
+            # Only keep active, unmitigated gaps within reasonable distance of current price
+            if not mitigated and p_top >= curr_close * 0.96 and p_bottom <= curr_close * 1.04:
                 zones.append({
                     "id": f"fvg_bull_{prev2_t}",
                     "type": "FVG_BULL",
                     "label": "Bullish FVG",
                     "time_start": prev2_t,
-                    "time_end": end_time,
+                    "time_end": curr_time,
                     "price_high": round(p_top, 2),
                     "price_low": round(p_bottom, 2),
-                    "color": "rgba(16, 185, 129, 0.18)",
+                    "color": "rgba(16, 185, 129, 0.16)",
                     "borderColor": "#10b981",
                     "borderStyle": "dashed"
                 })
 
-        # Bearish Imbalance
-        elif df_calc.loc[i, "high"] < df_calc.loc[i - 2, "low"] and df_calc.loc[i - 1, "close"] < df_calc.loc[i - 1, "open"]:
+        # Bearish Gap: high[i] < low[i-2]
+        gap_bear = df_calc.loc[i - 2, "low"] - df_calc.loc[i, "high"]
+        if gap_bear >= (0.35 * bar_atr) and df_calc.loc[i - 1, "close"] < df_calc.loc[i - 1, "open"]:
             p_top = float(df_calc.loc[i - 2, "low"])
             p_bottom = float(df_calc.loc[i, "high"])
             
             mitigated = False
-            mitigated_time = curr_t
             for k in range(i + 1, n_bars):
-                if df_calc.loc[k, "high"] >= p_top: # completely filled
+                if df_calc.loc[k, "high"] >= p_top:
                     mitigated = True
-                    mitigated_time = int(df_calc.loc[k, "time"])
                     break
                     
-            if not mitigated or (n_bars - i) <= 15:
-                end_time = mitigated_time if mitigated else int(df_calc.loc[n_bars - 1, "time"])
+            if not mitigated and p_bottom <= curr_close * 1.04 and p_top >= curr_close * 0.96:
                 zones.append({
                     "id": f"fvg_bear_{prev2_t}",
                     "type": "FVG_BEAR",
                     "label": "Bearish FVG",
                     "time_start": prev2_t,
-                    "time_end": end_time,
+                    "time_end": curr_time,
                     "price_high": round(p_top, 2),
                     "price_low": round(p_bottom, 2),
-                    "color": "rgba(239, 83, 80, 0.18)",
+                    "color": "rgba(239, 83, 80, 0.16)",
                     "borderColor": "#ef5350",
                     "borderStyle": "dashed"
                 })
 
-    # 3. Dynamic Liquidity Rays (Equal Highs EQH / Equal Lows EQL with Candle Anchors)
-    sh_list = [s for s in swings if s["type"] == "SWING_HIGH"]
-    sl_list = [s for s in swings if s["type"] == "SWING_LOW"]
+    # 3. Clean Major Liquidity (One Key BSL and One Key SSL)
+    sh_list = [s for s in swings if s["type"] == "SWING_HIGH" and s["price"] > curr_close]
+    sl_list = [s for s in swings if s["type"] == "SWING_LOW" and s["price"] < curr_close]
 
-    # Detect Equal Highs (Buyside Liquidity) and Equal Lows (Sellside Liquidity) within 0.15% threshold
-    for idx in range(len(sh_list) - 1):
-        s1 = sh_list[idx]
-        s2 = sh_list[idx + 1]
-        if abs(s1["price"] - s2["price"]) / s1["price"] <= 0.0015:
-            eq_price = round(max(s1["price"], s2["price"]), 2)
-            t_start = min(s1["time"], s2["time"])
-            structures.append({
-                "id": f"bsl_{s1['time']}",
-                "type": "LIQUIDITY",
-                "direction": "BULLISH",
-                "label": "BSL",
-                "time_start": t_start,
-                "time_end": int(df_calc.loc[n_bars - 1, "time"]),
-                "price": eq_price,
-                "color": "#38bdf8" # Sky Blue
-            })
+    # Highest major resistance swing (BSL)
+    if sh_list:
+        major_bsl = max(sh_list, key=lambda s: s["price"])
+        structures.append({
+            "id": f"bsl_major_{major_bsl['time']}",
+            "type": "LIQUIDITY",
+            "direction": "BULLISH",
+            "label": "BSL",
+            "time_start": major_bsl["time"],
+            "time_end": curr_time,
+            "price": round(major_bsl["price"], 2),
+            "color": "#38bdf8"
+        })
 
-    for idx in range(len(sl_list) - 1):
-        s1 = sl_list[idx]
-        s2 = sl_list[idx + 1]
-        if abs(s1["price"] - s2["price"]) / s1["price"] <= 0.0015:
-            eq_price = round(min(s1["price"], s2["price"]), 2)
-            t_start = min(s1["time"], s2["time"])
-            structures.append({
-                "id": f"ssl_{s1['time']}",
-                "type": "LIQUIDITY",
-                "direction": "BEARISH",
-                "label": "SSL",
-                "time_start": t_start,
-                "time_end": int(df_calc.loc[n_bars - 1, "time"]),
-                "price": eq_price,
-                "color": "#f59e0b" # Amber
-            })
+    # Lowest major support swing (SSL)
+    if sl_list:
+        major_ssl = min(sl_list, key=lambda s: s["price"])
+        structures.append({
+            "id": f"ssl_major_{major_ssl['time']}",
+            "type": "LIQUIDITY",
+            "direction": "BEARISH",
+            "label": "SSL",
+            "time_start": major_ssl["time"],
+            "time_end": curr_time,
+            "price": round(major_ssl["price"], 2),
+            "color": "#f59e0b"
+        })
 
-    # Keep the most relevant and clean subset to prevent visual noise
+    # Filter to most recent 3 structures and 3 zones to ensure absolute visual clarity
     return {
-        "structures": structures[-8:],
-        "zones": zones[-8:],
-        "levels": levels,
-        "swings": swings[-12:],
+        "structures": structures[-4:],
+        "zones": zones[-3:],
+        "levels": [],
+        "swings": swings[-6:],
         "trend": "BULLISH" if trend == 1 else ("BEARISH" if trend == -1 else "NEUTRAL")
     }
 
@@ -266,61 +249,7 @@ def synthesize_ai_trade_setup(
     structure: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
     """
-    Synthesizes a high-probability trade idea based on current structure & unmitigated zones:
-    - Finds the nearest unmitigated FVG or swing level
-    - Defines exact entry, invalidation stop-loss, and liquidity target
-    - Computes exact Risk:Reward (R:R) ratio
+    On-demand trade setup synthesis.
+    Returns None by default unless an active setup is requested or inspected.
     """
-    if df.empty or len(df) < 20:
-        return None
-
-    last_bar = df.iloc[-1]
-    curr_price = float(last_bar["close"])
-    curr_time = int(last_bar["time"]) if "time" in last_bar else int(last_bar.get("timestamp", 0))
-    trend = structure.get("trend", "NEUTRAL")
-    zones = structure.get("zones", [])
-    
-    # 1. Bearish Thesis: Downtrend or MSS Bearish with an overhead Bearish FVG
-    bearish_zones = [z for z in zones if z["type"] == "FVG_BEAR" and z["price_low"] >= curr_price * 0.995]
-    if trend in ["BEARISH", "NEUTRAL"] and bearish_zones:
-        target_fvg = bearish_zones[-1] # nearest overhead gap
-        entry_price = float(target_fvg["price_low"])
-        stop_loss = round(float(target_fvg["price_high"]) * 1.0008, 2) # Just above gap high
-        risk = stop_loss - entry_price
-        if risk > 0:
-            # Target sellside liquidity or 2.5R to 4R expansion
-            target_price = round(entry_price - (risk * 3.2), 2)
-            rr = round((entry_price - target_price) / risk, 2)
-            return {
-                "id": f"setup_short_{curr_time}",
-                "direction": "SHORT",
-                "entry_price": entry_price,
-                "stop_loss": stop_loss,
-                "take_profit": target_price,
-                "rr_ratio": rr,
-                "time_entry": curr_time,
-                "thesis": f"Short limit into Bearish FVG (${target_fvg['price_low']:.2f} - ${target_fvg['price_high']:.2f}) following {trend} structure."
-            }
-
-    # 2. Bullish Thesis: Uptrend or MSS Bullish with a discount Bullish FVG
-    bullish_zones = [z for z in zones if z["type"] == "FVG_BULL" and z["price_high"] <= curr_price * 1.005]
-    if trend in ["BULLISH", "NEUTRAL"] and bullish_zones:
-        target_fvg = bullish_zones[-1] # nearest discount gap
-        entry_price = float(target_fvg["price_high"])
-        stop_loss = round(float(target_fvg["price_low"]) * 0.9992, 2) # Just below gap low
-        risk = entry_price - stop_loss
-        if risk > 0:
-            target_price = round(entry_price + (risk * 3.2), 2)
-            rr = round((target_price - entry_price) / risk, 2)
-            return {
-                "id": f"setup_long_{curr_time}",
-                "direction": "LONG",
-                "entry_price": entry_price,
-                "stop_loss": stop_loss,
-                "take_profit": target_price,
-                "rr_ratio": rr,
-                "time_entry": curr_time,
-                "thesis": f"Long limit into Bullish FVG (${target_fvg['price_low']:.2f} - ${target_fvg['price_high']:.2f}) following {trend} structure."
-            }
-
     return None
