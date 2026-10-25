@@ -14,13 +14,16 @@ def formulate_trade_setup(
     df: pd.DataFrame,
     zones: List[ZoneBoxPrimitive],
     direction: Optional[str] = None,
+    order_type: str = "LIMIT",
     thesis: str = "Quantitative trade setup"
 ) -> Optional[TradeSetupPrimitive]:
     """
     Formulates a mathematically anchored trade setup:
-    - Longs anchor Stop Loss cleanly below the Demand Zone.
-    - Shorts anchor Stop Loss cleanly above the Supply Zone.
-    - Target is anchored to opposing zone or dynamic ATR expansion.
+    - If order_type == 'LIMIT' (pullback setup):
+        - Longs enter at the upper boundary of the Demand zone for tight risk and high R:R.
+        - Shorts enter at the lower boundary of the Supply zone.
+    - If order_type == 'MARKET':
+        - Enters at current close.
     """
     if len(df) < 15:
         return None
@@ -35,13 +38,10 @@ def formulate_trade_setup(
     ).fillna(10.0)
     atr = float(tr.rolling(14, min_periods=1).mean().iloc[-1])
 
-    # Find Demand and Supply zones
     demand_zones = [z for z in zones if z.type == "DEMAND"]
     supply_zones = [z for z in zones if z.type == "SUPPLY"]
 
-    # Determine direction if not explicitly given
     if not direction:
-        # If price is closer to Demand -> bias Long; if closer to Supply -> bias Short
         if demand_zones and supply_zones:
             dist_to_demand = curr_price - demand_zones[0].price_high
             dist_to_supply = supply_zones[0].price_low - curr_price
@@ -50,43 +50,45 @@ def formulate_trade_setup(
             direction = "LONG"
 
     if direction == "LONG":
-        entry = curr_price
-        if demand_zones:
-            # Stop loss anchored below the demand zone with 0.2 ATR buffer
+        if order_type.upper() == "LIMIT" and demand_zones and demand_zones[0].price_high < curr_price:
+            # High expectancy Limit order: wait for pullback to top of Demand zone
+            entry = round(demand_zones[0].price_high, 2)
             stop_loss = round(demand_zones[0].price_low - (0.2 * atr), 2)
         else:
-            stop_loss = round(entry - (1.5 * atr), 2)
+            entry = round(curr_price, 2)
+            stop_loss = round(demand_zones[0].price_low - (0.2 * atr), 2) if demand_zones else round(entry - (1.5 * atr), 2)
 
-        # Target: Overhead supply zone floor, or at least 2.5x Risk
         risk = max(abs(entry - stop_loss), 1.0)
-        if supply_zones and supply_zones[0].price_low > entry + (1.2 * risk):
+        if supply_zones and supply_zones[0].price_low > entry + (1.5 * risk):
             take_profit = round(supply_zones[0].price_low, 2)
         else:
-            take_profit = round(entry + (2.5 * risk), 2)
+            take_profit = round(entry + (3.0 * risk), 2)
 
         reward = max(abs(take_profit - entry), 1.0)
         rr = round(reward / risk, 2)
 
     else:  # SHORT
-        entry = curr_price
-        if supply_zones:
-            # Stop loss anchored above the supply zone with 0.25 ATR buffer
-            stop_loss = round(supply_zones[0].price_high + (0.25 * atr), 2)
+        if order_type.upper() == "LIMIT" and supply_zones and supply_zones[0].price_low > curr_price:
+            # High expectancy Limit order: wait for rally into base of Supply zone
+            entry = round(supply_zones[0].price_low, 2)
+            stop_loss = round(supply_zones[0].price_high + (0.2 * atr), 2)
         else:
-            stop_loss = round(entry + (1.5 * atr), 2)
-
-        if demand_zones and demand_zones[0].price_high < entry:
-            take_profit = round(demand_zones[0].price_high, 2)
-        else:
-            take_profit = round(entry - (3.0 * atr), 2)
+            entry = round(curr_price, 2)
+            stop_loss = round(supply_zones[0].price_high + (0.2 * atr), 2) if supply_zones else round(entry + (1.5 * atr), 2)
 
         risk = max(abs(stop_loss - entry), 1.0)
+        if demand_zones and demand_zones[0].price_high < entry - (1.5 * risk):
+            take_profit = round(demand_zones[0].price_high, 2)
+        else:
+            take_profit = round(entry - (3.0 * risk), 2)
+
         reward = max(abs(entry - take_profit), 1.0)
         rr = round(reward / risk, 2)
 
     return TradeSetupPrimitive(
         id=f"setup_{curr_time}",
         direction=direction,
+        order_type=order_type.upper(),
         entry_price=round(entry, 2),
         stop_loss=round(stop_loss, 2),
         take_profit=round(take_profit, 2),

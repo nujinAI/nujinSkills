@@ -42,6 +42,7 @@ class StructuralLevelPrimitive(BaseModel):
 class TradeSetupPrimitive(BaseModel):
     id: str
     direction: str  # "LONG" or "SHORT"
+    order_type: str = "LIMIT"  # "LIMIT" or "MARKET"
     entry_price: float
     stop_loss: float
     take_profit: float

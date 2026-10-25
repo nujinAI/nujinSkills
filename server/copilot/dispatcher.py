@@ -90,7 +90,8 @@ def run_copilot_analysis(
     setup: Optional[TradeSetupPrimitive] = None
     if thesis:
         direction = "SHORT" if any(k in thesis.lower() for k in ["short", "bear", "sell", "reversal down", "breakdown"]) else "LONG"
-        setup = formulate_trade_setup(df, zones=boxes, direction=direction, thesis=thesis)
+        order_type = "MARKET" if "market" in thesis.lower() or "enter now" in thesis.lower() else "LIMIT"
+        setup = formulate_trade_setup(df, zones=boxes, direction=direction, order_type=order_type, thesis=thesis)
 
     primitives = CopilotPrimitives(
         series=series_data,
