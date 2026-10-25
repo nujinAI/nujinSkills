@@ -15,39 +15,44 @@
 
 ## 🎯 What is NujinAI?
 
-**NujinAI (nujinSkills)** is an autonomous quantitative research engine and systematic trading bot packaged as an open-source, agent-agnostic **AI Skill**.
+**NujinAI (nujinSkills)** is an autonomous quantitative research engine, interactive visual copilot, and systematic trading platform packaged as an open-source, agent-agnostic **AI Skill**.
 
-Instead of getting bogged down in boilerplate code, manual data joining, or curve-fitted indicator traps:
-1. **Universal Hypothesis Modeling:** Formulate strategies for any concept or market (Price Action, Market Structure, Order Flow, Statistical Arbitrage, Volatility Breakouts, Macro/Funding Spreads, or Machine Learning classifiers).
-2. **Institutional Multi-Timeframe (MTF) Confluence:** Seamlessly link Higher-Timeframe (HTF) market regime and context, Mid-Timeframe (MTF) structural zones, and Lower-Timeframe (LTF) precision execution triggers with **strict zero lookahead bias**.
-3. **8-Gate Adversarial Falsification:** Stress-test candidates against the Deflated Sharpe Ratio ($\text{DSR} \ge 0.95$), a genuine parameter-stability plateau, 1,000-run Monte Carlo trade order permutations ($\text{MDD}_{99} \le 3.0\%$), out-of-sample walk-forward, multi-regime survival, real friction plus the microstructure noise floor, synthetic noise jitter ($\ge 80\%$ Sharpe retention), and the Equity Linearity Standard ($R^2 \ge 0.85$). All gate mathematics lives in one place — `server/cynic_gates.py` — so the auditor and the deployment path cannot disagree, and a gate that cannot be evaluated reports `INCONCLUSIVE` rather than passing.
-4. **Unified Single-Folder Data Isolation (`.nujin/`):** All research features, briefings, returns, and states live strictly inside `.nujin/`, namespaced via `--id <experiment_name>` so new strategies never contaminate or overwrite prior research.
-5. **Live Bot Hot-Deployment:** Emits production Python strategies and hot-deploys them into the live running trading engine without dropping active WebSocket connections or restarting server processes.
+It unifies two complementary pillars of modern trading: **Fully Autonomous Algorithmic Execution** and **Interactive Visual Chart Control**. Instead of getting bogged down in boilerplate code, manual data joining, or curve-fitted indicator traps:
+1. **Interactive Visual AI Chart Copilot:** Directly prompt your AI to analyze the live visual trading canvas (`http://localhost:3000`). The copilot algorithmically maps Supply & Demand zones, Order Blocks, and Liquidity Sweeps (BSL/SSL), renders dynamic Limit & Market trade setups with strict risk-reward ratios, and overlays universal indicator stacks (VWAP, Moving Average ribbons, Bollinger Bands, RSI) in real-time via WebSockets with persistent state hydration across browser reloads.
+2. **Universal Hypothesis Modeling:** Formulate algorithmic strategies for any concept or market (Price Action, Market Structure, Order Flow, Statistical Arbitrage, Volatility Breakouts, Macro/Funding Spreads, or Machine Learning classifiers).
+3. **Institutional Multi-Timeframe (MTF) Confluence:** Seamlessly link Higher-Timeframe (HTF) market regime and context, Mid-Timeframe (MTF) structural zones, and Lower-Timeframe (LTF) precision execution triggers with **strict zero lookahead bias**.
+4. **8-Gate Adversarial Falsification:** Stress-test candidates against the Deflated Sharpe Ratio ($\text{DSR} \ge 0.95$), a genuine parameter-stability plateau, 1,000-run Monte Carlo trade order permutations ($\text{MDD}_{99} \le 3.0\%$), out-of-sample walk-forward, multi-regime survival, real friction plus the microstructure noise floor, synthetic noise jitter ($\ge 80\%$ Sharpe retention), and the Equity Linearity Standard ($R^2 \ge 0.85$). All gate mathematics lives in one place — `server/cynic_gates.py` — so the auditor and the deployment path cannot disagree, and a gate that cannot be evaluated reports `INCONCLUSIVE` rather than passing.
+5. **Unified Single-Folder Data Isolation (`.nujin/`):** All research features, briefings, returns, and states live strictly inside `.nujin/`, namespaced via `--id <experiment_name>` so new strategies never contaminate or overwrite prior research.
+6. **Live Bot Hot-Deployment:** Emits production Python strategies and hot-deploys them into the live running trading engine without dropping active WebSocket connections or restarting server processes.
 
 ---
 
 ## 💎 Core Strengths & Institutional Edge
 
-1. **Zero Overfitting & No Curve-Fitting Illusions**
+1. **Dual-Pillar Autonomy: Algorithmic Rigor + Visual Discretionary Copilot**
+   * **Automated Quant Strategies:** Fully autonomous hypothesis generation, feature mining, 8-Gate Cynic stress-testing, and 24/7 hot-deployed bot execution.
+   * **Real-Time Visual Chart Copilot:** Instant AI-driven chart markup on the interactive canvas. Paint algorithmic supply/demand zones, liquidity sweeps, trade setups with dynamic entry/SL/TP calculations, and custom indicator stacks simply by asking in natural language.
+
+2. **Zero Overfitting & No Curve-Fitting Illusions**
    * **Physical Microstructure Noise Floor:** Stop losses, trailing stops, and targets are mathematically required to clear broker spread and tick noise ($\ge \max(3\times \text{Spread}, 1.5\times \text{ATR})$), eliminating sub-pip backtest fantasies.
    * **Adversarial Falsification:** Actively attempts to break every strategy candidate before deployment using Deflated Sharpe Ratio (discounting for multiple search trials and non-normal returns), price noise perturbation, and parameter plateau stability.
 
-2. **Smooth, Linear Capital Growth ($R^2 \ge 0.85$, $K$-Ratio $\ge 1.5$)**
+3. **Smooth, Linear Capital Growth ($R^2 \ge 0.85$, $K$-Ratio $\ge 1.5$)**
    * Rejects erratic, high-variance strategies driven by lucky outlier windfalls.
    * Specifically optimizes for a steady, straight-line upward equity curve with strict tail-risk drawdown containment ($\text{MDD}_{99} \le 3.0\%$)—tailored for consistency and passing prop firm evaluations.
 
-3. **Universal Market Invariants (Auction Market Theory & Wyckoff Mechanics)**
+4. **Universal Market Invariants (Auction Market Theory & Wyckoff Mechanics)**
    * Anchors alpha to physical price formation laws: Value Area acceptance ($H < 0.45$) vs. price discovery ($H > 0.55$), Wyckoff volatility compression (`vol_compression < 0.70`), and passive limit absorption of trapped inventory (`absorption_bullish`/`bearish`).
 
-4. **Active Alpha Protection & Volatility Risk Management**
+5. **Active Alpha Protection & Volatility Risk Management**
    * **Invalidation-Based Position Sizing:** Automatically scales position size inversely with structural invalidation distance to enforce strict dollar-risk uniformity.
    * **Alpha Half-Life (Time Invalidation):** Automatically scratches stale trades after $N$ bars (`TIME_EXPIRATION`), cutting dead-money drag and chop risk.
    * **Live CUSUM Drift Circuit Breaker:** Continuously monitors live forward returns; automatically halts new entries and dispatches Telegram alerts if performance degrades beyond $2.5\sigma$.
 
-5. **Institutional Multi-Timeframe (MTF) Confluence**
+6. **Institutional Multi-Timeframe (MTF) Confluence**
    * Solves single-timeframe myopia through a rigorous 3-tier hierarchy: **HTF** (Macro Regime & Bias) $\rightarrow$ **MTF** (Structural Zone / Setup) $\rightarrow$ **LTF** (Execution Trigger & Precise Invalidation).
 
-6. **Unified Closed-Loop AI Quantitative Compiler**
+7. **Unified Closed-Loop AI Quantitative Compiler**
    * The AI directly authors native Python strategies inheriting `IStrategy`, verifies all 8 Cynic Gates in closed-loop iteration, and hot-deploys them to the live running engine and dual-screen telemetry dashboard.
 
 ---
