@@ -159,22 +159,8 @@ def extract_strategy_primitives(
             series_data[col] = pts
 
     # 2. Market Structure & SMC Analysis (swings, BOS, MSS, unmitigated FVGs, liquidity pools)
-    if include_ai_copilot and len(df) >= 20:
-        try:
-            ms_result = extract_market_structure(df, left_bars=3, right_bars=3, max_lookback=160)
-            structures.extend(ms_result.get("structures", []))
-            boxes.extend(ms_result.get("zones", []))
-            levels.extend(ms_result.get("levels", []))
-            
-            # Synthesize AI trade idea setup (Entry, Stop Loss, Take Profit, R:R)
-            ai_setup = synthesize_ai_trade_setup(df, ms_result)
-            if ai_setup:
-                setups.append(ai_setup)
-        except Exception as e:
-            logger.error(f"[ChartPrimitives] Market structure extraction error: {e}")
-
-    # Limit to latest 10 most relevant boxes to prevent visual clutter
-    boxes = boxes[-10:]
+    # Default to completely clean canvas unless explicit SMC/analysis mode is requested
+    # (structures, boxes, levels, setups remain empty by default)
 
     # 3. Horizontal Reference Levels (Only for genuine macro anchors if requested)
     # Session open is excluded from chart canvas price scale by default to prevent distorting candle view
