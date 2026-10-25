@@ -212,39 +212,50 @@ def extract_market_structure(
                     "borderStyle": "dashed"
                 })
 
-    # 3. Liquidity Pools (Equal Highs EQH / Equal Lows EQL within 0.05% proximity)
+    # 3. Dynamic Liquidity Rays (Equal Highs EQH / Equal Lows EQL with Candle Anchors)
     sh_list = [s for s in swings if s["type"] == "SWING_HIGH"]
     sl_list = [s for s in swings if s["type"] == "SWING_LOW"]
 
+    # Detect Equal Highs (Buyside Liquidity) and Equal Lows (Sellside Liquidity) within 0.15% threshold
     for idx in range(len(sh_list) - 1):
         s1 = sh_list[idx]
         s2 = sh_list[idx + 1]
-        if abs(s1["price"] - s2["price"]) / s1["price"] <= 0.0006:
-            levels.append({
-                "id": f"eqh_{s1['time']}",
-                "price": round((s1["price"] + s2["price"]) / 2, 2),
-                "title": f"Buyside Liquidity (EQH): ${round(s1['price'], 2)}",
-                "color": "#38bdf8",
-                "lineStyle": "dotted"
+        if abs(s1["price"] - s2["price"]) / s1["price"] <= 0.0015:
+            eq_price = round(max(s1["price"], s2["price"]), 2)
+            t_start = min(s1["time"], s2["time"])
+            structures.append({
+                "id": f"bsl_{s1['time']}",
+                "type": "LIQUIDITY",
+                "direction": "BULLISH",
+                "label": "BSL",
+                "time_start": t_start,
+                "time_end": int(df_calc.loc[n_bars - 1, "time"]),
+                "price": eq_price,
+                "color": "#38bdf8" # Sky Blue
             })
 
     for idx in range(len(sl_list) - 1):
         s1 = sl_list[idx]
         s2 = sl_list[idx + 1]
-        if abs(s1["price"] - s2["price"]) / s1["price"] <= 0.0006:
-            levels.append({
-                "id": f"eql_{s1['time']}",
-                "price": round((s1["price"] + s2["price"]) / 2, 2),
-                "title": f"Sellside Liquidity (EQL): ${round(s1['price'], 2)}",
-                "color": "#f59e0b",
-                "lineStyle": "dotted"
+        if abs(s1["price"] - s2["price"]) / s1["price"] <= 0.0015:
+            eq_price = round(min(s1["price"], s2["price"]), 2)
+            t_start = min(s1["time"], s2["time"])
+            structures.append({
+                "id": f"ssl_{s1['time']}",
+                "type": "LIQUIDITY",
+                "direction": "BEARISH",
+                "label": "SSL",
+                "time_start": t_start,
+                "time_end": int(df_calc.loc[n_bars - 1, "time"]),
+                "price": eq_price,
+                "color": "#f59e0b" # Amber
             })
 
     # Keep the most relevant and clean subset to prevent visual noise
     return {
-        "structures": structures[-6:],
+        "structures": structures[-8:],
         "zones": zones[-8:],
-        "levels": levels[-4:],
+        "levels": levels,
         "swings": swings[-12:],
         "trend": "BULLISH" if trend == 1 else ("BEARISH" if trend == -1 else "NEUTRAL")
     }

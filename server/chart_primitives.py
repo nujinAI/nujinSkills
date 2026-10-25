@@ -176,18 +176,8 @@ def extract_strategy_primitives(
     # Limit to latest 10 most relevant boxes to prevent visual clutter
     boxes = boxes[-10:]
 
-    # 3. Horizontal Reference Levels (Session Open)
-    if "open" in df.columns and len(df) > 0:
-        lookback = min(96, len(df))
-        d_open = float(df["open"].iloc[-lookback])
-        levels.append({
-            "id": "day_open",
-            "price": d_open,
-            "title": f"Session Open: ${d_open:.2f}",
-            "color": "#38bdf8",
-            "lineStyle": "dotted",
-            "axisLabel": True
-        })
+    # 3. Horizontal Reference Levels (Only for genuine macro anchors if requested)
+    # Session open is excluded from chart canvas price scale by default to prevent distorting candle view
 
     # 4. HUD Telemetry Items for Latest Bar
     last_idx = len(df) - 1

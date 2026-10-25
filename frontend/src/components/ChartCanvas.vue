@@ -66,19 +66,19 @@
 
         <!-- ── Antigravity Market Structure Breaks (BOS / MSS Rays & Badges) ── -->
         <g v-for="st in renderedStructures" :key="st.id">
-          <!-- Horizontal Break Ray -->
+          <!-- Horizontal Break Ray anchored from swing origin -->
           <line
             :x1="st.x1"
             :y1="st.y"
             :x2="st.x2"
             :y2="st.y"
             :stroke="st.color"
-            stroke-width="1.5"
-            stroke-dasharray="3 3"
-            opacity="0.85"
+            :stroke-width="st.type === 'LIQUIDITY' ? 1.2 : 1.5"
+            :stroke-dasharray="st.type === 'LIQUIDITY' ? '5 3' : '3 3'"
+            :opacity="st.type === 'LIQUIDITY' ? 0.75 : 0.85"
           />
           <!-- Origin Marker Point -->
-          <circle :cx="st.x1" :cy="st.y" r="2.5" :fill="st.color" />
+          <circle :cx="st.x1" :cy="st.y" :r="st.type === 'LIQUIDITY' ? 2 : 2.5" :fill="st.color" />
           <!-- Break Badge -->
           <rect
             :x="st.x2 - 18"
@@ -392,7 +392,7 @@ let indicatorCalculator: {
   getHudItems: (idx: number) => IndicatorChipData[];
 } | null = null;
 
-const cleanStrategyName = computed(() => (props.selectedStrategy || props.activeStrategy || 'OpeningFlushReversalScalper').replace('.py', ''));
+const cleanStrategyName = computed(() => (props.selectedStrategy || props.activeStrategy || 'BTCAlphaTrend').replace('.py', ''));
 
 const isSignalForCurrentStrategy = (s: any): boolean => {
   if (!s) return false;
@@ -405,7 +405,7 @@ const isSignalForCurrentStrategy = (s: any): boolean => {
 };
 
 const resolveStrategySymbol = (stratName?: string): string => {
-  if (!stratName) return 'XAU/USD';
+  if (!stratName) return 'BTC/USDT';
   const clean = stratName.replace('.py', '');
   const s = clean.toLowerCase();
   // 1. High-priority canonical strategy name check
@@ -431,11 +431,11 @@ const resolveStrategySymbol = (stratName?: string): string => {
   if (s.includes('btc') || s.includes('asian') || s.includes('trapfade') || s.includes('vsa') || s.includes('propfirmatrhybridscalper')) {
     return 'BTC/USDT';
   }
-  return 'XAU/USD';
+  return 'BTC/USDT';
 };
 
 const resolveStrategyTimeframe = (stratName?: string): string => {
-  if (!stratName) return '1m';
+  if (!stratName) return '15m';
   const clean = stratName.replace('.py', '');
   if (props.strategies && props.strategies.length > 0) {
     const match = props.strategies.find((st) =>
@@ -446,8 +446,9 @@ const resolveStrategyTimeframe = (stratName?: string): string => {
     }
   }
   const s = clean.toLowerCase();
-  if (s.includes('5m') || s.includes('gold') || s.includes('xau')) return '5m';
-  return '1m';
+  if (s.includes('1m')) return '1m';
+  if (s.includes('5m')) return '5m';
+  return '15m';
 };
 
 const selectedSymbol = ref(resolveStrategySymbol(props.selectedStrategy || props.activeStrategy));
@@ -503,6 +504,7 @@ interface RenderedZoneBox {
 interface RenderedStructure {
   id: string;
   label: string;
+  type?: string;
   direction: 'BULLISH' | 'BEARISH';
   x1: number;
   x2: number;
@@ -1273,6 +1275,7 @@ const updateStructureCoordinates = () => {
     results.push({
       id: st.id,
       label: st.label || st.type || 'BOS',
+      type: st.type,
       direction: st.direction || 'BULLISH',
       x1: Math.min(x1, x2),
       x2: Math.max(x1, x2),
