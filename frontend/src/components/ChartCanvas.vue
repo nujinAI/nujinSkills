@@ -2066,18 +2066,14 @@ const loadCandles = async (preserveViewport = false) => {
     if (data.data && data.data.length > 0) {
       invalidateTradeExitCache();
       rawCandles.value = data.data;
+      // Note: Only overwrite copilot primitives if the API payload explicitly contains them;
+      // otherwise, preserve the live active WebSocket copilot markup (never clear it on candle reload).
       if (data.primitives && (data.primitives.lines?.length || data.primitives.boxes?.length || data.primitives.levels?.length || data.primitives.structures?.length || data.primitives.setups?.length)) {
         backendPrimitives.value = data.primitives;
         rawPrimitiveBoxes.value = data.primitives.boxes || [];
         rawPrimitiveStructures.value = data.primitives.structures || [];
         rawPrimitiveSetups.value = data.primitives.setups || [];
         applyPrimitiveLevels(data.primitives.levels || []);
-      } else {
-        backendPrimitives.value = null;
-        rawPrimitiveBoxes.value = [];
-        rawPrimitiveStructures.value = [];
-        rawPrimitiveSetups.value = [];
-        clearLevelLines();
       }
       const candles = data.data.map((c: any) => ({
         ...c,
