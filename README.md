@@ -3,6 +3,7 @@
 [![System: NujinAI](https://img.shields.io/badge/System-NujinAI-blue.svg)](SKILL.md)
 [![Quant Protocol](https://img.shields.io/badge/Methodology-Universal%20Quant-emerald.svg)](references/quant_protocol.md)
 [![Audit: 8--Gate Cynic](https://img.shields.io/badge/Audit-8--Gate%20Cynic%20%7C%20R%C2%B2%20%E2%89%A5%200.85-amber.svg)](references/cynic_audit.md)
+[![Chart Copilot](https://img.shields.io/badge/Visual-AI%20Chart%20Copilot-indigo.svg)](references/chart_copilot_protocol.md)
 [![Market Invariants](https://img.shields.io/badge/Invariants-Auction%20%26%20Wyckoff-teal.svg)](references/microstructure_protocol.md)
 [![Tools Reference](https://img.shields.io/badge/Tools-CLI%20Reference-purple.svg)](references/tools_reference.md)
 [![Bot Operations](https://img.shields.io/badge/Bot-Live%20Supervision-cyan.svg)](references/bot_operations.md)
@@ -211,6 +212,30 @@ Invoke all tools using the project virtualenv (`.venv/bin/python3 tools/<tool>.p
   python tools/telegram_broadcast.py broadcast --type update -m "New alpha strategy hot-deployed to paper mode."
   ```
 
+### 6. Real-Time AI Chart Copilot (Canvas Control & Technical Analysis)
+* **Interactive Discretionary & Structural Analysis:**
+  The AI Copilot directly pilots the live Chart Canvas (`http://localhost:3000`), painting visual primitives, structural setups, and technical indicator stacks on demand without hardcoding or code mutations.
+* **Inspect Current Chart Telemetry & Indicators:**
+  ```bash
+  python tools/chart_copilot.py --status
+  ```
+* **Supply & Demand / Order Blocks & Structural Setups (Dynamic R:R & Limit/Market Orders):**
+  ```bash
+  python tools/chart_copilot.py --symbol BTCUSDT --timeframe 4h --thesis "Identify major supply/demand zones and key structural trade setup"
+  ```
+* **Liquidity Sweeps & Smart Money Concepts (Buy-Side / Sell-Side Liquidity):**
+  ```bash
+  python tools/chart_copilot.py --symbol BTCUSDT --timeframe 15m --thesis "Analyze buy-side (BSL) and sell-side (SSL) liquidity sweeps with trade setup"
+  ```
+* **Indicator Stacks Only (Selective Drawing — VWAP, Moving Averages, Bollinger Bands):**
+  ```bash
+  python tools/chart_copilot.py --symbol BTCUSDT --timeframe 1h --indicators vwap,ema_20,sma_50 --no-zones --thesis "Microstructure trend with VWAP and 20/50 MAs"
+  ```
+* **Clear Canvas Visual Primitives:**
+  ```bash
+  python tools/chart_copilot.py --clear
+  ```
+
 ---
 
 ## 🖥️ The Dual-Screen Cockpit
@@ -219,7 +244,7 @@ Access the interactive trading cockpit at **`http://localhost:3000`**:
 
 | Screen / Deck | Hotkey | Purpose & Telemetry |
 |---|---|---|
-| **Chart Canvas** | **`F1`** | High-performance candlestick chart overlaid with visual primitives (multi-scale EMAs, Bollinger Bands, Fair Value Gaps, liquidity sweeps, and execution markers). |
+| **Chart Canvas & AI Copilot** | **`F1`** | High-performance interactive candlestick chart with direct AI Copilot visual control. Paints visual primitives (multi-box supply & demand zones, liquidity sweep markers, dynamic Limit/Market trade setups with risk-reward ratios) and indicator overlays (multi-scale EMAs, Bollinger Bands, VWAP, RSI) via live WebSockets with persistent state hydration across browser reloads. |
 | **Signal Deck** | **`F2`** | Live execution telemetry: win rate, profit factor, annualized Sharpe, active open position card with real-time unrealized PnL, and manual override controls. |
 | **Backtest Deck** | **`F3`** | Backtest audit: equity trajectory curves, return distribution, regime breakdown (Bull, Bear, Range), and the 8-Gate Cynic matrix ($R^2 \ge 0.85$). |
 | **Strategy Manager** | **`F4`** | Strategy leaderboard, global Live vs. Paper toggle, equity trajectory curves, correlation matrices, and direct action navigation. |
@@ -237,6 +262,7 @@ Nujin supports external modular extensions via the `plugins/` directory. Any ins
 
 For in-depth mathematical derivations and operational specifications:
 - [`SKILL.md`](SKILL.md) — Master Autonomous Quant Engine Protocol & Instructions
+- [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md) — AI Chart Copilot architecture, primitives, dynamic Limit/Market order engine, and WebSocket protocol
 - [`references/quant_protocol.md`](references/quant_protocol.md) — Universal quant research methodology, MTF architecture, volatility sizing & risk-reward math
 - [`references/cynic_audit.md`](references/cynic_audit.md) — 8-Gate Adversarial Falsification formulas (DSR, parameter stability, Monte Carlo MDD, OOS walk-forward, regime survival, friction/noise floor, noise jitter, linearity)
 
