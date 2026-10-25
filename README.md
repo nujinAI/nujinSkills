@@ -220,10 +220,6 @@ Invoke all tools using the project virtualenv (`.venv/bin/python3 tools/<tool>.p
 ### 6. Real-Time AI Chart Copilot (Canvas Control & Technical Analysis)
 * **Interactive Discretionary & Structural Analysis:**
   The AI Copilot directly pilots the live Chart Canvas (`http://localhost:3000`), painting visual primitives, structural setups, and technical indicator stacks on demand without hardcoding or code mutations.
-* **Inspect Current Chart Telemetry & Indicators:**
-  ```bash
-  python tools/chart_copilot.py --status
-  ```
 * **Supply & Demand / Order Blocks & Structural Setups (Dynamic R:R & Limit/Market Orders):**
   ```bash
   python tools/chart_copilot.py --symbol BTCUSDT --timeframe 4h --thesis "Identify major supply/demand zones and key structural trade setup"
