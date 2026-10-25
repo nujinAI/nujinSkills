@@ -324,6 +324,20 @@ def ensure_dynamic_indicators(df: pd.DataFrame, expressions: Optional[List[str]]
     v = d["volume"].astype(float) if "volume" in d.columns else pd.Series(10.0, index=d.index)
 
     # 1. Special composite / causal tokens
+    if any(k in text for k in ["bollinger", "bb_upper", "bb_lower", "bb_mid", "upper_band", "lower_band", "bb_bandwidth", "bb_pct_b"]):
+        if "bb_upper" not in d.columns:
+            bb_m, bb_u, bb_l, bb_bw, bb_pb = bollinger_bands(c, 20, 2.0)
+            d["bb_middle"] = bb_m
+            d["bb_upper"] = bb_u
+            d["bb_lower"] = bb_l
+            d["bb_upper_20"] = bb_u
+            d["bb_lower_20"] = bb_l
+            d["bb_middle_20"] = bb_m
+            d["upper_band"] = bb_u
+            d["lower_band"] = bb_l
+            d["bb_bandwidth"] = bb_bw
+            d["bb_pct_b"] = bb_pb
+
     for span_str in set(re.findall(r"\bdonchian_(?:upper|lower|mid)_(\d+)\b", text)):
         p = int(span_str)
         if f"donchian_upper_{p}" not in d.columns:
