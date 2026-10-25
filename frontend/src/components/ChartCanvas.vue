@@ -1380,10 +1380,18 @@ const updateCopilotSetupCoordinates = () => {
 let rafCoordId: number | null = null;
 const scheduleUpdateBoxCoordinates = () => {
   if (props.isActiveScreen === false) return;
-  // High-performance early-exit: If no trade is inspected and no zone primitives exist, skip RAF completely
-  if (!isInspectingTrade.value && !props.targetedSignal && rawPrimitiveBoxes.value.length === 0) {
+  // Early-exit only if completely empty of trades, targeted signals, and all copilot primitives
+  if (
+    !isInspectingTrade.value &&
+    !props.targetedSignal &&
+    rawPrimitiveBoxes.value.length === 0 &&
+    rawPrimitiveStructures.value.length === 0 &&
+    rawPrimitiveSetups.value.length === 0
+  ) {
     if (positionBoxes.value.length > 0) positionBoxes.value = [];
     if (renderedZoneBoxes.value.length > 0) renderedZoneBoxes.value = [];
+    if (renderedStructures.value.length > 0) renderedStructures.value = [];
+    if (renderedSetupBox.value !== null) renderedSetupBox.value = null;
     return;
   }
   if (rafCoordId !== null) return;

@@ -222,8 +222,25 @@ def main():
     parser.add_argument("--custom", help="JSON dictionary of custom formulas (e.g. '{\"spread\": \"ema_9 - ema_21\"}')")
     parser.add_argument("--smc", action="store_true", help="Include Smart Money Concepts structure (BOS, MSS, unmitigated FVGs, Liquidity)")
     parser.add_argument("--thesis", help="User or AI trading thesis to synthesize entry, invalidation SL, and TP")
+    parser.add_argument("--clear", action="store_true", help="Broadcast an immediate CLEAR command to empty the chart canvas")
+    parser.add_argument("--no-broadcast", action="store_true", help="Do not broadcast via WebSocket to running frontend")
     parser.add_argument("--json", action="store_true", help="Output pure JSON")
     args = parser.parse_args()
+
+    # If --clear is given, post directly to server endpoint to broadcast clear
+    if args.clear:
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                "http://localhost:8000/api/chart/copilot",
+                data=json.dumps({"action": "CLEAR", "symbol": args.symbol, "timeframe": args.timeframe}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=3)
+            print(f"Canvas successfully CLEARED live on {args.symbol} ({args.timeframe}).")
+        except Exception as e:
+            print(f"Failed to broadcast clear to server: {e}")
+        return
 
     req_inds = [i.strip() for i in args.indicators.split(",")] if args.indicators else None
     custom_forms = json.loads(args.custom) if args.custom else None
@@ -237,6 +254,29 @@ def main():
         include_smc=args.smc,
         thesis=args.thesis
     )
+
+    # Automatically broadcast live to running backend/frontend WebSocket unless --no-broadcast is set
+    if not args.no_broadcast:
+        import urllib.request
+        try:
+            req_body = {
+                "action": "ANALYZE",
+                "symbol": args.symbol,
+                "timeframe": args.timeframe,
+                "lookback": args.lookback,
+                "indicators": req_inds,
+                "custom": custom_forms,
+                "smc": args.smc,
+                "thesis": args.thesis
+            }
+            req = urllib.request.Request(
+                "http://localhost:8000/api/chart/copilot",
+                data=json.dumps(req_body).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception as e:
+            logger.debug(f"Direct WebSocket broadcast via server endpoint skipped: {e}")
 
     if args.json:
         print(json.dumps(result, indent=2))
