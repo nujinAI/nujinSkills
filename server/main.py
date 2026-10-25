@@ -517,16 +517,16 @@ async def chart_copilot_markup(payload: Dict[str, Any] = Body(...)):
         })
         return {"status": "SUCCESS", "action": "CLEAR", "primitives": empty_prims}
 
-    from tools.chart_copilot import analyze_chart_dynamically
-    res = analyze_chart_dynamically(
+    from server.copilot.dispatcher import run_copilot_analysis
+    res_obj = run_copilot_analysis(
         symbol=symbol,
         timeframe=timeframe,
         lookback=lookback,
         requested_indicators=requested_indicators,
-        custom_formulas=custom_formulas,
-        include_smc=include_smc,
+        include_zones=payload.get("include_zones", True),
         thesis=thesis
     )
+    res = res_obj.dict()
 
     if res.get("status") == "SUCCESS":
         _latest_copilot_markup = {
