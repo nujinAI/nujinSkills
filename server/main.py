@@ -209,7 +209,7 @@ async def get_candles(
         else:
             is_sp = any(k in active_strat.upper() for k in ["SP", "ES", "OPENING"])
             is_gold = any(k in active_strat.upper() for k in ["XAU", "GOLD", "GOAT", "DISPLACEMENT"])
-            symbol = "S&P 500 (ES)" if is_sp else ("XAU/USD" if is_gold else "BTC/USDT")
+            symbol = "BTC/USDT" if (not is_sp and not is_gold) else ("S&P 500 (ES)" if is_sp else "XAU/USD")
 
     is_sp = any(k in symbol.upper() for k in ["SP", "ES", "S&P", "US500", "OPENING"])
     is_xau = any(k in symbol.upper() for k in ["XAU", "GOLD", "OANDA", "GC"])

@@ -158,5 +158,20 @@ Non-disruptive supervisor CLI for the live trading bot (`status`, `deploy`, `sto
 
 ### `state_control.py`, `ui_dispatcher.py`, & `telegram_broadcast.py`
 - Inspect live state & signals: `tools/state_control.py signal-stats`
+
+---
+
+## 6. AI Chart Copilot & Market Structure Analysis
+
+### `chart_copilot.py`
+Autonomous CLI & Agent Tool for collaborative market analysis and live chart markup. Computes fractal swings, confirmed BOS/MSS breaks, significant unmitigated Fair Value Gaps (50% equilibrium mitigation), resting Buyside (BSL) and Sellside (SSL) liquidity targets, and concrete trade setups.
+- **Usage:**
+  ```bash
+  tools/chart_copilot.py [--symbol BTC/USDT] [--timeframe 15m] [--lookback 140] [--json]
+  ```
+- **Example:**
+  ```bash
+  python tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m
+  ```
 - Dispatch Cockpit UI widgets: `tools/ui_dispatcher.py --event UPSERT_WIDGET --payload '{...}'`
 - Broadcast Telegram alerts: `tools/telegram_broadcast.py broadcast --type alert --title "Alert" --message "Deployed"`

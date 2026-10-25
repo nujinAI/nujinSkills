@@ -101,6 +101,7 @@ Run using project virtualenv Python: `.venv/bin/python tools/<tool>.py`
 | Strategy Ranking & Tiers | `python tools/strategy_manager.py rank` |
 | Deploy Trading Bot | `python tools/bot_control.py deploy --strategy strategies/<Name>.py --mode paper` |
 | Live CUSUM Drift Monitor | `python tools/drift_monitor.py --check-live` |
+| AI Chart Copilot & SMC Markup | `python tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m` |
 | Start Telemetry Server & Cockpit | `python tools/server_control.py start --port 8000 --daemon` / `python tools/frontend_control.py start --port 3000 --daemon` |
 
 ---
@@ -108,6 +109,7 @@ Run using project virtualenv Python: `.venv/bin/python tools/<tool>.py`
 ## 4. Deep Reference Guides
 Load reference files on demand:
 - [`references/quant_protocol.md`](references/quant_protocol.md) — Hypothesis formulation, MTF architecture, risk normalization, and linear equity curve engineering.
+- [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md) — AI Chart Copilot architecture, SMC market structure engine, and universal visual protocol.
 - [`references/cynic_audit.md`](references/cynic_audit.md) — 8-Gate mathematical formulas, CPCV/PBO, and DSR specifications.
 - [`references/tools_reference.md`](references/tools_reference.md) — CLI flags and JSON schemas.
 - [`references/microstructure_protocol.md`](references/microstructure_protocol.md) — Market microstructure, auction dynamics, and order-flow mechanics.
