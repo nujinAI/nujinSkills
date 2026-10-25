@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import threading
 from datetime import datetime, timezone
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
@@ -458,6 +458,35 @@ async def close_signal_position(req: CloseSignalRequest):
         }
     })
     return {"status": "SUCCESS", "closed_signal": closed}
+
+@app.post("/api/chart/copilot")
+async def chart_copilot_markup(payload: Dict[str, Any] = Body(...)):
+    """
+    NujinAI Chart Copilot Endpoint.
+    Analyzes visible market structure, unmitigated zones, liquidity pools,
+    and synthesizes an actionable trade setup with visual primitives for the chart.
+    """
+    symbol = payload.get("symbol", "XAUUSD")
+    timeframe = payload.get("timeframe", "15m")
+    candles = payload.get("candles", [])
+
+    if not candles:
+        # Load latest candles for requested symbol & timeframe
+        res = await get_candles(symbol=symbol, timeframe=timeframe, count=250)
+        candles = res.get("data", [])
+
+    if not candles:
+        return {"status": "ERROR", "message": "No candle data available for copilot analysis."}
+
+    from server.chart_primitives import extract_strategy_primitives
+    primitives = extract_strategy_primitives(None, candles, include_ai_copilot=True)
+    
+    return {
+        "status": "SUCCESS",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "primitives": primitives
+    }
 
 @app.get("/api/status")
 async def get_system_status():

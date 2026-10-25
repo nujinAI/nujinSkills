@@ -38,6 +38,20 @@
           {{ isSpStrategy ? 'CME ES' : (isGoldStrategy ? 'Spot' : 'Binance') }} {{ selectedTimeframe || '1m' }}
         </span>
       </div>
+
+      <!-- AI Copilot Vision Button (Antigravity Visual Mode) -->
+      <button
+        @click="emit('toggleCopilot')"
+        class="btn btn-xs gap-1 font-bold font-mono tracking-tight shadow-sm border transition-all"
+        :class="isCopilotActive ? 'btn-secondary text-secondary-content shadow-secondary/20 ring-1 ring-secondary' : 'btn-ghost border-base-content/20 text-base-content/80 hover:bg-base-300'"
+        title="Toggle Antigravity AI Copilot Vision (Market Structure, BOS/MSS Breaks, FVGs & Live Setups)"
+      >
+        <span class="w-1.5 h-1.5 rounded-full" :class="isCopilotActive ? 'bg-secondary-content animate-ping' : 'bg-secondary'" />
+        <span>AI Copilot</span>
+        <span class="badge badge-xs text-[9px] font-bold ml-0.5" :class="isCopilotActive ? 'badge-primary text-primary-content' : 'badge-neutral'">
+          {{ isCopilotActive ? 'ON' : 'OFF' }}
+        </span>
+      </button>
     </div>
 
     <!-- ── Center: Trades & Jumps Navigator ── -->
@@ -353,10 +367,12 @@ const props = defineProps<{
   lastLivePrice?: number | null;
   priceFlash?: 'up' | 'down' | null;
   isWsConnected?: boolean;
+  isCopilotActive?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'selectStrategy', stratName: string): void;
+  (e: 'toggleCopilot'): void;
   (e: 'prevJump'): void;
   (e: 'nextJump'): void;
   (e: 'jumpToIndex', idx: number): void;

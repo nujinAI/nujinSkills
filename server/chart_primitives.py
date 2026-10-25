@@ -4,6 +4,7 @@ import logging
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Optional
+from server.market_structure import extract_market_structure, synthesize_ai_trade_setup
 
 logger = logging.getLogger("ChartPrimitives")
 
@@ -57,16 +58,36 @@ def _classify_line(col_name: str, idx: int) -> Dict[str, Any]:
         "lineStyle": line_style
     }
 
-def extract_strategy_primitives(strategy_name: str, candles: List[Dict[str, Any]]) -> Dict[str, Any]:
+def extract_strategy_primitives(
+    strategy_name: Optional[str], 
+    candles: List[Dict[str, Any]],
+    include_ai_copilot: bool = True
+) -> Dict[str, Any]:
+    """
+    Extracts chart visual primitives for the frontend.
+    Dual-Capability:
+    1. Strategy Mode: If strategy_name is provided, populates strategy-specific indicators and overlays.
+    2. AI Copilot Mode: Automatically analyzes market structure (swings, BOS, MSS), unmitigated FVGs,
+       liquidity pools, and high-probability trade setups (Entry, Invalidation SL, Target TP, R:R).
+    """
     if not candles:
-        return {"lines": [], "boxes": [], "levels": [], "hud_items": []}
+        return {
+            "lines": [], 
+            "series": {}, 
+            "boxes": [], 
+            "levels": [], 
+            "hud_items": [], 
+            "structures": [], 
+            "setups": []
+        }
 
-    try:
-        from server.backtest_engine import load_strategy_instance
-        strat = load_strategy_instance(strategy_name)
-    except Exception as e:
-        logger.warning(f"[ChartPrimitives] Could not load strategy {strategy_name}: {e}")
-        strat = None
+    strat = None
+    if strategy_name:
+        try:
+            from server.backtest_engine import load_strategy_instance
+            strat = load_strategy_instance(strategy_name)
+        except Exception as e:
+            logger.warning(f"[ChartPrimitives] Could not load strategy {strategy_name}: {e}")
 
     df = pd.DataFrame(candles)
     if "time" not in df.columns and "timestamp" in df.columns:
@@ -93,21 +114,22 @@ def extract_strategy_primitives(strategy_name: str, candles: List[Dict[str, Any]
     
     lines_cfg = []
     series_data = {}
-    boxes = []
-    levels = []
-    hud_items = []
+    boxes: List[Dict[str, Any]] = []
+    levels: List[Dict[str, Any]] = []
+    hud_items: List[Dict[str, Any]] = []
+    structures: List[Dict[str, Any]] = []
+    setups: List[Dict[str, Any]] = []
 
     # 1. Line Series Auto-Discovery (EMAs, Bands, Channels, S&R)
     indicator_cols = [c for c in df.columns if c not in standard_cols and pd.api.types.is_numeric_dtype(df[c])]
-    
-    # Prioritize price overlays (ignore non-price columns like volume, oscillators, boolean flags)
     close_median = df["close"].median() if "close" in df.columns else 1.0
     valid_line_cols = []
 
     non_price_keywords = [
         "vol", "volume", "delta", "mom", "sig", "score", "zscore", "z_score",
         "count", "ratio", "pnl", "return", "range", "wick", "atr", "sl", "tp",
-        "target", "stop", "hour", "session", "regime", "trend", "valid", "active"
+        "target", "stop", "hour", "session", "regime", "trend", "valid", "active",
+        "is_swing"
     ]
 
     for col in indicator_cols:
@@ -117,12 +139,10 @@ def extract_strategy_primitives(strategy_name: str, candles: List[Dict[str, Any]
         series = df[col].dropna()
         if len(series) == 0:
             continue
-        # Check if values are close to price range (price overlay strictly within +/- 15%)
         med_val = series.median()
         if abs(med_val - close_median) / close_median <= 0.15:
             valid_line_cols.append(col)
 
-    # If strategy has chart_indicators manifest, use that
     custom_manifest = getattr(strat, "chart_indicators", None) if strat else None
     if custom_manifest and isinstance(custom_manifest, list):
         for cfg in custom_manifest:
@@ -132,79 +152,32 @@ def extract_strategy_primitives(strategy_name: str, candles: List[Dict[str, Any]
                 lines_cfg.append(cfg)
                 series_data[cid] = pts
     else:
-        # Auto-configure up to 6 key price overlays
         for idx, col in enumerate(valid_line_cols[:6]):
             cfg = _classify_line(col, idx)
             pts = [{"time": int(t), "value": round(float(v), 4)} for t, v in zip(df["time"], df[col]) if pd.notnull(v)]
             lines_cfg.append(cfg)
             series_data[col] = pts
 
-    # 2. 2D Zone Boxes Auto-Discovery (FVG, Order Blocks, Liquidity Zones)
-    # ONLY detect FVGs if the strategy explicitly defines FVG indicator columns or is an SMC/FVG archetype
-    strategy_uses_fvg = (
-        any(c in df.columns for c in ["fvg_bullish", "fvg_bearish", "fvg", "fair_value_gap", "order_block", "liquidity_pool", "fvg_top"])
-        or any(k in strategy_name.lower() for k in ["fvg", "fairvalue", "fair_value", "smc", "orderblock", "liquidity_sweep", "imbalance"])
-    )
-
-    if strategy_uses_fvg and "low" in df.columns and "high" in df.columns:
-        fvg_bull_mask = df.get("fvg_bullish", pd.Series(0, index=df.index))
-        fvg_bear_mask = df.get("fvg_bearish", pd.Series(0, index=df.index))
-
-        # Scan recent 100 bars for distinct FVGs
-        scan_len = min(100, len(df))
-        sub_df = df.iloc[-scan_len:].reset_index(drop=True)
-        for i in range(2, len(sub_df)):
-            t_curr = int(sub_df.loc[i, "time"])
-            t_prev2 = int(sub_df.loc[i-2, "time"])
+    # 2. Market Structure & SMC Analysis (swings, BOS, MSS, unmitigated FVGs, liquidity pools)
+    if include_ai_copilot and len(df) >= 20:
+        try:
+            ms_result = extract_market_structure(df, left_bars=3, right_bars=3, max_lookback=160)
+            structures.extend(ms_result.get("structures", []))
+            boxes.extend(ms_result.get("zones", []))
+            levels.extend(ms_result.get("levels", []))
             
-            # Bullish FVG: Low of candle i > High of candle i-2
-            if (fvg_bull_mask.iloc[-scan_len + i] if len(fvg_bull_mask) >= scan_len else False) or (sub_df.loc[i, "low"] > sub_df.loc[i-2, "high"] and sub_df.loc[i-1, "close"] > sub_df.loc[i-1, "open"]):
-                p_high = float(sub_df.loc[i, "low"])
-                p_low = float(sub_df.loc[i-2, "high"])
-                if p_high > p_low:
-                    # Extend box up to 15 bars forward or end of data
-                    end_idx = min(len(sub_df) - 1, i + 12)
-                    t_end = int(sub_df.loc[end_idx, "time"])
-                    boxes.append({
-                        "id": f"fvg_bull_{t_curr}",
-                        "label": "Bullish FVG",
-                        "time_start": t_prev2,
-                        "time_end": t_end,
-                        "price_high": p_high,
-                        "price_low": p_low,
-                        "color": "rgba(38, 166, 154, 0.20)",
-                        "borderColor": "#26a69a",
-                        "borderStyle": "dashed",
-                        "type": "FVG_BULL"
-                    })
+            # Synthesize AI trade idea setup (Entry, Stop Loss, Take Profit, R:R)
+            ai_setup = synthesize_ai_trade_setup(df, ms_result)
+            if ai_setup:
+                setups.append(ai_setup)
+        except Exception as e:
+            logger.error(f"[ChartPrimitives] Market structure extraction error: {e}")
 
-            # Bearish FVG: High of candle i < Low of candle i-2
-            if (fvg_bear_mask.iloc[-scan_len + i] if len(fvg_bear_mask) >= scan_len else False) or (sub_df.loc[i, "high"] < sub_df.loc[i-2, "low"] and sub_df.loc[i-1, "close"] < sub_df.loc[i-1, "open"]):
-                p_high = float(sub_df.loc[i-2, "low"])
-                p_low = float(sub_df.loc[i, "high"])
-                if p_high > p_low:
-                    end_idx = min(len(sub_df) - 1, i + 12)
-                    t_end = int(sub_df.loc[end_idx, "time"])
-                    boxes.append({
-                        "id": f"fvg_bear_{t_curr}",
-                        "label": "Bearish FVG",
-                        "time_start": t_prev2,
-                        "time_end": t_end,
-                        "price_high": p_high,
-                        "price_low": p_low,
-                        "color": "rgba(239, 83, 80, 0.20)",
-                        "borderColor": "#ef5350",
-                        "borderStyle": "dashed",
-                        "type": "FVG_BEAR"
-                    })
+    # Limit to latest 10 most relevant boxes to prevent visual clutter
+    boxes = boxes[-10:]
 
-    # Limit to latest 8 most relevant boxes to prevent visual clutter
-    boxes = boxes[-8:]
-
-    # 3. Horizontal Price Levels (Daily Open, ATR Pivots, Key Highs/Lows)
+    # 3. Horizontal Reference Levels (Session Open)
     if "open" in df.columns and len(df) > 0:
-        latest_close = float(df["close"].iloc[-1])
-        # Daily open approximation (first candle of UTC day or rolling 96 bars on 15m)
         lookback = min(96, len(df))
         d_open = float(df["open"].iloc[-lookback])
         levels.append({
@@ -229,8 +202,7 @@ def extract_strategy_primitives(strategy_name: str, candles: List[Dict[str, Any]
                 "value": f"${val:.2f}" if pd.notnull(val) else "–"
             })
         
-        # Also include non-overlay indicators like RSI or Volume Z-Score in HUD
-        for sub_col in ["rsi_14", "rsi_7", "rsi_21", "volume_zscore", "adx_14", "hurst_proxy"]:
+        for sub_col in ["rsi_14", "rsi_7", "volume_zscore", "adx_14"]:
             if sub_col in df.columns:
                 val = df[sub_col].iloc[last_idx]
                 if pd.notnull(val):
@@ -246,5 +218,7 @@ def extract_strategy_primitives(strategy_name: str, candles: List[Dict[str, Any]
         "series": series_data,
         "boxes": boxes,
         "levels": levels,
-        "hud_items": hud_items
+        "hud_items": hud_items,
+        "structures": structures,
+        "setups": setups
     }

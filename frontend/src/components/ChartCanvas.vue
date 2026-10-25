@@ -16,6 +16,8 @@
       :lastLivePrice="lastLivePrice"
       :priceFlash="priceFlash"
       :isWsConnected="isWsConnected"
+      :isCopilotActive="isCopilotActive"
+      @toggleCopilot="toggleCopilotMode"
       @selectStrategy="emit('selectStrategy', $event)"
       @prevJump="prevJump"
       @nextJump="nextJump"
@@ -50,7 +52,7 @@
       </div>
 
       <!-- ── Dynamic Visual Primitives (FVG / Order Blocks / Session Zones) & Trade Boxes (SVG Overlay) ── -->
-      <svg v-if="positionBoxes.length > 0 || renderedZoneBoxes.length > 0" class="absolute inset-0 w-full h-full pointer-events-none z-10 overflow-hidden">
+      <svg v-if="positionBoxes.length > 0 || renderedZoneBoxes.length > 0 || renderedStructures.length > 0 || renderedSetupBox" class="absolute inset-0 w-full h-full pointer-events-none z-10 overflow-hidden">
         <defs>
           <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#26a69a" stop-opacity="0.25" />
@@ -61,6 +63,44 @@
             <stop offset="100%" stop-color="#ef5350" stop-opacity="0.25" />
           </linearGradient>
         </defs>
+
+        <!-- ── Antigravity Market Structure Breaks (BOS / MSS Rays & Badges) ── -->
+        <g v-for="st in renderedStructures" :key="st.id">
+          <!-- Horizontal Break Ray -->
+          <line
+            :x1="st.x1"
+            :y1="st.y"
+            :x2="st.x2"
+            :y2="st.y"
+            :stroke="st.color"
+            stroke-width="1.5"
+            stroke-dasharray="3 3"
+            opacity="0.85"
+          />
+          <!-- Origin Marker Point -->
+          <circle :cx="st.x1" :cy="st.y" r="2.5" :fill="st.color" />
+          <!-- Break Badge -->
+          <rect
+            :x="st.x2 - 18"
+            :y="st.direction === 'BULLISH' ? st.y - 15 : st.y + 3"
+            width="36"
+            height="13"
+            rx="2.5"
+            :fill="st.color"
+            opacity="0.9"
+          />
+          <text
+            :x="st.x2"
+            :y="st.direction === 'BULLISH' ? st.y - 5.5 : st.y + 12.5"
+            fill="#ffffff"
+            font-size="8.5"
+            font-weight="bold"
+            font-family="monospace"
+            text-anchor="middle"
+          >
+            {{ st.label }}
+          </text>
+        </g>
 
         <!-- ── Dynamic Level 3 Strategy Primitive Boxes (FVG, Order Blocks, Liquidity Zones) ── -->
         <g v-for="zbox in renderedZoneBoxes" :key="zbox.id">
@@ -86,6 +126,88 @@
             opacity="0.9"
           >
             {{ zbox.label }}
+          </text>
+        </g>
+
+        <!-- ── Antigravity AI Copilot Position Setup Box (Entry, SL, TP, R:R Box) ── -->
+        <g v-if="renderedSetupBox" :key="renderedSetupBox.id">
+          <!-- Green Profit Target Zone -->
+          <rect
+            :x="renderedSetupBox.x"
+            :y="renderedSetupBox.yProfitTop"
+            :width="renderedSetupBox.width"
+            :height="renderedSetupBox.profitHeight"
+            fill="url(#profitGrad)"
+            stroke="#26a69a"
+            stroke-width="1.5"
+            stroke-dasharray="4 2"
+          />
+          <!-- Red Loss Invalidation Zone -->
+          <rect
+            :x="renderedSetupBox.x"
+            :y="renderedSetupBox.yLossTop"
+            :width="renderedSetupBox.width"
+            :height="renderedSetupBox.lossHeight"
+            fill="url(#lossGrad)"
+            stroke="#ef5350"
+            stroke-width="1.5"
+            stroke-dasharray="4 2"
+          />
+          <!-- Entry Price Line -->
+          <line
+            :x1="renderedSetupBox.x"
+            :y1="renderedSetupBox.yEntry"
+            :x2="renderedSetupBox.x + renderedSetupBox.width"
+            :y2="renderedSetupBox.yEntry"
+            stroke="#38bdf8"
+            stroke-width="1.5"
+            stroke-dasharray="3 3"
+          />
+
+          <!-- Setup Header R:R Badge -->
+          <rect
+            :x="renderedSetupBox.x + 6"
+            :y="renderedSetupBox.isLong ? renderedSetupBox.yProfitTop + 4 : renderedSetupBox.yLossTop + 4"
+            width="140"
+            height="18"
+            rx="3"
+            fill="rgba(15, 23, 42, 0.90)"
+            stroke="#38bdf8"
+            stroke-width="1"
+          />
+          <text
+            :x="renderedSetupBox.x + 76"
+            :y="(renderedSetupBox.isLong ? renderedSetupBox.yProfitTop + 4 : renderedSetupBox.yLossTop + 4) + 12.5"
+            fill="#38bdf8"
+            font-size="9.5"
+            font-weight="bold"
+            font-family="monospace"
+            text-anchor="middle"
+          >
+            {{ renderedSetupBox.direction }} • R:R {{ renderedSetupBox.rrRatio }}
+          </text>
+
+          <!-- Entry Pill -->
+          <rect
+            :x="renderedSetupBox.x + renderedSetupBox.width - 96"
+            :y="renderedSetupBox.yEntry - 9"
+            width="92"
+            height="18"
+            rx="3"
+            fill="rgba(56, 189, 248, 0.95)"
+            stroke="#0284c7"
+            stroke-width="0.75"
+          />
+          <text
+            :x="renderedSetupBox.x + renderedSetupBox.width - 50"
+            :y="renderedSetupBox.yEntry + 3.5"
+            fill="#041829"
+            font-size="9"
+            font-weight="bold"
+            font-family="monospace"
+            text-anchor="middle"
+          >
+            ENTRY: ${{ formatPrice(renderedSetupBox.entryPrice) }}
           </text>
         </g>
 
@@ -377,8 +499,46 @@ interface RenderedZoneBox {
   borderStyle?: string;
   type: string;
 }
+
+interface RenderedStructure {
+  id: string;
+  label: string;
+  direction: 'BULLISH' | 'BEARISH';
+  x1: number;
+  x2: number;
+  y: number;
+  color: string;
+}
+
+interface RenderedSetupBox {
+  id: string;
+  direction: string;
+  isLong: boolean;
+  x: number;
+  width: number;
+  entryPrice: number;
+  slPrice: number;
+  tpPrice: number;
+  rrRatio: number;
+  yEntry: number;
+  yProfitTop: number;
+  profitHeight: number;
+  yLossTop: number;
+  lossHeight: number;
+  thesis?: string;
+}
+
+const isCopilotActive = ref<boolean>(true);
+const toggleCopilotMode = () => {
+  isCopilotActive.value = !isCopilotActive.value;
+  updateBoxCoordinates();
+};
 const rawPrimitiveBoxes = ref<any[]>([]);
+const rawPrimitiveStructures = ref<any[]>([]);
+const rawPrimitiveSetups = ref<any[]>([]);
 const renderedZoneBoxes = ref<RenderedZoneBox[]>([]);
+const renderedStructures = ref<RenderedStructure[]>([]);
+const renderedSetupBox = ref<RenderedSetupBox | null>(null);
 const backendPrimitives = ref<any>(null);
 let activeLevelLines: any[] = [];
 
@@ -1079,6 +1239,109 @@ const updateZoneBoxCoordinates = () => {
   renderedZoneBoxes.value = results;
 };
 
+const updateStructureCoordinates = () => {
+  if (!chart || !candleSeries || !chartContainerRef.value || rawPrimitiveStructures.value.length === 0 || !isCopilotActive.value) {
+    if (renderedStructures.value.length > 0) renderedStructures.value = [];
+    return;
+  }
+
+  const results: RenderedStructure[] = [];
+  const containerW = chartContainerRef.value.clientWidth || 800;
+
+  for (const st of rawPrimitiveStructures.value) {
+    const tStart = timeToLocal(Number(st.time_start));
+    const tEnd = timeToLocal(Number(st.time_end));
+    let x1 = chart.timeScale().timeToCoordinate(tStart as Time);
+    let x2 = chart.timeScale().timeToCoordinate(tEnd as Time);
+
+    if (x1 === null) {
+      const idx1 = findCandleIndex(Number(st.time_start));
+      if (idx1 >= 0) x1 = chart.timeScale().logicalToCoordinate(idx1 as any);
+    }
+    if (x2 === null) {
+      const idx2 = findCandleIndex(Number(st.time_end));
+      if (idx2 >= 0) x2 = chart.timeScale().logicalToCoordinate(idx2 as any);
+    }
+
+    if (x1 === null && x2 === null) continue;
+    if (x1 === null) x1 = 0;
+    if (x2 === null) x2 = containerW;
+
+    const yCoord = candleSeries.priceToCoordinate(Number(st.price));
+    if (yCoord === null) continue;
+
+    results.push({
+      id: st.id,
+      label: st.label || st.type || 'BOS',
+      direction: st.direction || 'BULLISH',
+      x1: Math.min(x1, x2),
+      x2: Math.max(x1, x2),
+      y: yCoord,
+      color: st.color || (st.direction === 'BULLISH' ? '#10b981' : '#ef5350')
+    });
+  }
+  renderedStructures.value = results;
+};
+
+const updateCopilotSetupCoordinates = () => {
+  if (!chart || !candleSeries || !chartContainerRef.value || rawPrimitiveSetups.value.length === 0 || !isCopilotActive.value) {
+    renderedSetupBox.value = null;
+    return;
+  }
+
+  const setup = rawPrimitiveSetups.value[0];
+  if (!setup || !setup.entry_price || !setup.stop_loss || !setup.take_profit) {
+    renderedSetupBox.value = null;
+    return;
+  }
+
+  const containerW = chartContainerRef.value.clientWidth || 800;
+  const containerH = chartContainerRef.value.clientHeight || 400;
+
+  const tEntry = timeToLocal(Number(setup.time_entry));
+  let xEntry = chart.timeScale().timeToCoordinate(tEntry as Time);
+  if (xEntry === null) {
+    const idx = findCandleIndex(Number(setup.time_entry));
+    if (idx >= 0) xEntry = chart.timeScale().logicalToCoordinate(idx as any);
+  }
+  if (xEntry === null) xEntry = containerW - 180;
+
+  const width = Math.max(140, containerW - xEntry - 10);
+  const isLong = setup.direction === 'LONG';
+
+  const yEntry = candleSeries.priceToCoordinate(Number(setup.entry_price));
+  const yStop = candleSeries.priceToCoordinate(Number(setup.stop_loss));
+  const yTarget = candleSeries.priceToCoordinate(Number(setup.take_profit));
+
+  if (yEntry === null || yStop === null || yTarget === null) {
+    renderedSetupBox.value = null;
+    return;
+  }
+
+  const yProfitTop = Math.min(yEntry, yTarget);
+  const profitHeight = Math.max(Math.abs(yTarget - yEntry), 4);
+  const yLossTop = Math.min(yEntry, yStop);
+  const lossHeight = Math.max(Math.abs(yStop - yEntry), 4);
+
+  renderedSetupBox.value = {
+    id: setup.id,
+    direction: setup.direction,
+    isLong,
+    x: xEntry,
+    width,
+    entryPrice: Number(setup.entry_price),
+    slPrice: Number(setup.stop_loss),
+    tpPrice: Number(setup.take_profit),
+    rrRatio: Number(setup.rr_ratio || 3.0),
+    yEntry,
+    yProfitTop,
+    profitHeight,
+    yLossTop,
+    lossHeight,
+    thesis: setup.thesis
+  };
+};
+
 let rafCoordId: number | null = null;
 const scheduleUpdateBoxCoordinates = () => {
   if (props.isActiveScreen === false) return;
@@ -1101,6 +1364,8 @@ const updateBoxCoordinates = () => {
 
 const updateBoxCoordinatesInternal = () => {
   updateZoneBoxCoordinates();
+  updateStructureCoordinates();
+  updateCopilotSetupCoordinates();
 
   if (!isInspectingTrade.value && !props.targetedSignal) {
     if (positionBoxes.value.length > 0) positionBoxes.value = [];
@@ -1758,13 +2023,17 @@ const loadCandles = async (preserveViewport = false) => {
     if (data.data && data.data.length > 0) {
       invalidateTradeExitCache();
       rawCandles.value = data.data;
-      if (data.primitives && (data.primitives.lines?.length || data.primitives.boxes?.length || data.primitives.levels?.length)) {
+      if (data.primitives && (data.primitives.lines?.length || data.primitives.boxes?.length || data.primitives.levels?.length || data.primitives.structures?.length || data.primitives.setups?.length)) {
         backendPrimitives.value = data.primitives;
         rawPrimitiveBoxes.value = data.primitives.boxes || [];
+        rawPrimitiveStructures.value = data.primitives.structures || [];
+        rawPrimitiveSetups.value = data.primitives.setups || [];
         applyPrimitiveLevels(data.primitives.levels || []);
       } else {
         backendPrimitives.value = null;
         rawPrimitiveBoxes.value = [];
+        rawPrimitiveStructures.value = [];
+        rawPrimitiveSetups.value = [];
         clearLevelLines();
       }
       const candles = data.data.map((c: any) => ({
