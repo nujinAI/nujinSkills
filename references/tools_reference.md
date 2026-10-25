@@ -21,33 +21,27 @@ Runs the full production-readiness gate: byte-compiles `server/`, `tools/`, and 
 
 ---
 
-## 1. Empirical Discovery & Composable Feature Extraction
+## 1. Feature Extraction & Strategy Modeling
 
-### `data_miner.py`
-Unified CLI that runs both the Multi-Paradigm Statistical Anomaly Scanner (`anomaly_scanner.py`) and the Composable Feature & Indicator Miner (`feature_miner.py`) in one step inside an isolated session.
+### `feature_miner.py`
+Extracts a comprehensive suite of TA-Lib indicators, causal multi-timeframe features (MTF 4x and 16x), continuous alpha forecasts, and user-specified custom formulas inside an isolated session.
 - **Usage:**
   ```bash
-  tools/data_miner.py --input PATH [--output PATH] [--id SESSION_ID] [--new-session] [--window INT] [--htf-data PATH] [--indicators LIST] [--custom JSON]
+  tools/feature_miner.py --input PATH [--output PATH] [--id SESSION_ID] [--indicators LIST] [--custom JSON]
   ```
 - **Example:**
   ```bash
-  tools/data_miner.py --input data/candles_15m.csv --new-session --indicators "ema_34,hma_55,rsi_7"
+  tools/feature_miner.py --input data/candles_15m.csv --id my_session --indicators "ema_34,hma_55,rsi_7" --custom '{"spread": "(ema_9 - ema_21) / atr_14"}'
   ```
 
 ---
 
-### `anomaly_scanner.py`
-Multi-Paradigm Statistical & Edge Family Discovery Engine. Calculates Lo-MacKinlay Variance Ratios, Hurst exponent, session hourly drift matrices, and evaluates conditional forward returns (net of friction) across all **6 Orthogonal Edge Families** (`TREND_CONTINUATION`, `MOMENTUM_BREAKOUT`, `STRUCTURAL_PULLBACK`, `MEAN_REVERSION`, `SESSION_TIME_EDGE`, `MICROSTRUCTURE_FLOW`), recommending the top-performing archetype (`recommended_archetype`).
+### `anomaly_scanner.py` (Optional Exploratory Tool)
+Optional market dynamics profiler. Calculates Lo-MacKinlay Variance Ratios, Hurst exponent, session hourly volatility distributions, and feature Information Coefficients (IC) when doing open-ended exploratory data analysis. It is purely informational and never constrains strategy design.
 - **Usage:**
   ```bash
   tools/anomaly_scanner.py [--data PATH] [--id SESSION_ID] [--new-session] [--output PATH] [--json]
   ```
-- **Arguments:**
-  - `--data`: Path to OHLCV candle CSV (default: `data/candles_15m.csv`).
-  - `--id` / `--session`: Session ID to isolate the briefing in `.nujin/sessions/<id>/empirical_briefing.json`.
-  - `--new-session`: Create and activate a brand-new isolated session.
-  - `--output`: Explicit output JSON path.
-  - `--json`: Output raw JSON to stdout.
 
 ---
 

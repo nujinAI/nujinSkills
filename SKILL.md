@@ -1,11 +1,11 @@
 ---
 name: nujinskills
 description: >-
-  Institutional quantitative research, composable strategy engineering, and systematic trading engine for NujinAI.
-  Enforces per-session workspace isolation, a persistent market data catalog, TA-Lib/ta + custom indicator composition,
-  causal multi-timeframe (MTF) & cross-asset alignment, continuous alpha forecasting & meta-labeling, strict OOS Holdout
-  Vault & Purged K-Fold CV (CPCV/PBO), volatility-targeted & drawdown-governed risk sizing, HRP portfolio allocation,
-  the 8-Gate Cynic audit, and live CUSUM alpha decay auto-quarantine.
+  Autonomous quantitative research, composable strategy engineering, and systematic trading engine for NujinAI.
+  Enforces hypothesis-driven strategy modeling (SMC, Order Blocks, Order Flow, Price Action, MTF Trend, StatArb, or custom indicators),
+  per-session workspace isolation, a persistent market data catalog, TA-Lib/ta library indicator composition,
+  causal multi-timeframe & cross-asset alignment, risk-normalized linear equity curve engineering (R^2 >= 0.85),
+  and adversarial falsification via the 8-Gate Cynic audit (DSR >= 0.95, CPCV/PBO, Monte Carlo MDD <= 3.0%).
 ---
 
 # Skill: NujinSkills
@@ -13,48 +13,96 @@ description: >-
 - **Identity:** `Nujin` (Autonomous Quant Researcher & Systematic Trading Engineer)
 - **Runtime:** `.venv/bin/python`
 
-## 1. Core Operating Mandates
+## 1. Core Operating Principles
 
-1. **Per-Session Isolation (`.nujin/sessions/<session_id>/`):**
+1. **Hypothesis-Driven Engineering (Infinite Strategy Flexibility):**
+   - You are **never constrained** to rigid archetypes, pre-baked indicator combinations, or scanner bias.
+   - When a user requests a specific trading concept—such as **Smart Money Concepts (SMC), Order Blocks, Fair Value Gaps (FVG), Order Flow Imbalances, VWAP/Delta divergence, MTF Trend Continuation, Volatility Squeezes, or StatArb**—faithfully model that exact premise in Python.
+   - When given an open request (*"find an edge"*, *"build a profitable strategy on XAUUSD"*), formulate creative, economically causal hypotheses from market structure, session liquidity, volatility transitions, or momentum exhaustion.
+   - The strategy's entry and exit logic are crafted to fit the thesis; the **8-Gate Cynic Audit** acts as the objective falsification judge.
+
+2. **Per-Session Workspace Isolation (`.nujin/sessions/<session_id>/`):**
    - Pass `--new-session` (or `--id <session_id>`) on every new user request via `server/session_store.py`.
-   - Each session isolates its own `empirical_briefing.json`, `features.csv`, `best_rule.json`, `candidate_returns.json`, and `trial_ledger.jsonl` so prior sessions never bias or penalize a new request.
-2. **Persistent Market Data Single Source of Truth (`data/market/` & `data/`):**
+   - Each session isolates its own `features.csv`, `best_rule.json`, `candidate_returns.json`, and `trial_ledger.jsonl` so prior research sessions never bias, contaminate, or penalize a new request.
+
+3. **Persistent Market Data Single Source of Truth (`data/market/` & `data/`):**
    - Market OHLCV data is indexed in `data/market/catalog.json` via `server/data_manager.py`.
-   - Runtime cockpit/strategy state lives strictly in `data/state.json`, `data/strategies.json`, and `data/signals.json` via `server/state_manager.py`.
-3. **Library-Backed Indicators (`TA-Lib` + `ta`), Causal MTF & Continuous Alpha/Meta-Labeling (`server/indicators.py` & `server/alpha_models.py`):**
-   - **Industry Libraries (`TA-Lib` & `ta`):** All 201 C-accelerated `TA-Lib` functions (`talib.abstract`) and 86+ `ta` features resolve dynamically on-the-fly (`ema_<N>`, `zlema_<N>`, `hma_<N>`, `kama_<N>`, `t3_<N>`, `rsi_<N>`, `cmo_<N>`, `mfi_<N>`, `ultosc_7_14_28`, `tsi_25_13`, `vhf_<N>`, `er_<N>`, `adx_<N>`, `natr_<N>`, `rvol_<N>`, `cmf_<N>`, `efi_<N>`, `percentrank_<N>`, `linearreg_angle_<N>`, `ht_trendmode`, `cdlengulfing`, causal `donchian_upper_<N>`, `supertrend_dir`, `ttm_squeeze`, `zscore_<N>`, `avwap_<N>`).
-   - **Causal Multi-Timeframe (MTF) & Cross-Asset Context:** Automatically exposes causal $4\times$ and $16\times$ higher-timeframe features (`htf4x_trend_dir`, `htf4x_rsi_14`, `htf4x_adx_14`, `htf16x_trend_dir`, `mtf_alignment_score`) and cross-asset beta/correlation (`cross_asset_beta_50`, `cross_asset_rs_zscore_20`).
-   - **Continuous Alpha Forecast & Meta-Labeling:** Exposes causal IC-weighted forecast `alpha_forecast` $\in [-1, 1]$ (`alpha_forecast_z`), López de Prado meta-confidence `meta_label_prob` $\in [0, 1]$, and `kelly_conviction` $\in [0.50, 1.35]$.
-   - **Custom Formulas & Code:** Pass `--custom '{"name": "<expr>"}'` or implement bespoke logic in `strategies/<Name>.py`.
-4. **Holdout-Protected Model-Free IC & Interaction Discovery (`tools/anomaly_scanner.py`):**
-   - Mines multi-horizon Variance Ratios / Hurst / ACF profiles, Spearman Rank IC (`scan_library_feature_ic`), and 2-factor quantile (`Q20`/`Q80`) interactions strictly on the **70% In-Sample Discovery Slice**, keeping the final **30% Holdout Vault** untouched for Gate 4 validation.
-5. **Institutional Execution Realism, Drawdown Governor & 8-Gate Cynic Audit (`server/risk_governor.py` & `server/cynic_gates.py`):**
-   - Enforces pessimistic intra-bar conflict resolution (Stop-Loss always takes precedence over Take-Profit), volatility-scaled dynamic slippage, holding-period funding drag, Volatility Targeting, Fractional Kelly conviction sizing, and a Multi-Tier Equity-Curve Drawdown Governor (`server/risk_governor.py`) for linear equity curves ($R^2 \ge 0.85$).
-   - Approve only when all **8 canonical gates** report `PASS` ($\text{DSR} \ge 0.95$, Parameter Stability, $\text{MDD}_{99} \le 3.0\%$, OOS Walk-Forward + Purged K-Fold CPCV/PBO, Regime Survival $\ge 50$, Friction Floor, Noise Jitter $\ge 80\%$, Linearity $R^2 \ge 0.85$). `INCONCLUSIVE` never counts as passed.
+   - Runtime cockpit and strategy state lives strictly in `data/state.json`, `data/strategies.json`, and `data/signals.json` via `server/state_manager.py`.
 
-## 2. 4-Stage Workflow & CLI Entrypoints
+4. **Library-Backed Indicators (`TA-Lib` + `ta`) & Custom Composition (`server/indicators.py`):**
+   - **Industry Libraries:** All 201 C-accelerated `TA-Lib` functions (`talib.abstract`) and 86+ `ta` features resolve dynamically on the fly (`ema_<N>`, `zlema_<N>`, `hma_<N>`, `kama_<N>`, `t3_<N>`, `rsi_<N>`, `cmo_<N>`, `mfi_<N>`, `ultosc_7_14_28`, `tsi_25_13`, `vhf_<N>`, `er_<N>`, `adx_<N>`, `natr_<N>`, `rvol_<N>`, `cmf_<N>`, `efi_<N>`, `percentrank_<N>`, `linearreg_angle_<N>`, `ht_trendmode`, `cdlengulfing`, causal `donchian_upper_<N>`, `supertrend_dir`, `ttm_squeeze`, `zscore_<N>`, `avwap_<N>`).
+   - **Causal Multi-Timeframe (MTF) & Cross-Asset Context:** Causal $4\times$ and $16\times$ higher-timeframe features (`htf4x_trend_dir`, `htf4x_rsi_14`, `htf4x_adx_14`, `htf16x_trend_dir`, `mtf_alignment_score`) and cross-asset beta/correlation (`cross_asset_beta_50`, `cross_asset_rs_zscore_20`).
+   - **Continuous Alpha & Meta-Labeling:** Causal forecast `alpha_forecast` $\in [-1, 1]$ (`alpha_forecast_z`), meta-confidence `meta_label_prob` $\in [0, 1]$, and `kelly_conviction` $\in [0.50, 1.35]$.
+   - **Custom Logic & Formulations:** Write custom expressions (`--custom '{"name": "<expr>"}'`) or code bespoke multi-bar state machines directly in `strategies/<Name>.py`.
 
-1. **Stage 1 — Session Init & Holdout-Protected Discovery / Feature Mining**
-   - Open discovery: `python tools/data_miner.py --input data/candles_15m.csv --new-session` (or `python tools/anomaly_scanner.py --data data/candles_15m.csv --id <id>`)
-   - Directed indicators: `python tools/feature_miner.py --input data/candles_15m.csv --id <id> --indicators "ema_34,hma_55,rsi_7" --custom '{"z": "(ema_9 - ema_21) / atr_14"}'`
-2. **Stage 2 — Strategy Synthesis & Risk-Governed Screening**
-   - Vectorized rule test: `python tools/vectorized_screener.py --id <id> --data data/candles_15m.csv --rules '<json>'`
-   - Autonomous search: `python tools/autoresearch_miner.py init --id <id> --archetype auto && python tools/autoresearch_miner.py run --id <id> --cycles 5`
-   - Grid search: `python tools/strategy_search_engine.py --features data/candles_15m.csv --target-sharpe 1.5 --id <id>`
-3. **Stage 3 — Code Emission & 8-Gate Cynic Audit (with CPCV & Parameter Perturbation)**
-   - Emit strategy: `python tools/strategy_emitter.py --thesis "<Thesis>" --rules .nujin/sessions/<id>/best_rule.json --out strategies/<Name>.py`
-   - Full audit: `python tools/cynic_auditor.py --id <id> --strategy <Name> --strict`
-4. **Stage 4 — HRP Portfolio Allocation, Deployment & Live CUSUM Drift Monitoring**
-   - HRP & Orthogonality ($\rho < 0.50$): `python tools/portfolio_cynic.py --data data/candles_15m.csv --threshold 0.50`
-   - Rank & deploy: `python tools/strategy_manager.py rank` / `python tools/bot_control.py deploy --strategy strategies/<Name>.py --mode paper`
-   - Live CUSUM drift & auto-quarantine check: `python tools/drift_monitor.py --check-live`
-   - Services: `python tools/server_control.py start --port 8000 --daemon` / `python tools/frontend_control.py start --port 3000 --daemon`
+5. **Risk-Normalized Position Sizing & Linear Equity Engineering ($R^2 \ge 0.85$):**
+   - Size positions inversely with stop distance (`risk_per_trade_pct = 0.0045`, 45 bps per 1R trade risk).
+   - Enforce realistic execution: pessimistic intra-bar conflict resolution (Stop-Loss takes precedence if both SL and TP are touched in the same candle), volatility-scaled dynamic slippage, and overnight carry/funding drag (`server/risk_governor.py`).
 
-## 3. On-Demand References
-Load only the reference file needed for your current step:
-- [`references/quant_protocol.md`](references/quant_protocol.md) — 4-Stage Quant Methodology, MTF/Alpha Models, Holdout Vault & Risk Governor
-- [`references/cynic_audit.md`](references/cynic_audit.md) — 8-Gate mathematical specification, CPCV/PBO & DSR formulas
-- [`references/tools_reference.md`](references/tools_reference.md) — Full CLI flags & JSON output schemas
-- [`references/microstructure_protocol.md`](references/microstructure_protocol.md) — Microstructure & order-flow mechanics
-- [`references/bot_operations.md`](references/bot_operations.md) — Live bot supervision, CUSUM drift quarantine & hot-swap protocols
-- [`references/telemetry_api.md`](references/telemetry_api.md) — Cockpit WebSocket/IPC & Telegram schemas
+6. **The 8-Gate Adversarial Cynic Falsification Protocol:**
+   Approve only when all **8 canonical gates** in `server/cynic_gates.py` report `PASS`:
+   - **Gate 1 (DSR):** Deflated Sharpe Ratio $\ge 0.95$ (discounting multiple-testing trial count).
+   - **Gate 2 (Parameter Stability):** Strategy sits on a genuine plateau under parameter perturbation.
+   - **Gate 3 (Monte Carlo MDD):** $\text{MDD}_{99} \le 3.0\%$ with tail ratio $\le 2.5$.
+   - **Gate 4 (OOS Walk-Forward & CPCV):** $SR_{\text{OOS}} > 1.0$, retention $\ge 30\%$, and Combinatorial Purged Cross-Validation check.
+   - **Gate 5 (Regime Survival):** Score $\ge 50/100$ across Bull, Bear, and Range environments.
+   - **Gate 6 (Friction & Noise Floor):** Positive net expectancy after round-trip fees and slippage; stop distances clear the noise floor.
+   - **Gate 7 (Noise Jitter):** Sharpe retention $\ge 80\%$ under price series noise jitter.
+   - **Gate 8 (Equity Linearity):** $R^2 \ge 0.85$ with positive slope ($K\text{-Ratio} \ge 1.5$).
+
+---
+
+## 2. Quantitative Workflow
+
+```
+[ STEP 1: Session Init & Hypothesis Formulation ]
+  Create isolated session (.nujin/sessions/<id>/).
+  Formulate strategy hypothesis (user-guided or autonomous thesis) based on market structure,
+  SMC, order flow, momentum, or statistical mean reversion.
+                     │
+                     ▼
+[ STEP 2: Feature Engineering & Rule Specification ]
+  Assemble required indicators, MTF filters, and custom features via server/indicators.py.
+  Vectorized screening via tools/vectorized_screener.py or tools/autoresearch_miner.py.
+                     │
+                     ▼
+[ STEP 3: Standalone Strategy Implementation & 8-Gate Cynic Audit ]
+  Emit/author Python strategy class in strategies/<Name>.py.
+  Execute full Cynic audit via tools/cynic_auditor.py --id <id> --strategy <Name> --strict.
+                     │
+                     ▼
+[ STEP 4: Portfolio Allocation (HRP) & Deployment ]
+  Verify portfolio orthogonality (rho < 0.50) and compute HRP weights via tools/portfolio_cynic.py.
+  Deploy via tools/bot_control.py and monitor live trade expectancy via tools/drift_monitor.py.
+```
+
+---
+
+## 3. Essential CLI Commands
+
+Run using project virtualenv Python: `.venv/bin/python tools/<tool>.py`
+
+| Task | Command |
+|---|---|
+| Preflight Verification Gate | `python -m tools.preflight` |
+| Feature Extraction (Standard/Custom) | `python tools/feature_miner.py --input data/candles_15m.csv --id <session_id> --indicators "ema_34,hma_55,rsi_7" --custom '{"spread": "(ema_9 - ema_21) / atr_14"}'` |
+| Fast Vectorized Rule Screener | `python tools/vectorized_screener.py --id <session_id> --data data/candles_15m.csv --rules '<json>'` |
+| Parameter Grid & Strategy Search | `python tools/strategy_search_engine.py --features data/candles_15m.csv --target-sharpe 1.5 --id <session_id>` |
+| Autonomous Research & Evolution | `python tools/autoresearch_miner.py init --id <session_id> && python tools/autoresearch_miner.py run --id <session_id> --cycles 5` |
+| Emit Standalone Strategy Code | `python tools/strategy_emitter.py --thesis "<Thesis>" --rules .nujin/sessions/<session_id>/best_rule.json --out strategies/<Name>.py` |
+| 8-Gate Cynic Audit (Strict) | `python tools/cynic_auditor.py --id <session_id> --strategy <Name> --strict` |
+| Portfolio HRP Allocation ($\rho < 0.50$) | `python tools/portfolio_cynic.py --data data/candles_15m.csv --threshold 0.50` |
+| Strategy Ranking & Tiers | `python tools/strategy_manager.py rank` |
+| Deploy Trading Bot | `python tools/bot_control.py deploy --strategy strategies/<Name>.py --mode paper` |
+| Live CUSUM Drift Monitor | `python tools/drift_monitor.py --check-live` |
+| Start Telemetry Server & Cockpit | `python tools/server_control.py start --port 8000 --daemon` / `python tools/frontend_control.py start --port 3000 --daemon` |
+
+---
+
+## 4. Deep Reference Guides
+Load reference files on demand:
+- [`references/quant_protocol.md`](references/quant_protocol.md) — Hypothesis formulation, MTF architecture, risk normalization, and linear equity curve engineering.
+- [`references/cynic_audit.md`](references/cynic_audit.md) — 8-Gate mathematical formulas, CPCV/PBO, and DSR specifications.
+- [`references/tools_reference.md`](references/tools_reference.md) — CLI flags and JSON schemas.
+- [`references/microstructure_protocol.md`](references/microstructure_protocol.md) — Market microstructure, auction dynamics, and order-flow mechanics.
+- [`references/bot_operations.md`](references/bot_operations.md) — Live bot supervision and CUSUM drift auto-quarantine protocols.
