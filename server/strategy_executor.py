@@ -112,45 +112,79 @@ class StrategyEvaluator:
                 logger.warning(f"[StrategyEvaluator] Strategy '{clean_name}' class could not be loaded from strategies/{clean_name}.py. No signal.")
                 return None
 
-            df_dyn = strat_inst.populate_indicators(df.copy(), {})
-            df_dyn = strat_inst.populate_entry_trend(df_dyn, {})
-            last_row = df_dyn.iloc[-1]
+            if hasattr(strat_inst, "generate_signals"):
+                df_idx = df.copy()
+                if "time" in df_idx.columns:
+                    df_idx["dt"] = pd.to_datetime(df_idx["time"], unit="s", utc=True)
+                elif "timestamp" in df_idx.columns:
+                    df_idx["dt"] = pd.to_datetime(df_idx["timestamp"], unit="s", utc=True)
+                else:
+                    df_idx["dt"] = pd.to_datetime(df_idx.index, utc=True)
+                df_idx = df_idx.set_index("dt")
 
-            is_l = bool(last_row.get("enter_long", 0) == 1)
-            is_s = bool(last_row.get("enter_short", 0) == 1) if getattr(strat_inst, "can_short", True) else False
+                sig_df = strat_inst.generate_signals(df_idx)
+                last_sig = sig_df.iloc[-1]
+                sig_val = int(last_sig.get("entry_signal", 0))
 
-            # Prevent simultaneous long/short whipsaw
-            if is_l and is_s:
-                is_s = False
+                is_l = bool(sig_val == 1)
+                is_s = bool(sig_val == -1) if getattr(strat_inst, "can_short", True) else False
 
-            if not is_l and not is_s:
-                return None
+                if not is_l and not is_s:
+                    return None
 
-            side = "BUY" if is_l else "SELL"
-            stoploss_pct = abs(float(getattr(strat_inst, "stoploss", -0.02)))
-            minimal_roi = getattr(strat_inst, "minimal_roi", {})
-            roi_0 = float(minimal_roi.get("0", minimal_roi.get(0, 0.035 if not is_xau else 0.005))) if minimal_roi else (stoploss_pct * 1.5)
-            atr_sl = getattr(strat_inst, "atr_sl_mult", None)
-            atr_tp = getattr(strat_inst, "atr_tp_mult", None)
-            atr_v = float(df_dyn['atr_14'].iloc[-1]) if ('atr_14' in df_dyn.columns and not np.isnan(df_dyn['atr_14'].iloc[-1])) else (curr_p * 0.005)
+                side = "BUY" if is_l else "SELL"
+                sl = round(float(last_sig.get("stop_loss", 0.0)), 2)
+                tp = round(float(last_sig.get("target", 0.0)), 2)
 
-            # 1. Structural or Dynamic Stop Loss
-            if "structural_sl" in last_row and not np.isnan(last_row["structural_sl"]):
-                sl = round(float(last_row["structural_sl"]), 2)
-            elif atr_sl is not None and atr_v > 0:
-                sl = round(curr_p - atr_sl * atr_v if is_l else curr_p + atr_sl * atr_v, 2)
+                atr_v = curr_p * 0.005
+                if hasattr(strat_inst, "compute_indicators"):
+                    try:
+                        ind_df = strat_inst.compute_indicators(df_idx)
+                        if "atr" in ind_df.columns and not np.isnan(ind_df["atr"].iloc[-1]):
+                            atr_v = float(ind_df["atr"].iloc[-1])
+                    except Exception:
+                        pass
+                last_row = last_sig
             else:
-                sl = round(curr_p * (1.0 - stoploss_pct) if is_l else curr_p * (1.0 + stoploss_pct), 2)
+                df_dyn = strat_inst.populate_indicators(df.copy(), {})
+                df_dyn = strat_inst.populate_entry_trend(df_dyn, {})
+                last_row = df_dyn.iloc[-1]
 
-            # 2. Structural or Dynamic Take Profit
-            if "structural_tp" in last_row and not np.isnan(last_row["structural_tp"]):
-                tp = round(float(last_row["structural_tp"]), 2)
-            elif atr_tp is not None and atr_v > 0:
-                tp = round(curr_p + atr_tp * atr_v if is_l else curr_p - atr_tp * atr_v, 2)
-            elif minimal_roi:
-                tp = round(curr_p * (1.0 + roi_0) if is_l else curr_p * (1.0 - roi_0), 2)
-            else:
-                tp = round(curr_p * (1.0 + stoploss_pct * 1.5) if is_l else curr_p * (1.0 - stoploss_pct * 1.5), 2)
+                is_l = bool(last_row.get("enter_long", 0) == 1)
+                is_s = bool(last_row.get("enter_short", 0) == 1) if getattr(strat_inst, "can_short", True) else False
+
+                # Prevent simultaneous long/short whipsaw
+                if is_l and is_s:
+                    is_s = False
+
+                if not is_l and not is_s:
+                    return None
+
+                side = "BUY" if is_l else "SELL"
+                stoploss_pct = abs(float(getattr(strat_inst, "stoploss", -0.02)))
+                minimal_roi = getattr(strat_inst, "minimal_roi", {})
+                roi_0 = float(minimal_roi.get("0", minimal_roi.get(0, 0.035 if not is_xau else 0.005))) if minimal_roi else (stoploss_pct * 1.5)
+                atr_sl = getattr(strat_inst, "atr_sl_mult", None)
+                atr_tp = getattr(strat_inst, "atr_tp_mult", None)
+                atr_v = float(df_dyn['atr_14'].iloc[-1]) if ('atr_14' in df_dyn.columns and not np.isnan(df_dyn['atr_14'].iloc[-1])) else (curr_p * 0.005)
+
+                # 1. Structural or Dynamic Stop Loss
+                if "structural_sl" in last_row and not np.isnan(last_row["structural_sl"]):
+                    sl = round(float(last_row["structural_sl"]), 2)
+                elif atr_sl is not None and atr_v > 0:
+                    sl = round(curr_p - atr_sl * atr_v if is_l else curr_p + atr_sl * atr_v, 2)
+                else:
+                    sl = round(curr_p * (1.0 - stoploss_pct) if is_l else curr_p * (1.0 + stoploss_pct), 2)
+
+                # 2. Structural or Dynamic Take Profit
+                if "structural_tp" in last_row and not np.isnan(last_row["structural_tp"]):
+                    tp = round(float(last_row["structural_tp"]), 2)
+                elif atr_tp is not None and atr_v > 0:
+                    tp = round(curr_p + atr_tp * atr_v if is_l else curr_p - atr_tp * atr_v, 2)
+                elif minimal_roi:
+                    tp = round(curr_p * (1.0 + roi_0) if is_l else curr_p * (1.0 - roi_0), 2)
+                else:
+                    tp = round(curr_p * (1.0 + stoploss_pct * 1.5) if is_l else curr_p * (1.0 - stoploss_pct * 1.5), 2)
 
             # 3. Strict Quantitative Sanity Bounds (Universal Risk Enforcement)
             if is_l:
@@ -233,23 +267,39 @@ class StrategyEvaluator:
                     if not target_equity or target_equity <= 0:
                         target_equity = float(getattr(strat_inst, "benchmark_equity", 5000.0))
 
-                    lots = float(strat_inst.calculate_lot_size(
-                        account_balance=target_equity,
-                        entry_price=curr_p,
-                        stop_loss=sl,
-                        symbol=symbol,
-                        atr=atr_v,
-                        z_score=curr_vz
-                    ))
+                    import inspect
+                    sig = inspect.signature(strat_inst.calculate_lot_size)
+                    sig_params = sig.parameters
+                    call_kwargs = {}
+                    if "entry_price" in sig_params:
+                        call_kwargs["entry_price"] = curr_p
+                    if "stop_loss" in sig_params:
+                        call_kwargs["stop_loss"] = sl
+                    if "account_balance" in sig_params:
+                        call_kwargs["account_balance"] = target_equity
+                    if "symbol" in sig_params:
+                        call_kwargs["symbol"] = symbol
+                    if "atr" in sig_params:
+                        call_kwargs["atr"] = atr_v
+                    if "z_score" in sig_params:
+                        call_kwargs["z_score"] = curr_vz
+
+                    raw_lots = float(strat_inst.calculate_lot_size(**call_kwargs))
+                    if "account_balance" not in sig_params:
+                        base_size = float(getattr(strat_inst, "account_size", 100000.0))
+                        scale = (target_equity / base_size) if base_size > 0 else 1.0
+                        lots = raw_lots * scale
+                    else:
+                        lots = raw_lots
                 except Exception as e_lots:
                     logger.warning(f"[StrategyEvaluator] Error calculating lot size via strategy lotsizer: {e_lots}")
 
             if lots is None or lots <= 0:
                 lots = 0.02 if (is_xau or "USD" in symbol) else 0.10
 
-            lots = round(lots, 2)
+            lots = max(0.01, round(lots, 2))
 
-            strat_max_bars = getattr(strat_inst, "time_invalidation_bars", getattr(strat_inst, "max_bars", None))
+            strat_max_bars = getattr(strat_inst, "time_invalidation_bars", getattr(strat_inst, "max_bars", getattr(strat_inst, "max_hold_bars", None)))
             max_hold_seconds = (strat_max_bars * bar_sec) if strat_max_bars is not None else None
 
             # 5. Dynamic Trailing Stop Configuration
