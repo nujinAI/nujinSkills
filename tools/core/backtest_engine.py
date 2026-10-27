@@ -42,7 +42,7 @@ class TradeRecord:
 def run_discrete_backtest(
     df: pd.DataFrame,
     signals: pd.DataFrame,
-    symbol: str = "GC=F",
+    symbol: str = "OANDA:XAUUSD",
     account_size: float = 100_000.0,
     dollar_risk_1r: float = 350.0,
     max_daily_losses: int = 2,

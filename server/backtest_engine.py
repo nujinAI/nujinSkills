@@ -239,7 +239,7 @@ def compute_strategy_parameter_stability_matrix(
                         res = run_discrete_backtest(
                             df=df_idx,
                             signals=sig,
-                            symbol="GC=F" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else symbol,
+                            symbol="OANDA:XAUUSD" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else symbol,
                             dollar_risk_1r=getattr(strat_copy, "dollar_risk_1r", 350.0),
                             max_daily_losses=getattr(strat_copy, "max_daily_losses", 1),
                             daily_profit_cap=getattr(strat_copy, "daily_profit_cap", 520.0),
@@ -345,13 +345,10 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
     # Use Dynamic Candle Fetcher from tools/core/data_tool.py
     from tools.core.data_tool import fetch_ohlcv
     
-    # Map symbol for dynamic fetcher
-    fetch_sym = "GC=F" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else \
-                ("^GSPC" if any(k in symbol.upper() for k in ["SP500", "ES", "S&P"]) else \
-                ("BTC-USD" if "BTC" in symbol.upper() else symbol))
-                
     # If timeframe is 1h, 4h, or 1d, fetch real historical data dynamically
-    if timeframe in ["1h", "4h", "1d"]:
+    if timeframe in ["1h", "4h", "1d"] and not is_gold:
+        fetch_sym = ("^GSPC" if any(k in symbol.upper() for k in ["SP500", "ES", "S&P"]) else \
+                    ("BTC-USD" if "BTC" in symbol.upper() else symbol))
         candles_file = os.path.join(data_dir, f"{fetch_sym.replace('=', '_').replace('^', '')}_candles_{timeframe}.csv")
         logger.info(f"[BacktestEngine] Dynamically fetching {timeframe} candles for {fetch_sym} via tools/core/data_tool...")
         try:
@@ -565,7 +562,7 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         res_disc = run_discrete_backtest(
             df=df_idx,
             signals=signals,
-            symbol="GC=F" if is_gold else symbol,
+            symbol="OANDA:XAUUSD" if is_gold else symbol,
             account_size=acct_size,
             dollar_risk_1r=dollar_risk,
             max_daily_losses=max_daily_l,
