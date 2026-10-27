@@ -1,116 +1,91 @@
 ---
 name: nujinskills
 description: >-
-  Autonomous quantitative research, composable strategy engineering, and systematic trading engine for NujinAI.
-  Enforces hypothesis-driven strategy modeling across any user thesis or quantitative paradigm,
-  per-session workspace isolation, a persistent market data catalog, dynamic TA-Lib/ta library indicator composition,
-  causal multi-timeframe & cross-asset alignment, risk-normalized linear equity curve engineering (R^2 >= 0.85),
-  and adversarial falsification via the 8-Gate Cynic audit (DSR >= 0.95, CPCV/PBO, Monte Carlo MDD <= 3.0%).
+  Autonomous quantitative research, strategy engineering, and systematic trading engine for NujinAI.
+  Transforms user trading objectives into mathematically verified, production-grade systems using
+  dynamic candle fetching, risk-normalized 1R execution, pessimistic intrabar resolution, and the
+  4 Institutional Stress Gates.
 ---
 
 # Skill: NujinSkills
 
 - **Identity:** `Nujin` (Autonomous Quant Researcher & Systematic Trading Engineer)
-- **Runtime:** `.venv/bin/python`
-
-## 1. Core Operating Principles
-
-1. **Hypothesis-Driven Strategy Engineering:**
-   - Model whatever trading hypothesis, economic causal premise, or technical concept the user requests directly in Python.
-   - When given an open request (*"find an edge"*, *"build a profitable strategy on XAUUSD"*), formulate creative, economically causal hypotheses from market structure, session liquidity, volatility transitions, or momentum exhaustion.
-   - The strategy's entry, exit, and risk logic are authored directly in Python (`strategies/<Name>.py` or vectorized rules); the **8-Gate Cynic Audit** serves as the sole objective mathematical judge.
-
-2. **The Autonomous Quant Research & Refinement Loop:**
-   - **Formulate:** Write the strategy thesis and implement the logic in `strategies/<Name>.py`.
-   - **Audit:** Run `python tools/cynic_auditor.py --id <session_id> --strategy <Name> --strict`.
-   - **Diagnose:** Read which gates failed and why (e.g., Gate 5 Regime Survival failed in chop, or Gate 6 Friction failed due to tight stops).
-   - **Reason & Refine:** Intelligently adjust the strategy's regime filter, higher-timeframe alignment, or exit parameters directly in Python code.
-   - **Approve:** Repeat until the strategy passes all 8 Cynic Gates with linear equity growth ($R^2 \ge 0.85$).
-
-3. **Per-Session Workspace Isolation (`.nujin/sessions/<session_id>/`):**
-   - Pass `--new-session` (or `--id <session_id>`) on every new user request via `server/session_store.py`.
-   - Each session isolates its own `features.csv`, `best_rule.json`, `candidate_returns.json`, and `trial_ledger.jsonl` so prior research sessions never bias, contaminate, or penalize a new request.
-
-4. **Persistent Market Data Single Source of Truth (`data/market/` & `data/`):**
-   - Market OHLCV data is indexed in `data/market/catalog.json` via `server/data_manager.py`.
-   - Runtime cockpit and strategy state lives strictly in `data/state.json`, `data/strategies.json`, and `data/signals.json` via `server/state_manager.py`.
-
-5. **Library-Backed Indicators (`TA-Lib` + `ta`) & Custom Composition (`server/indicators.py`):**
-   - **Industry Libraries:** All 201 C-accelerated `TA-Lib` functions (`talib.abstract`) and 86+ `ta` features resolve dynamically on the fly (`ema_<N>`, `zlema_<N>`, `hma_<N>`, `kama_<N>`, `t3_<N>`, `rsi_<N>`, `cmo_<N>`, `mfi_<N>`, `ultosc_7_14_28`, `tsi_25_13`, `vhf_<N>`, `er_<N>`, `adx_<N>`, `natr_<N>`, `rvol_<N>`, `cmf_<N>`, `efi_<N>`, `percentrank_<N>`, `linearreg_angle_<N>`, `ht_trendmode`, `cdlengulfing`, causal `donchian_upper_<N>`, `supertrend_dir`, `ttm_squeeze`, `zscore_<N>`, `avwap_<N>`).
-   - **Causal Multi-Timeframe (MTF) & Cross-Asset Context:** Causal $4\times$ and $16\times$ higher-timeframe features (`htf4x_trend_dir`, `htf4x_rsi_14`, `htf4x_adx_14`, `htf16x_trend_dir`, `mtf_alignment_score`) and cross-asset beta/correlation (`cross_asset_beta_50`, `cross_asset_rs_zscore_20`).
-   - **Continuous Alpha & Meta-Labeling:** Causal forecast `alpha_forecast` $\in [-1, 1]$ (`alpha_forecast_z`), meta-confidence `meta_label_prob` $\in [0, 1]$, and `kelly_conviction` $\in [0.50, 1.35]$.
-   - **Custom Logic & Formulations:** Write custom expressions (`--custom '{"name": "<expr>"}'`) or code bespoke multi-bar state machines directly in `strategies/<Name>.py`.
-
-6. **Risk-Normalized Position Sizing & Linear Equity Engineering ($R^2 \ge 0.85$):**
-   - Size positions inversely with stop distance (`risk_per_trade_pct = 0.0045`, 45 bps per 1R trade risk).
-   - Enforce realistic execution: pessimistic intra-bar conflict resolution (Stop-Loss takes precedence if both SL and TP are touched in the same candle), volatility-scaled dynamic slippage, and overnight carry/funding drag (`server/risk_governor.py`).
-
-7. **The 8-Gate Adversarial Cynic Falsification Protocol:**
-   Approve only when all **8 canonical gates** in `server/cynic_gates.py` report `PASS`:
-   - **Gate 1 (DSR):** Deflated Sharpe Ratio $\ge 0.95$ (discounting multiple-testing trial count).
-   - **Gate 2 (Parameter Stability):** Strategy sits on a genuine plateau under parameter perturbation.
-   - **Gate 3 (Monte Carlo MDD):** $\text{MDD}_{99} \le 3.0\%$ with tail ratio $\le 2.5$.
-   - **Gate 4 (OOS Walk-Forward & CPCV):** $SR_{\text{OOS}} > 1.0$, retention $\ge 30\%$, and Combinatorial Purged Cross-Validation check.
-   - **Gate 5 (Regime Survival):** Score $\ge 50/100$ across Bull, Bear, and Range environments.
-   - **Gate 6 (Friction & Noise Floor):** Positive net expectancy after round-trip fees and slippage; stop distances clear the noise floor.
-   - **Gate 7 (Noise Jitter):** Sharpe retention $\ge 80\%$ under price series noise jitter.
-   - **Gate 8 (Equity Linearity):** $R^2 \ge 0.85$ with positive slope ($K\text{-Ratio} \ge 1.5$).
+- **Runtime:** `~/.nujin/venv/bin/python` or `.venv/bin/python`
 
 ---
 
-## 2. Quantitative Workflow
+## 1. Core Operating Philosophy: Execution Geometry & Pure Math
+
+1. **The Market Has No Directional Certainty:**
+   More data does not equal certainty. Passive orders are non-binding and aggressive flows are hidden. The edge lies exclusively in **Execution Geometry**:
+   - **Objective Invalidation:** An unambiguous structural price level where the trade idea is disproven.
+   - **Normalized $1R$ Dollar Risk:** Sized dynamically ($Units = \text{DollarRisk} / |Entry - SL|$) so being wrong costs a strictly fixed amount.
+   - **Asymmetric Payout:** Sized so expanding moves deliver $2.5R$ to $4R+$.
+   - **Friction Floor:** Total round-trip spread, commission, and slippage must be $\le 10\%$ of stop distance.
+
+2. **No Static CSV Limitations:**
+   Never restrict research to truncated static CSVs. Use `tools/core/data_tool.py` to dynamically fetch fresh, continuous OHLCV data for ANY requested asset (`GC=F`, `BTC-USD`, `SPY`, `EURUSD=X`, etc.) across any timeframe (`1m`, `5m`, `15m`, `1h`, `1d`) and period (`60d`, `1y`, `2y`).
+
+3. **User-Defined Constraints:**
+   Never assume arbitrary drawdown rules. If the user or prop firm specifies 5% max DD and 3% daily DD, test those exact numbers. If the user asks for a long-term swing strategy with no daily cutoff, test only the overall max drawdown.
+
+---
+
+## 2. The 4-Step Scientific Pipeline
+
+Follow this autonomous loop for every user request:
 
 ```
-[ STEP 1: Session Init & Strategy Authoring ]
-  Create isolated session (.nujin/sessions/<id>/).
-  Author Python strategy class in strategies/<Name>.py based on the user's concept
-  (or quantitative market hypothesis: order flow, MTF trend, volatility compression, mean reversion).
-                     │
-                     ▼
-[ STEP 2: Fast Vectorized Screening & Initial Verification ]
-  Verify basic signal triggering and positive expectancy via tools/vectorized_screener.py
-  or run full backtest via server/backtest_engine.py.
-                     │
-                     ▼
-[ STEP 3: 8-Gate Adversarial Cynic Audit ]
-  Execute strict audit: python tools/cynic_auditor.py --id <id> --strategy <Name> --strict.
-  If gates fail: read exact failure diagnostics (regime, friction, stability) -> refine Python code.
-  Repeat until all 8 gates PASS.
-                     │
-                     ▼
-[ STEP 4: Portfolio Allocation (HRP) & Deployment ]
-  Verify portfolio orthogonality (rho < 0.50) and compute HRP weights via tools/portfolio_cynic.py.
-  Deploy via tools/bot_control.py and monitor live trade expectancy via tools/drift_monitor.py.
+[ STEP 1: COMPILE USER INTENT & RISK BUDGET ]
+  Use: python3 tools/core/risk_calc.py "<user prompt>"
+  -> Derives: Account size, 1R dollar risk, daily circuit breakers, profit caps.
+
+[ STEP 2: DYNAMIC DATA FETCH & FRICTION CHECK ]
+  Use: tools/core/data_tool.fetch_ohlcv(symbol, timeframe, period)
+  Use: tools/core/friction_calc.check_friction_hurdle(...)
+  -> Ensures: (Round-Trip Friction / Stop Distance) <= 10.0%.
+
+[ STEP 3: FORMULATE THESIS & GENERATE SIGNALS ]
+  The AI reasons about an anchor (session transition, price compression, structural bounds).
+  Constructs a signals DataFrame:
+  - 'entry_signal': 1 (Long), -1 (Short), 0 (Flat)
+  - 'stop_loss': exact price
+  - 'target': exact price
+
+[ STEP 4: EXECUTE & AUDIT ]
+  Use: tools.core.backtest_engine.run_discrete_backtest(...)
+  Use: tools.core.auditor_tool.audit_trade_log(...)
+  -> Tests 4 Institutional Gates:
+     1. Baseline Expectancy: PF >= 1.25, Exp >= 0.10R.
+     2. Top-5 Outlier Win Removal: Net PnL must stay positive without 5 luckiest trades.
+     3. 50/50 Chronological Regime Split: Profitable in both chronological halves.
+     4. Monte Carlo 1,000 Runs Stress Test:
+        - 95th Percentile Max DD MUST be strictly less than Max DD limit.
+        - Worst daily loss & simulated daily sequences MUST stay below Daily DD limit.
+
+  * If any gate fails: Analyze WHY -> Adjust thesis/timeframe -> Re-test.
+  * When ALL gates pass: Deploy the strategy class into strategies/<StrategyName>.py.
 ```
 
 ---
 
-## 3. Essential CLI Commands
+## 3. Strategy Deployment Standard (`strategies/<StrategyName>.py`)
 
-Run using project virtualenv Python: `.venv/bin/python tools/<tool>.py`
+In Nujin, every strategy is authored directly as a standard Python strategy file in the `strategies/` directory:
+`strategies/<StrategyName>.py` (e.g. `strategies/GoldIntradayTrendExhaustion.py`).
 
-| Task | Command |
-|---|---|
-| Preflight Verification Gate | `python -m tools.preflight` |
-| Fast Vectorized Rule Screener | `python tools/vectorized_screener.py --id <session_id> --data data/candles_15m.csv --rules '<json>'` |
-| Full-History Strategy Backtest | `python server/backtest_engine.py --strategy <Name> --timeframe 15m` |
-| 8-Gate Cynic Audit (Strict) | `python tools/cynic_auditor.py --id <session_id> --strategy <Name> --strict` |
-| Feature Extraction (On-Demand) | `python tools/feature_miner.py --input data/candles_15m.csv --id <session_id> --indicators "ema_34,hma_55,rsi_7"` |
-| Emit Standalone Strategy Code | `python tools/strategy_emitter.py --thesis "<Thesis>" --rules .nujin/sessions/<session_id>/best_rule.json --out strategies/<Name>.py` |
-| Portfolio HRP Allocation ($\rho < 0.50$) | `python tools/portfolio_cynic.py --data data/candles_15m.csv --threshold 0.50` |
-| Strategy Ranking & Tiers | `python tools/strategy_manager.py rank` |
-| Deploy Trading Bot | `python tools/bot_control.py deploy --strategy strategies/<Name>.py --mode paper` |
-| Live CUSUM Drift Monitor | `python tools/drift_monitor.py --check-live` |
-| AI Chart Copilot Live Dispatcher | `python tools/chart_copilot.py --symbol BTC/USDT --timeframe 15m [--indicators "..."] [--no-zones] [--clear]` |
-| Start Telemetry Server & Cockpit | `python tools/server_control.py start --port 8000 --daemon` / `python tools/frontend_control.py start --port 3000 --daemon` |
+The backend watcher in `server/main.py` monitors `strategies/*.py`. When the strategy file is written:
+1. The backend automatically detects the new strategy.
+2. It registers it into `data/strategies.json`.
+3. It broadcasts `STRATEGY_DISCOVERED` to the WebSocket and frontend cockpit in real time.
 
 ---
 
-## 4. Deep Reference Guides
-Load reference files on demand:
-- [`references/quant_protocol.md`](references/quant_protocol.md) — Hypothesis formulation, MTF architecture, risk normalization, and linear equity curve engineering.
-- [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md) — AI Chart Copilot architecture, dynamic multi-indicator visual engine, and universal visual protocol.
-- [`references/cynic_audit.md`](references/cynic_audit.md) — 8-Gate mathematical formulas, CPCV/PBO, and DSR specifications.
-- [`references/tools_reference.md`](references/tools_reference.md) — CLI flags and JSON schemas.
-- [`references/microstructure_protocol.md`](references/microstructure_protocol.md) — Market microstructure, auction dynamics, and order-flow mechanics.
-- [`references/bot_operations.md`](references/bot_operations.md) — Live bot supervision and CUSUM drift auto-quarantine protocols.
+## 4. Pure Core Tools Reference (`tools/core/`)
+
+All scripts in `tools/core/` are pure calculation primitives with zero trading bias:
+- `tools/core/data_tool.py`: Dynamic candle fetcher (eliminates truncated CSVs) with True Range, ATR, and relative volume.
+- `tools/core/risk_calc.py`: Risk-of-ruin sizing and circuit breaker math.
+- `tools/core/friction_calc.py`: Dynamic spread, fee, and slippage verification.
+- `tools/core/backtest_engine.py`: Discrete simulator with **Pessimistic Intrabar Resolution** (SL triggers first if both SL and TP are hit on the same bar).
+- `tools/core/auditor_tool.py`: The 4 institutional verification gates (Expectancy, Outlier Removal, Regime Split, Monte Carlo).
