@@ -89,3 +89,12 @@ All scripts in `tools/core/` are pure calculation primitives with zero trading b
 - `tools/core/friction_calc.py`: Dynamic spread, fee, and slippage verification.
 - `tools/core/backtest_engine.py`: Discrete simulator with **Pessimistic Intrabar Resolution** (SL triggers first if both SL and TP are hit on the same bar).
 - `tools/core/auditor_tool.py`: The 4 institutional verification gates (Expectancy, Outlier Removal, Regime Split, Monte Carlo).
+
+---
+
+## 5. Live Infrastructure & Operational References (`references/`)
+
+For live bot execution, frontend chart visualization, and WebSocket telemetry, consult the operational reference guides on demand:
+- [`references/bot_operations.md`](references/bot_operations.md): Live TradeLocker broker routing, multi-account execution, and Telegram signal dispatch.
+- [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md): Protocol for dispatching AI chart visual primitives (lines, boxes, SMC zones) to the Vue TradingView canvas.
+- [`references/telemetry_api.md`](references/telemetry_api.md): FastAPI REST endpoints and WebSocket message schemas for the frontend cockpit.
