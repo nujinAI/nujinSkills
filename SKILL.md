@@ -95,6 +95,6 @@ All scripts in `tools/core/` are pure calculation primitives with zero trading b
 ## 5. Live Infrastructure & Operational References (`references/`)
 
 For live bot execution, frontend chart visualization, and WebSocket telemetry, consult the operational reference guides on demand:
-- [`references/bot_operations.md`](references/bot_operations.md): Live TradeLocker broker routing, multi-account execution, and Telegram signal dispatch.
+- [`references/bot_operations.md`](references/bot_operations.md): Non-disruptive live bot supervision, state inspection (`tools/state_control.py`), safe strategy hot-deployment (`tools/bot_control.py`), and the live trading interlock (`NUJIN_LIVE_TRADING=1`).
 - [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md): Protocol for dispatching AI chart visual primitives (lines, boxes, SMC zones) to the Vue TradingView canvas.
 - [`references/telemetry_api.md`](references/telemetry_api.md): FastAPI REST endpoints and WebSocket message schemas for the frontend cockpit.
