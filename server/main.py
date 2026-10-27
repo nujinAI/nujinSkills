@@ -1337,7 +1337,7 @@ async def startup_event():
 
     # Pre-warm real-time market data providers so live candles are immediately warm
     from server.providers.base import ProviderRegistry
-    for sym, tf in [("BTC/USDT", "15m"), ("XAU/USD", "1m"), ("S&P 500 (ES)", "1m")]:
+    for sym, tf in [("BTC/USDT", "15m"), ("XAU/USD", "1m"), ("XAU/USD", "5m"), ("S&P 500 (ES)", "1m")]:
         try:
             p = ProviderRegistry.get_provider(sym, tf)
             asyncio.create_task(p.start())
