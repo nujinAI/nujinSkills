@@ -1335,15 +1335,27 @@ async def startup_event():
     except Exception as e_tl:
         logger.warning(f"[NujinSkillsServer] Could not launch Telegram listener: {e_tl}")
 
-    # Pre-warm real-time market data providers so live candles are immediately warm
+    # Dynamically warm up authentic market data providers for active strategies
     from server.providers.base import ProviderRegistry
-    for sym, tf in [("BTC/USDT", "15m"), ("XAU/USD", "1m"), ("XAU/USD", "5m"), ("S&P 500 (ES)", "1m")]:
+    active_strats = [s for s in strategy_registry.get_all(sync=False) if s.get("status") == "ACTIVE_LIVE"]
+    warmed_targets = set()
+    for s in active_strats:
+        sym = s.get("symbol") or "XAU/USD"
+        tf = s.get("timeframe") or "5m"
+        warmed_targets.add((sym, tf))
+
+    # If no strategies active, warm the primary focus asset from state
+    if not warmed_targets:
+        curr_state = state_manager.get()
+        warmed_targets.add((curr_state.get("symbol", "XAU/USD"), curr_state.get("timeframe", "5m")))
+
+    for sym, tf in warmed_targets:
         try:
             p = ProviderRegistry.get_provider(sym, tf)
             asyncio.create_task(p.start())
-            logger.info(f"[NujinSkillsServer] Market provider pre-warmed for {sym} ({tf})")
+            logger.info(f"[NujinSkillsServer] Dynamic market provider started for {sym} ({tf})")
         except Exception as e_p:
-            logger.warning(f"[NujinSkillsServer] Error warming provider for {sym}: {e_p}")
+            logger.warning(f"[NujinSkillsServer] Error starting dynamic provider for {sym} ({tf}): {e_p}")
 
     # Automatically resume existing managed active strategies only if system status is RUNNING
     try:

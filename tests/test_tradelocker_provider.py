@@ -36,11 +36,11 @@ class TestTradeLockerPriceFeed(unittest.TestCase):
              patch.object(broker_registry, "get_active_broker_id", return_value="paper"):
             p_gold = ProviderRegistry.get_provider("XAU/USD", "1m")
             self.assertEqual(p_gold.symbol, "XAU/USD")
-            self.assertIn("OandaGoldProvider", p_gold.__class__.__name__)
+            self.assertIn("TradingViewMarketDataProvider", p_gold.__class__.__name__)
 
             p_btc = ProviderRegistry.get_provider("BTC/USDT", "15m")
             self.assertEqual(p_btc.symbol, "BTC/USDT")
-            self.assertIn("BinanceSpotProvider", p_btc.__class__.__name__)
+            self.assertIn("TradingViewMarketDataProvider", p_btc.__class__.__name__)
 
     def test_broker_first_routing_when_connected(self):
         """When broker is connected and provides market data, ProviderRegistry uses broker provider."""

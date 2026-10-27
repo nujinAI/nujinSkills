@@ -289,8 +289,6 @@ class ProviderRegistry:
     @classmethod
     def get_provider(cls, symbol: str, timeframe: str = "1m") -> BaseMarketDataProvider:
         canon = cls.canonical_symbol(symbol)
-        clean_sym = canon.replace("/", "").replace(":", "").upper()
-
         key = cls.get_provider_key(canon, timeframe)
         if key in cls._providers:
             return cls._providers[key]
@@ -309,16 +307,10 @@ class ProviderRegistry:
         except Exception as e_bp:
             logger.debug(f"[ProviderRegistry] Broker provider query note: {e_bp}")
 
-        if canon == "XAU/USD":
-            from server.providers.oanda_gold_provider import OandaGoldProvider
-            provider = OandaGoldProvider(symbol="XAU/USD", timeframe=timeframe)
-        elif canon == "S&P 500 (ES)":
-            from server.providers.sp500_provider import Sp500Provider
-            provider = Sp500Provider(symbol="S&P 500 (ES)", timeframe=timeframe)
-        else:
-            # Default crypto provider: Binance
-            from server.providers.binance_provider import BinanceSpotProvider
-            provider = BinanceSpotProvider(symbol=canon, timeframe=timeframe)
+        # 2. Unified institutional market data feed via TradingView WebSocket
+        # Single source of truth for all global markets (Gold Spot, Bitcoin, Equities, FX)
+        from server.providers.tradingview_provider import TradingViewMarketDataProvider
+        provider = TradingViewMarketDataProvider(symbol=canon, timeframe=timeframe)
 
         cls._providers[key] = provider
         return provider

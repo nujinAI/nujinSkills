@@ -256,7 +256,9 @@ class StrategyEvaluator:
                     if target_equity is None:
                         try:
                             if accounts_store:
-                                all_accs = accounts_store.get_all_accounts(decrypt=False) if hasattr(accounts_store, "get_all_accounts") else []
+                                all_accs = accounts_store.get_all_active_accounts(decrypt=False) if hasattr(accounts_store, "get_all_active_accounts") else []
+                                if not all_accs and hasattr(accounts_store, "get_all_accounts"):
+                                    all_accs = accounts_store.get_all_accounts(decrypt=False)
                                 if not all_accs and hasattr(accounts_store, "_read_raw"):
                                     all_accs = accounts_store._read_raw().get("accounts", [])
                                 if all_accs:
@@ -443,14 +445,16 @@ class NativeStrategyRunner:
         today_utc_str = now_utc.strftime("%Y-%m-%d")
         signals = signal_store.get_all()
         today_realized_usd = 0.0
+        today_losses_count = 0
 
         for s in signals:
             t = s.get("time") or s.get("entry_time") or 0
             dt = datetime.fromtimestamp(t, tz=timezone.utc)
             if dt.strftime("%Y-%m-%d") == today_utc_str:
                 if s.get("status") == "CLOSED" or s.get("exit_price"):
+                    pnl = 0.0
                     if s.get("pnl_usd") is not None:
-                        today_realized_usd += float(s["pnl_usd"])
+                        pnl = float(s["pnl_usd"])
                     else:
                         entry_p = float(s.get("price") or s.get("entry_price") or 0.0)
                         exit_p = float(s.get("exit_price") or 0.0)
@@ -460,7 +464,10 @@ class NativeStrategyRunner:
                         action = (s.get("action") or "BUY").upper()
                         if entry_p > 0 and exit_p > 0:
                             diff = (exit_p - entry_p) if action in ("BUY", "LONG") else (entry_p - exit_p)
-                            today_realized_usd += (diff * lots * c_mult)
+                            pnl = (diff * lots * c_mult)
+                    today_realized_usd += pnl
+                    if pnl < 0:
+                        today_losses_count += 1
 
         # 4. Losses and budget calculation
         max_daily_loss_usd = round(initial_balance * max_daily_dd_pct, 2)
@@ -480,6 +487,7 @@ class NativeStrategyRunner:
             "current_equity": broker_equity or (initial_balance - today_loss_usd),
             "today_loss_usd": today_loss_usd,
             "today_realized_pnl_usd": round(today_realized_usd, 2),
+            "today_losses_count": today_losses_count,
             "max_daily_loss_usd": max_daily_loss_usd,
             "max_daily_dd_pct": max_daily_dd_pct,
             "remaining_budget_usd": remaining_budget_usd,
@@ -489,6 +497,11 @@ class NativeStrategyRunner:
         }
 
         # Checks:
+        max_daily_losses = int(getattr(strat_inst, "max_daily_losses", 0) or risk_profile.get("max_daily_losses", 0) or 0)
+        if max_daily_losses > 0 and today_losses_count >= max_daily_losses:
+            details["message"] = f"Max daily loss count reached: {today_losses_count} >= {max_daily_losses} (Prop Firm Daily Guard)"
+            return False, "MAX_DAILY_LOSSES_REACHED", details
+
         if broker_loss >= max_total_loss_usd:
             details["message"] = f"Total drawdown limit reached: -${broker_loss:.2f} >= -${max_total_loss_usd:.2f} (5.0%)"
             return False, "TOTAL_DRAWDOWN_LIMIT_EXCEEDED", details
@@ -801,15 +814,40 @@ class NativeStrategyRunner:
                     parse_mode="HTML",
                 )
                 return
+            elif order_res.get("status") in ("REJECTED", "ERROR", "FAILED"):
+                err_msg = order_res.get("error") or "Order rejected by broker"
+                logger.error(f"[NativeStrategyRunner] ❌ Order rejected by broker for {self.strategy_name}: {err_msg}")
+                sig["status"] = "REJECTED"
+                sig["execution_mode"] = "NONE"
+                sig["exit_reason"] = f"BROKER_REJECTED: {err_msg}"
+                sig["annotation"] = f"Rejected: {err_msg}"
+                signal_store.add(sig)
+                telegram_gateway.send_message(
+                    f"❌ <b>[BROKER ORDER REJECTED]</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 <b>Strategy:</b> <code>{self.strategy_name}</code>\n"
+                    f"⚠️ <b>Action:</b> {sig.get('action')} @ {sig.get('price')}\n"
+                    f"🛑 <b>Reason:</b> <code>{err_msg}</code>\n\n"
+                    f"<i>Order was rejected by TradeLocker. No position is tracked.</i>",
+                    parse_mode="HTML",
+                )
+                return
             elif order_res.get("status") == "SIMULATED_PREVIEW":
                 if not is_paper_broker:
                     logger.warning(f"[NativeStrategyRunner] Broker returned preview for {self.strategy_name} while on live broker.")
                 sig["status"] = "ACTIVE_IN_POSITION"
                 sig["execution_mode"] = "PAPER_SIMULATED"
                 sig["annotation"] = f"{sig.get('annotation', '')} (Simulated Paper)"
-            else:
+            elif order_res.get("status") == "FILLED":
                 sig["status"] = "ACTIVE_IN_POSITION"
                 sig["execution_mode"] = "LIVE_BROKER"
+            else:
+                logger.error(f"[NativeStrategyRunner] Unrecognized order status from broker: {order_res.get('status')}")
+                sig["status"] = "REJECTED"
+                sig["execution_mode"] = "NONE"
+                sig["exit_reason"] = f"UNKNOWN_STATUS: {order_res.get('status')}"
+                signal_store.add(sig)
+                return
         except Exception as e_broker:
             logger.error(
                 f"[NativeStrategyRunner] Error executing order with broker: {e_broker}",
@@ -1032,7 +1070,7 @@ class NativeStrategyRunner:
             try:
                 broker = broker_registry.get_broker()
                 broker_order_id = pos.get("broker_order", {}).get("order_id") or str(pos.get("id"))
-                broker.close_position(broker_order_id, reason=exit_reason, current_price=current_price)
+                broker.close_position(broker_order_id, reason=exit_reason, current_price=current_price, symbol=self.symbol)
             except Exception as e_broker_close:
                 logger.error(f"[NativeStrategyRunner] Error closing position on broker: {e_broker_close}")
 
