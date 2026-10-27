@@ -216,6 +216,13 @@ def compute_strategy_parameter_stability_matrix(
         base_tp = float(roi_dict.get("0", roi_dict.get(0, max(base_sl * 1.8, 0.025)))) if isinstance(roi_dict, dict) else max(base_sl * 1.8, 0.025)
         base_bars = int(getattr(strat_inst, "max_bars_held", getattr(strat_inst, "time_invalidation_bars", 16)) or 16)
         risk_pct = float(getattr(strat_inst, "risk_per_trade", getattr(strat_inst, "risk_per_trade_pct", 0.0045)) or 0.0045)
+        use_trail = bool(getattr(strat_inst, "trailing_stop", False))
+        base_trail_off = float(getattr(strat_inst, "trailing_stop_positive_offset", 0.010) or 0.010)
+
+        med_price = float(df_c["close"].median()) if "close" in df_c.columns and len(df_c) > 0 else 100.0
+        spread_pts, fee_pct, slip_pts = resolve_asset_friction(symbol, med_price)
+        asset_fee_bps = float(fee_pct * 10000.0)
+        asset_slip_bps = float(((spread_pts * 0.5 + slip_pts) / max(med_price, 1e-8)) * 10000.0)
 
         sl_factors = [0.92, 1.08]
         tp_factors = [0.92, 1.08]
@@ -230,10 +237,14 @@ def compute_strategy_parameter_stability_matrix(
                     enter_short=enter_short,
                     exit_long=exit_long,
                     exit_short=exit_short,
-                    stoploss_pct=max(0.002, base_sl * sl_f),
-                    takeprofit_pct=max(0.004, base_tp * tp_f),
+                    stoploss_pct=max(0.001, base_sl * sl_f),
+                    takeprofit_pct=max(0.002, base_tp * tp_f),
                     max_bars_held=max(4, int(round(base_bars * tp_f))),
+                    fee_bps=asset_fee_bps,
+                    slippage_bps=asset_slip_bps,
                     risk_per_trade_pct=risk_pct,
+                    trailing_stop=use_trail,
+                    trailing_offset_pct=max(0.001, base_trail_off * tp_f),
                 )
                 if len(rets) >= 5:
                     m_r = float(np.mean(rets))
@@ -276,24 +287,37 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
     feat_miner_script = os.path.join(_ROOT, "tools", "feature_miner.py")
 
     # 1. Resolve Candle Dataset and Sync if Needed
+    # Use Dynamic Candle Fetcher from tools/core/data_tool.py
+    from tools.core.data_tool import fetch_ohlcv
+    
+    # Map symbol for dynamic fetcher
+    fetch_sym = "GC=F" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else \
+                ("^GSPC" if any(k in symbol.upper() for k in ["SP500", "ES", "S&P"]) else \
+                ("BTC-USD" if "BTC" in symbol.upper() else symbol))
+                
+    # If timeframe is 1h, 4h, or 1d, fetch real historical data dynamically
+    if timeframe in ["1h", "4h", "1d"]:
+        candles_file = os.path.join(data_dir, f"{fetch_sym.replace('=', '_').replace('^', '')}_candles_{timeframe}.csv")
+        logger.info(f"[BacktestEngine] Dynamically fetching {timeframe} candles for {fetch_sym} via tools/core/data_tool...")
+        try:
+            df_dynamic = fetch_ohlcv(symbol=fetch_sym, timeframe=timeframe, period="2y")
+            df_dynamic_reset = df_dynamic.reset_index()
+            dt_col = df_dynamic_reset.columns[0]
+            # Convert datetime to unix timestamp in seconds
+            df_dynamic_reset['timestamp'] = pd.to_datetime(df_dynamic_reset[dt_col], utc=True).apply(lambda x: int(x.timestamp()))
+            df_dynamic_reset.to_csv(candles_file, index=False)
+            cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
+        except Exception as e_dyn:
+            logger.warning(f"[BacktestEngine] Dynamic candle fetch failed: {e_dyn}, falling back to static files")
+
     is_gold = ("XAU" in symbol.upper()) or ("GOLD" in symbol.upper())
     is_sp500 = any(k in symbol.upper() for k in ["SP", "ES", "US500", "S&P"])
-    if is_gold:
-        if timeframe == "5m":
-            candles_file = os.path.join(data_dir, "xauusd_candles_5m.csv")
-            if not os.path.exists(candles_file):
-                if os.path.exists(os.path.join(data_dir, "xauusd_candles_1m.csv")):
-                    df_1m = pd.read_csv(os.path.join(data_dir, "xauusd_candles_1m.csv"))
-                    df_1m['dt'] = pd.to_datetime(df_1m['timestamp'], unit='s', utc=True)
-                    df_1m = df_1m.set_index('dt').sort_index()
-                    resampled = df_1m.resample('5min', label='left', closed='left').agg({
-                        'timestamp': 'first', 'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
-                    }).dropna().reset_index(drop=True)
-                    resampled['timestamp'] = resampled['timestamp'].astype(int)
-                    resampled.to_csv(candles_file, index=False)
-            elif (time.time() - os.path.getmtime(candles_file) > 3600):
-                if os.path.exists(os.path.join(data_dir, "xauusd_candles_1m.csv")):
-                    try:
+    if not (timeframe in ["1h", "4h", "1d"] and os.path.exists(candles_file)):
+        if is_gold:
+            if timeframe == "5m":
+                candles_file = os.path.join(data_dir, "xauusd_candles_5m.csv")
+                if not os.path.exists(candles_file):
+                    if os.path.exists(os.path.join(data_dir, "xauusd_candles_1m.csv")):
                         df_1m = pd.read_csv(os.path.join(data_dir, "xauusd_candles_1m.csv"))
                         df_1m['dt'] = pd.to_datetime(df_1m['timestamp'], unit='s', utc=True)
                         df_1m = df_1m.set_index('dt').sort_index()
@@ -301,38 +325,49 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
                             'timestamp': 'first', 'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
                         }).dropna().reset_index(drop=True)
                         resampled['timestamp'] = resampled['timestamp'].astype(int)
-                        df_old = pd.read_csv(candles_file)
-                        combined = pd.concat([df_old, resampled], ignore_index=True)
-                        combined.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
-                        combined.sort_values(by="timestamp", inplace=True)
-                        combined.to_csv(candles_file, index=False)
-                    except Exception:
-                        pass
+                        resampled.to_csv(candles_file, index=False)
+                elif (time.time() - os.path.getmtime(candles_file) > 3600):
+                    if os.path.exists(os.path.join(data_dir, "xauusd_candles_1m.csv")):
+                        try:
+                            df_1m = pd.read_csv(os.path.join(data_dir, "xauusd_candles_1m.csv"))
+                            df_1m['dt'] = pd.to_datetime(df_1m['timestamp'], unit='s', utc=True)
+                            df_1m = df_1m.set_index('dt').sort_index()
+                            resampled = df_1m.resample('5min', label='left', closed='left').agg({
+                                'timestamp': 'first', 'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+                            }).dropna().reset_index(drop=True)
+                            resampled['timestamp'] = resampled['timestamp'].astype(int)
+                            df_old = pd.read_csv(candles_file)
+                            combined = pd.concat([df_old, resampled], ignore_index=True)
+                            combined.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+                            combined.sort_values(by="timestamp", inplace=True)
+                            combined.to_csv(candles_file, index=False)
+                        except Exception:
+                            pass
+                cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
+            else:
+                candles_file = os.path.join(data_dir, "xauusd_candles_1m.csv")
+                if not os.path.exists(candles_file) or (time.time() - os.path.getmtime(candles_file) > 3600):
+                    try:
+                        data_manager.sync_xauusd_scalp_candles(output_path=candles_file)
+                    except Exception as e_sync:
+                        logger.warning(f"[BacktestEngine] Sync XAUUSD candles warning: {e_sync}")
+                cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
+        elif is_sp500:
+            candles_file = os.path.join(data_dir, "sp500_candles_1m.csv")
             cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
         else:
-            candles_file = os.path.join(data_dir, "xauusd_candles_1m.csv")
-            if not os.path.exists(candles_file) or (time.time() - os.path.getmtime(candles_file) > 3600):
-                try:
-                    data_manager.sync_xauusd_scalp_candles(output_path=candles_file)
-                except Exception as e_sync:
-                    logger.warning(f"[BacktestEngine] Sync XAUUSD candles warning: {e_sync}")
-            cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
-    elif is_sp500:
-        candles_file = os.path.join(data_dir, "sp500_candles_1m.csv")
-        cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
-    else:
-        if timeframe == "5m" and os.path.exists(os.path.join(data_dir, "btc_candles_5m.csv")):
-            candles_file = os.path.join(data_dir, "btc_candles_5m.csv")
-        else:
-            candles_file = os.path.join(data_dir, "candles_15m.csv")
+            if timeframe == "5m" and os.path.exists(os.path.join(data_dir, "btc_candles_5m.csv")):
+                candles_file = os.path.join(data_dir, "btc_candles_5m.csv")
+            else:
+                candles_file = os.path.join(data_dir, "candles_15m.csv")
 
-        if not os.path.exists(candles_file) or (time.time() - os.path.getmtime(candles_file) > 3600):
-            logger.info(f"[BacktestEngine] Syncing 30 days of real market data for {symbol}...")
-            try:
-                data_manager.sync_30d_candles(symbol=symbol, output_path=candles_file)
-            except Exception as e_sync:
-                logger.warning(f"[BacktestEngine] Sync 30d candles warning: {e_sync}")
-        cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
+            if not os.path.exists(candles_file) or (time.time() - os.path.getmtime(candles_file) > 3600):
+                logger.info(f"[BacktestEngine] Syncing 30 days of real market data for {symbol}...")
+                try:
+                    data_manager.sync_30d_candles(symbol=symbol, output_path=candles_file)
+                except Exception as e_sync:
+                    logger.warning(f"[BacktestEngine] Sync 30d candles warning: {e_sync}")
+            cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
 
     # Always generate fresh features.csv
     logger.info(f"[BacktestEngine] Generating fresh feature set from {candles_file}...")
