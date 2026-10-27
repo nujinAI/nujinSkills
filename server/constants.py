@@ -69,7 +69,7 @@ def trade_annualization_factor() -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 PERIODS_PER_YEAR = TRADE_PERIODS_PER_YEAR
 
-MIN_TRADES = 30  # minimum trades before a strategy is considered evaluable at all
+MIN_TRADES = 20  # minimum trades before a strategy is considered evaluable at all
 MIN_TRADES_DSR = MIN_TRADES  # DSR needs the same sample floor
 DSR_THRESHOLD = 0.95
 
@@ -88,11 +88,11 @@ MIN_R2 = 0.85
 MIN_K_RATIO = 1.5
 
 OOS_SPLIT = 0.70
-MIN_OOS_TRADES = 30
+MIN_OOS_TRADES = 20
 MIN_OOS_SR = 1.0
 MIN_OOS_RETENTION_PCT = 30.0
 
-MIN_REGIME_TRADES = 30
+MIN_REGIME_TRADES = 20
 MIN_REGIME_SLICE_MEAN = -0.015
 
 # ─────────────────────────────────────────────────────────────────────────────

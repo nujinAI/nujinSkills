@@ -330,11 +330,33 @@ def _save_canonical_and_legacy(symbol: str, timeframe: str, df: pd.DataFrame, le
     """Persists OHLCV DataFrame to the canonical `data/market/<SLUG>_<TF>.csv` store and updates catalog."""
     canon_path = get_market_dataset_path(symbol, timeframe, check_legacy=False)
     os.makedirs(os.path.dirname(canon_path), exist_ok=True)
+
+    # Protect deep historical datasets from being truncated by short live slices:
+    if os.path.exists(canon_path):
+        try:
+            df_existing = pd.read_csv(canon_path)
+            if len(df_existing) > len(df):
+                df_merged = pd.concat([df_existing, df], ignore_index=True)
+                df_merged.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+                df_merged.sort_values(by="timestamp", inplace=True)
+                df = df_merged
+        except Exception:
+            pass
+
     df.to_csv(canon_path, index=False)
     update_market_catalog(symbol, timeframe, canon_path, df, source=source)
     if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(canon_path):
         try:
             os.makedirs(os.path.dirname(legacy_path), exist_ok=True)
+            if os.path.exists(legacy_path):
+                try:
+                    df_leg_existing = pd.read_csv(legacy_path)
+                    if len(df_leg_existing) > len(df):
+                        df_leg_merged = pd.concat([df_leg_existing, df], ignore_index=True).drop_duplicates(subset=["timestamp"], keep="last")
+                        df_leg_merged.sort_values(by="timestamp", inplace=True)
+                        df = df_leg_merged
+                except Exception:
+                    pass
             df.to_csv(legacy_path, index=False)
         except Exception:
             pass
@@ -352,7 +374,32 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
     legacy_5m = os.path.join(_ROOT, "data", "xauusd_candles_5m.csv")
     now_ts = int(time.time())
 
-    # 1. Check if cached CSV exists and is fresh (within 120 seconds)
+    # 1. For 5m interval, return cached 5m dataset directly if available
+    if interval == "5m":
+        for p in (csv_5m_path, legacy_5m):
+            if os.path.exists(p) and os.path.getsize(p) > 50000:
+                try:
+                    df_5m = pd.read_csv(p)
+                    time_col = "timestamp" if "timestamp" in df_5m.columns else "time"
+                    df_5m = df_5m.dropna(subset=[time_col, "close"]).reset_index(drop=True)
+                    if len(df_5m) >= 500:
+                        bars_5m = [
+                            {
+                                "time": int(r.get("timestamp", r.get("time", 0))),
+                                "timestamp": int(r.get("timestamp", r.get("time", 0))),
+                                "open": round(float(r["open"]), 2),
+                                "high": round(float(r["high"]), 2),
+                                "low": round(float(r["low"]), 2),
+                                "close": round(float(r["close"]), 2),
+                                "volume": round(float(r.get("volume", 10.0)), 2)
+                            }
+                            for r in df_5m.to_dict(orient="records")
+                        ]
+                        return bars_5m[-count:] if count else bars_5m
+                except Exception:
+                    pass
+
+    # 2. Check if cached 1m CSV exists and is fresh (within 120 seconds)
     if not force_refresh and os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path)
@@ -362,7 +409,8 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
                 last_ts = int(df.iloc[-1][time_col])
                 if (now_ts - last_ts) <= 120:
                     try:
-                        if not os.path.exists(csv_5m_path) or (os.path.getmtime(csv_path) > os.path.getmtime(csv_5m_path)):
+                        has_deep_5m = (os.path.exists(legacy_5m) and os.path.getsize(legacy_5m) > 100000) or (os.path.exists(csv_5m_path) and os.path.getsize(csv_5m_path) > 100000)
+                        if not has_deep_5m and (not os.path.exists(csv_5m_path) or (os.path.getmtime(csv_path) > os.path.getmtime(csv_5m_path))):
                             full_records = df.to_dict(orient="records")
                             full_bars = [
                                 {
@@ -379,6 +427,16 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
                             resampled_full_5m = resample_candles(full_bars, "5m")
                             if resampled_full_5m and len(resampled_full_5m) > 50:
                                 df_new_5m = pd.DataFrame(resampled_full_5m)
+                                if os.path.exists(legacy_5m):
+                                    try:
+                                        df_old_5m = pd.read_csv(legacy_5m)
+                                        if len(df_old_5m) > len(df_new_5m):
+                                            df_merged_5m = pd.concat([df_old_5m, df_new_5m], ignore_index=True)
+                                            df_merged_5m.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+                                            df_merged_5m.sort_values(by="timestamp", inplace=True)
+                                            df_new_5m = df_merged_5m
+                                    except Exception:
+                                        pass
                                 _save_canonical_and_legacy("XAU/USD", "5m", df_new_5m, legacy_5m, source="resampled_1m")
                     except Exception as e_full_5m:
                         logger.warning(f"[DataManager] Could not sync 5m resampled cache: {e_full_5m}")

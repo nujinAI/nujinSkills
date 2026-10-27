@@ -86,9 +86,14 @@ def stop_frontend():
         try:
             with open(PID_FILE, "r") as f:
                 pid = int(f.read().strip())
-            os.kill(pid, 9)
+            # Kill process group since daemon was spawned with os.setsid
+            try:
+                os.killpg(os.getpgid(pid), 9)
+                print(f"[FrontendControl] Killed process group for PID {pid}")
+            except Exception:
+                os.kill(pid, 9)
+                print(f"[FrontendControl] Killed process with PID {pid}")
             os.remove(PID_FILE)
-            print(f"[FrontendControl] Killed process with PID {pid}")
         except Exception as e:
             print(f"[FrontendControl] Failed to stop frontend process: {e}")
             if os.path.exists(PID_FILE):

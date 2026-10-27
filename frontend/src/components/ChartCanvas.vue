@@ -588,6 +588,9 @@ watch(
     rawPrimitiveBoxes.value = prims.boxes || [];
     rawPrimitiveStructures.value = prims.structures || [];
     rawPrimitiveSetups.value = prims.setups || [];
+    if (!prims.boxes || prims.boxes.length === 0) renderedZoneBoxes.value = [];
+    if (!prims.structures || prims.structures.length === 0) renderedStructures.value = [];
+    if (!prims.setups || prims.setups.length === 0) renderedSetupBox.value = null;
     applyPrimitiveLevels(prims.levels || []);
     applyStrategyIndicators();
     nextTick(() => {

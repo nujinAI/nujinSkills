@@ -27,6 +27,12 @@ except ImportError:
 
 logger = logging.getLogger("BacktestEngine")
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_PARENT = os.path.abspath(os.path.join(_ROOT, ".."))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+_ZILLIONS = os.path.join(_PARENT, "zillionsAlpha")
+if os.path.exists(_ZILLIONS) and _ZILLIONS not in sys.path:
+    sys.path.insert(0, _ZILLIONS)
 
 def _ensure_freqtrade_shim():
     """Ensures freqtrade.strategy mocks are available in sys.modules so strategy files can be imported cleanly."""
@@ -87,10 +93,10 @@ def load_strategy_instance(strategy_name: str) -> Optional[Any]:
 
         # Locate strategy class in module
         for attr_name in dir(mod):
-            if attr_name == "IStrategy":
+            if attr_name in ("IStrategy", "type"):
                 continue
             obj = getattr(mod, attr_name)
-            if isinstance(obj, type) and hasattr(obj, "populate_indicators") and hasattr(obj, "populate_entry_trend"):
+            if isinstance(obj, type) and ((hasattr(obj, "populate_indicators") and hasattr(obj, "populate_entry_trend")) or hasattr(obj, "generate_signals")):
                 logger.info(f"[BacktestEngine] Successfully loaded strategy class: {attr_name} from {strat_path}")
                 return obj()
     except Exception as e:
@@ -118,6 +124,9 @@ def resolve_strategy_metadata(strategy_name: str, timeframe_override: Optional[s
     strat_inst = load_strategy_instance(clean_name)
     strat_inst_symbol = getattr(strat_inst, "symbol", None) if strat_inst else None
     strat_inst_timeframe = getattr(strat_inst, "timeframe", None) if strat_inst else None
+    if clean_name == "GoldSessionLiquidityReversal":
+        strat_inst_symbol = strat_inst_symbol or "OANDA:XAUUSD"
+        strat_inst_timeframe = strat_inst_timeframe or "5m"
 
     # Determine symbol and timeframe dynamically
     symbol = strat_inst_symbol or \
@@ -130,7 +139,7 @@ def resolve_strategy_metadata(strategy_name: str, timeframe_override: Optional[s
                 strat_inst_timeframe or \
                 (strat_record.get("timeframe") if strat_record else None) or \
                 (curr_state.get("timeframe") if is_active_sys else None) or \
-                ("1m" if any(k in symbol.upper() for k in ["XAU", "SP", "ES", "S&P"]) else "15m")
+                ("5m" if "GOLDSESSION" in clean_name.upper() else ("1m" if any(k in symbol.upper() for k in ["XAU", "SP", "ES", "S&P"]) else "15m"))
 
     target_profile = (strat_record.get("target_profile") if strat_record else None) or \
                      (curr_state.get("target_profile") if is_active_sys else None) or \
@@ -204,6 +213,52 @@ def compute_strategy_parameter_stability_matrix(
     if strat_inst is None or len(df_c) < 60:
         return None
     try:
+        if hasattr(strat_inst, "generate_signals"):
+            from tools.core.backtest_engine import run_discrete_backtest
+            df_idx = df_c.copy()
+            if 'timestamp' in df_idx.columns:
+                df_idx['dt'] = pd.to_datetime(df_idx['timestamp'], unit='s', utc=True)
+                df_idx = df_idx.set_index('dt')
+            sl_base = float(getattr(strat_inst, "sl_atr_mult", 1.0))
+            tp_base = float(getattr(strat_inst, "tp_atr_mult", 1.5))
+            matrix: List[List[float]] = []
+            for sl_f in [0.92, 1.08]:
+                row: List[float] = []
+                for tp_f in [0.92, 1.08]:
+                    try:
+                        strat_copy = strat_inst.__class__(
+                            account_size=getattr(strat_inst, "account_size", 100000.0),
+                            risk_pct_1r=getattr(strat_inst, "risk_pct_1r", 0.0035),
+                            max_daily_losses=getattr(strat_inst, "max_daily_losses", 1),
+                            daily_profit_cap=getattr(strat_inst, "daily_profit_cap", 520.0),
+                            sl_atr_mult=sl_base * sl_f,
+                            tp_atr_mult=tp_base * tp_f,
+                            max_hold_bars=getattr(strat_inst, "max_hold_bars", 6)
+                        )
+                        sig = strat_copy.generate_signals(df_idx)
+                        res = run_discrete_backtest(
+                            df=df_idx,
+                            signals=sig,
+                            symbol="GC=F" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else symbol,
+                            dollar_risk_1r=getattr(strat_copy, "dollar_risk_1r", 350.0),
+                            max_daily_losses=getattr(strat_copy, "max_daily_losses", 1),
+                            daily_profit_cap=getattr(strat_copy, "daily_profit_cap", 520.0),
+                            max_hold_bars=getattr(strat_copy, "max_hold_bars", 6),
+                            close_eod=True
+                        )
+                        rets = [t.pnl_dollars / getattr(strat_inst, "account_size", 100000.0) for t in res["trades"]]
+                        if len(rets) >= 5:
+                            m_r = float(np.mean(rets))
+                            s_r = float(np.std(rets, ddof=1)) or 1e-6
+                            sr_p = float((m_r / s_r) * trade_annualization_factor())
+                        else:
+                            sr_p = 0.0
+                    except Exception:
+                        sr_p = 0.0
+                    row.append(sr_p)
+                matrix.append(row)
+            return np.asarray(matrix, dtype=float)
+
         from tools.vectorized_screener import simulate_trades_fast
 
         enter_long = (df_c.get("enter_long", pd.Series(0, index=df_c.index)) == 1)
@@ -316,31 +371,15 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         if is_gold:
             if timeframe == "5m":
                 candles_file = os.path.join(data_dir, "xauusd_candles_5m.csv")
-                if not os.path.exists(candles_file):
-                    if os.path.exists(os.path.join(data_dir, "xauusd_candles_1m.csv")):
-                        df_1m = pd.read_csv(os.path.join(data_dir, "xauusd_candles_1m.csv"))
-                        df_1m['dt'] = pd.to_datetime(df_1m['timestamp'], unit='s', utc=True)
-                        df_1m = df_1m.set_index('dt').sort_index()
-                        resampled = df_1m.resample('5min', label='left', closed='left').agg({
-                            'timestamp': 'first', 'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
-                        }).dropna().reset_index(drop=True)
-                        resampled['timestamp'] = resampled['timestamp'].astype(int)
-                        resampled.to_csv(candles_file, index=False)
-                elif (time.time() - os.path.getmtime(candles_file) > 3600):
-                    if os.path.exists(os.path.join(data_dir, "xauusd_candles_1m.csv")):
+                if not os.path.exists(candles_file) or os.path.getsize(candles_file) < 20000:
+                    if os.path.exists("/tmp/oanda_xauusd_5m.csv"):
                         try:
-                            df_1m = pd.read_csv(os.path.join(data_dir, "xauusd_candles_1m.csv"))
-                            df_1m['dt'] = pd.to_datetime(df_1m['timestamp'], unit='s', utc=True)
-                            df_1m = df_1m.set_index('dt').sort_index()
-                            resampled = df_1m.resample('5min', label='left', closed='left').agg({
-                                'timestamp': 'first', 'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
-                            }).dropna().reset_index(drop=True)
-                            resampled['timestamp'] = resampled['timestamp'].astype(int)
-                            df_old = pd.read_csv(candles_file)
-                            combined = pd.concat([df_old, resampled], ignore_index=True)
-                            combined.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
-                            combined.sort_values(by="timestamp", inplace=True)
-                            combined.to_csv(candles_file, index=False)
+                            df_src = pd.read_csv("/tmp/oanda_xauusd_5m.csv")
+                            dt = pd.to_datetime(df_src['Datetime'], utc=True)
+                            df_src['timestamp'] = dt.apply(lambda x: int(x.timestamp()))
+                            df_src['time'] = df_src['timestamp']
+                            df_src = df_src[['time', 'timestamp', 'open', 'high', 'low', 'close', 'volume']]
+                            df_src.to_csv(candles_file, index=False)
                         except Exception:
                             pass
                 cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
@@ -445,13 +484,14 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         trail_pos = float(getattr(strat_inst, "trailing_stop_positive", 0.0035))
         trail_offset = float(getattr(strat_inst, "trailing_stop_positive_offset", 0.0070))
 
-        # Populate strategy indicators, entry, and exit trends
-        try:
-            df_c = strat_inst.populate_indicators(df_c, {})
-            df_c = strat_inst.populate_entry_trend(df_c, {})
-            df_c = strat_inst.populate_exit_trend(df_c, {})
-        except Exception as e_strat_eval:
-            logger.error(f"[BacktestEngine] Error executing strategy trend functions: {e_strat_eval}")
+        # Populate strategy indicators, entry, and exit trends (for legacy Freqtrade strategies)
+        if hasattr(strat_inst, "populate_indicators"):
+            try:
+                df_c = strat_inst.populate_indicators(df_c, {})
+                df_c = strat_inst.populate_entry_trend(df_c, {})
+                df_c = strat_inst.populate_exit_trend(df_c, {})
+            except Exception as e_strat_eval:
+                logger.error(f"[BacktestEngine] Error executing strategy trend functions: {e_strat_eval}")
     else:
         # Fallback parameters from data/final_rules.json or defaults
         can_short = True
@@ -509,216 +549,299 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
 
     cutoff_time = (int(df_c['timestamp'].iloc[-1]) - int(days * 86400)) if (days and days > 0 and len(df_c) > 0 and 'timestamp' in df_c.columns) else 0
 
-    i = 100
-    while i < n - 16:
-        c = df_c.iloc[i]
-        curr_close = float(c['close'])
-        curr_low = float(c['low'])
-        curr_high = float(c['high'])
-        curr_open = float(c['open'])
-        bar_time = int(c['timestamp']) if 'timestamp' in c else int(c.get('time', 0))
+    if strat_inst and hasattr(strat_inst, "generate_signals"):
+        from tools.core.backtest_engine import run_discrete_backtest
+        df_idx = df_c.copy()
+        df_idx['dt'] = pd.to_datetime(df_idx['timestamp'], unit='s', utc=True)
+        df_idx = df_idx.set_index('dt')
+        signals = strat_inst.generate_signals(df_idx)
 
-        is_long = bool(c['enter_long'] == 1)
-        is_short = bool(c['enter_short'] == 1) if can_short else False
+        acct_size = float(getattr(strat_inst, "account_size", 100000.0))
+        dollar_risk = float(getattr(strat_inst, "dollar_risk_1r", acct_size * getattr(strat_inst, "risk_pct_1r", 0.0035)))
+        max_daily_l = int(getattr(strat_inst, "max_daily_losses", 1))
+        daily_cap = getattr(strat_inst, "daily_profit_cap", None)
+        max_hold_b = int(getattr(strat_inst, "max_hold_bars", 6))
 
-        # If both long and short trigger simultaneously, skip to prevent whipsaw
-        if is_long and is_short:
-            is_short = False
+        res_disc = run_discrete_backtest(
+            df=df_idx,
+            signals=signals,
+            symbol="GC=F" if is_gold else symbol,
+            account_size=acct_size,
+            dollar_risk_1r=dollar_risk,
+            max_daily_losses=max_daily_l,
+            daily_profit_cap=daily_cap,
+            max_hold_bars=max_hold_b,
+            close_eod=True
+        )
 
-        if (is_long or is_short) and (bar_time >= cutoff_time):
-            side = "LONG" if is_long else "SHORT"
-            entry_time = bar_time
-
-            # Weekend closure safeguard for traditional markets
-            if (is_gold or is_sp500) and entry_time > 0:
-                dt_b = datetime.fromtimestamp(entry_time, tz=timezone.utc)
-                if (dt_b.weekday() == 5) or (dt_b.weekday() == 4 and dt_b.hour >= 21) or (dt_b.weekday() == 6 and dt_b.hour < 22):
-                    i += 1
-                    continue
-
-            # Strict Realistic Execution (VectorBT / Freqtrade standard)
-            # A signal on bar i is confirmed only when bar i closes.
-            # The earliest physical fill is strictly the Close of bar i (or Open of bar i+1).
-            # Intrabar fills on the signal candle are strictly prohibited to prevent lookahead bias.
-            entry_price = round(curr_close, 2)
-            spread_pts, fee_pct, slippage_pts = resolve_asset_friction(symbol, entry_price)
-            entry_fill = round(entry_price + (spread_pts / 2.0) + slippage_pts if side == "LONG" else entry_price - (spread_pts / 2.0) - slippage_pts, 2)
-
-            atr_val = float(c['atr_14']) if ('atr_14' in c and not np.isnan(c['atr_14'])) else entry_price * 0.005
-
-            # Dynamic or Structural Stop Loss
-            if 'structural_sl' in c and not np.isnan(c['structural_sl']):
-                stop_loss = round(float(c['structural_sl']), 2)
-            elif atr_sl_mult is not None and atr_val > 0:
-                stop_loss = round(entry_price - atr_sl_mult * atr_val if side == "LONG" else entry_price + atr_sl_mult * atr_val, 2)
-            else:
-                stop_loss = round(entry_price * (1.0 - stoploss_pct) if side == "LONG" else entry_price * (1.0 + stoploss_pct), 2)
-
-            # Dynamic or Structural Take Profit
-            if 'structural_tp' in c and not np.isnan(c['structural_tp']):
-                take_profit = round(float(c['structural_tp']), 2)
-            elif atr_tp_mult is not None and atr_val > 0:
-                take_profit = round(entry_price + atr_tp_mult * atr_val if side == "LONG" else entry_price - atr_tp_mult * atr_val, 2)
-            elif minimal_roi:
-                roi_0 = float(minimal_roi.get("0", minimal_roi.get(0, 0.035 if not is_gold else 0.005)))
-                take_profit = round(entry_price * (1.0 + roi_0) if side == "LONG" else entry_price * (1.0 - roi_0), 2)
-            else:
-                take_profit = round(entry_price * (1.0 + stoploss_pct * 1.5) if side == "LONG" else entry_price * (1.0 - stoploss_pct * 1.5), 2)
-
-            # Strict Quantitative Risk Sanity Check
-            if side == "LONG" and (stop_loss >= entry_price or take_profit <= entry_price):
-                i += 1
-                continue
-            elif side == "SHORT" and (stop_loss <= entry_price or take_profit >= entry_price):
-                i += 1
+        for idx, t in enumerate(res_disc["trades"]):
+            entry_ts = int(t.entry_time.timestamp()) if hasattr(t.entry_time, 'timestamp') else int(t.entry_time)
+            exit_ts = int(t.exit_time.timestamp()) if hasattr(t.exit_time, 'timestamp') else int(t.exit_time)
+            if entry_ts < cutoff_time:
                 continue
 
-            initial_sl = stop_loss
-            initial_tp = take_profit
+            side = "LONG" if t.direction == 1 else "SHORT"
+            pnl_pct = round((t.pnl_dollars / acct_size) * 100.0, 4)
+            spread_pts, fee_pct, slippage_pts = resolve_asset_friction(symbol, t.entry_price)
+            friction_bps = round(((spread_pts * 2.0 / t.entry_price) + (fee_pct * 2.0) + (slippage_pts * 2.0 / t.entry_price)) * 10000.0, 1)
 
-            # Sequential exit resolution
-            exit_idx = i + 1
-            exit_price = entry_price
-            exit_reason = "TIME_EXPIRATION" if getattr(strat_inst, "time_invalidation_bars", None) else "BARS_HOLD"
-            final_exit_idx = exit_idx
+            exit_reason_map = {
+                "TP": "TAKE_PROFIT",
+                "SL": "STOP_LOSS",
+                "TIME_STOP": "TIME_EXPIRATION",
+                "EOD": "EOD"
+            }
+            exit_reason = exit_reason_map.get(t.exit_reason, t.exit_reason)
 
-            while exit_idx < min(i + max_bars + 1, n):
-                bar_curr = df_c.iloc[exit_idx]
-                curr_l = float(bar_curr['low'])
-                curr_h = float(bar_curr['high'])
-                curr_c = float(bar_curr['close'])
-                bars_held = exit_idx - i
-
-                # Target Take Profit: Preserve ATR-based TP if configured, otherwise use time-decaying minimal_roi
-                if atr_tp_mult is not None and atr_val > 0:
-                    target_tp = take_profit
-                elif minimal_roi:
-                    target_tp = take_profit
-                    for step_bar in sorted(roi_keys, reverse=True):
-                        if bars_held >= step_bar:
-                            step_roi = float(minimal_roi.get(str(step_bar), minimal_roi.get(step_bar, 0.0)))
-                            if step_roi > 0:
-                                target_tp = round(entry_price * (1.0 + step_roi) if side == "LONG" else entry_price * (1.0 - step_roi), 2)
-                            break
-                else:
-                    target_tp = take_profit
-
-                # Pessimistic Intra-Bar Exit Resolution:
-                # 1. Always evaluate existing Stop-Loss FIRST (worst-case intra-bar path)
-                # 2. Then evaluate Take-Profit / Strategy Exit
-                # 3. Only ratchet Trailing Stop at the END of the bar if the trade survived the bar
-                if side == "LONG":
-                    if curr_l <= stop_loss:
-                        exit_price = stop_loss
-                        exit_reason = "TRAIL_STOP" if stop_loss > entry_price else "STOP_LOSS"
-                        final_exit_idx = exit_idx
-                        break
-                    elif curr_h >= target_tp and bars_held >= min_bars:
-                        exit_price = target_tp
-                        exit_reason = "TAKE_PROFIT"
-                        final_exit_idx = exit_idx
-                        break
-                    elif bars_held >= min_bars and bar_curr.get('exit_long', 0) == 1:
-                        exit_price = curr_c
-                        exit_reason = "STRATEGY_EXIT"
-                        final_exit_idx = exit_idx
-                        break
-                else:  # SHORT
-                    if curr_h >= stop_loss:
-                        exit_price = stop_loss
-                        exit_reason = "TRAIL_STOP" if stop_loss < entry_price else "STOP_LOSS"
-                        final_exit_idx = exit_idx
-                        break
-                    elif curr_l <= target_tp and bars_held >= min_bars:
-                        exit_price = target_tp
-                        exit_reason = "TAKE_PROFIT"
-                        final_exit_idx = exit_idx
-                        break
-                    elif bars_held >= min_bars and bar_curr.get('exit_short', 0) == 1:
-                        exit_price = curr_c
-                        exit_reason = "STRATEGY_EXIT"
-                        final_exit_idx = exit_idx
-                        break
-
-                # Ratchet Trailing Stop at bar close for the NEXT bar
-                if use_trailing and bars_held >= 1:
-                    if side == "LONG":
-                        max_gain = (curr_h - entry_price) / entry_price
-                        if max_gain >= trail_offset:
-                            new_sl = round(curr_h * (1.0 - trail_pos), 2)
-                            stop_loss = max(stop_loss, new_sl)
-                    else:
-                        max_gain = (entry_price - curr_l) / entry_price
-                        if max_gain >= trail_offset:
-                            new_sl = round(curr_l * (1.0 + trail_pos), 2)
-                            stop_loss = min(stop_loss, new_sl)
-
-                exit_price = curr_c
-                final_exit_idx = exit_idx
-                exit_idx += 1
-
-            exit_bar = df_c.iloc[final_exit_idx]
-            exit_time = int(exit_bar['timestamp']) if 'timestamp' in exit_bar else int(exit_bar.get('time', 0))
-
-            # Physical fill accounting (spread + slippage + taker fees)
-            if side == "LONG":
-                actual_exit_fill = round(exit_price - (spread_pts / 2.0) - slippage_pts, 2)
-                gross_pnl_pct = ((actual_exit_fill - entry_fill) / entry_fill) * 100.0
-            else:
-                actual_exit_fill = round(exit_price + (spread_pts / 2.0) + slippage_pts, 2)
-                gross_pnl_pct = ((entry_fill - actual_exit_fill) / entry_fill) * 100.0
-
-            total_fee_pct = (fee_pct * 2.0) * 100.0
-            pnl_pct = round(gross_pnl_pct - total_fee_pct, 4)
-
-            actual_tp = exit_price if exit_reason == "TAKE_PROFIT" else target_tp
-            actual_sl = exit_price if exit_reason == "STOP_LOSS" else stop_loss
-
-            price_fmt = f"${entry_fill:.2f}" if (is_gold or is_sp500) else f"${entry_fill:,.1f}"
+            price_fmt = f"${t.entry_price:.2f}"
             trade_markers.append({
-                "time": entry_time,
+                "time": entry_ts,
                 "position": "belowBar" if side == "LONG" else "aboveBar",
                 "color": "#26a69a" if side == "LONG" else "#ef5350",
                 "shape": "arrowUp" if side == "LONG" else "arrowDown",
                 "text": f"[BT] {side} {price_fmt}",
-                "entry_price": entry_fill,
-                "raw_signal_price": entry_price,
-                "stop_loss": initial_sl,
-                "take_profit": initial_tp,
-                "trailing_stop_exit": stop_loss if exit_reason == "TRAIL_STOP" else None,
+                "entry_price": round(float(t.entry_price), 2),
+                "raw_signal_price": round(float(t.entry_price), 2),
+                "stop_loss": round(float(t.stop_loss), 2),
+                "take_profit": round(float(t.target), 2),
                 "side": side
             })
-
             trade_markers.append({
-                "time": exit_time,
+                "time": exit_ts,
                 "position": "aboveBar" if side == "LONG" else "belowBar",
-                "color": "#26a69a" if pnl_pct >= 0 else "#ef5350",
+                "color": "#26a69a" if t.pnl_dollars >= 0 else "#ef5350",
                 "shape": "arrowDown" if side == "LONG" else "arrowUp",
                 "text": f"[BT] EXIT {pnl_pct:+.2f}%"
             })
 
-            friction_bps = round(((spread_pts * 2.0 / entry_price) + (fee_pct * 2.0) + (slippage_pts * 2.0 / entry_price)) * 10000.0, 1)
-
             trades_detail.append({
                 "id": len(trades_detail) + 1,
                 "side": side,
-                "entry_time": entry_time,
-                "entry_price": entry_fill,
-                "raw_signal_price": entry_price,
-                "stop_loss": actual_sl,
-                "take_profit": actual_tp,
-                "exit_time": exit_time,
-                "exit_price": actual_exit_fill,
-                "raw_exit_price": exit_price,
+                "entry_time": entry_ts,
+                "entry_price": round(float(t.entry_price), 2),
+                "raw_signal_price": round(float(t.entry_price), 2),
+                "stop_loss": round(float(t.stop_loss), 2),
+                "take_profit": round(float(t.target), 2),
+                "exit_time": exit_ts,
+                "exit_price": round(float(t.exit_price), 2),
+                "raw_exit_price": round(float(t.exit_price), 2),
                 "exit_reason": exit_reason,
                 "friction_bps": friction_bps,
-                "pnl_pct": pnl_pct
+                "pnl_pct": pnl_pct,
+                "pnl_dollars": round(float(t.pnl_dollars), 2),
+                "pnl_r": round(float(t.pnl_r), 3)
             })
+    else:
+        i = 100
+        while i < n - 16:
+            c = df_c.iloc[i]
+            curr_close = float(c['close'])
+            curr_low = float(c['low'])
+            curr_high = float(c['high'])
+            curr_open = float(c['open'])
+            bar_time = int(c['timestamp']) if 'timestamp' in c else int(c.get('time', 0))
 
-            # Advance index past exit candle or apply cooldown to prevent overlapping trades/rapid churn
-            i = max(final_exit_idx + 1, i + (25 if is_sp500 else 1))
-        else:
-            i += 1
+            is_long = bool(c['enter_long'] == 1)
+            is_short = bool(c['enter_short'] == 1) if can_short else False
+
+            # If both long and short trigger simultaneously, skip to prevent whipsaw
+            if is_long and is_short:
+                is_short = False
+
+            if (is_long or is_short) and (bar_time >= cutoff_time):
+                side = "LONG" if is_long else "SHORT"
+                entry_time = bar_time
+
+                # Weekend closure safeguard for traditional markets
+                if (is_gold or is_sp500) and entry_time > 0:
+                    dt_b = datetime.fromtimestamp(entry_time, tz=timezone.utc)
+                    if (dt_b.weekday() == 5) or (dt_b.weekday() == 4 and dt_b.hour >= 21) or (dt_b.weekday() == 6 and dt_b.hour < 22):
+                        i += 1
+                        continue
+
+                # Strict Realistic Execution (VectorBT / Freqtrade standard)
+                # A signal on bar i is confirmed only when bar i closes.
+                # The earliest physical fill is strictly the Close of bar i (or Open of bar i+1).
+                # Intrabar fills on the signal candle are strictly prohibited to prevent lookahead bias.
+                entry_price = round(curr_close, 2)
+                spread_pts, fee_pct, slippage_pts = resolve_asset_friction(symbol, entry_price)
+                entry_fill = round(entry_price + (spread_pts / 2.0) + slippage_pts if side == "LONG" else entry_price - (spread_pts / 2.0) - slippage_pts, 2)
+
+                atr_val = float(c['atr_14']) if ('atr_14' in c and not np.isnan(c['atr_14'])) else entry_price * 0.005
+
+                # Dynamic or Structural Stop Loss
+                if 'structural_sl' in c and not np.isnan(c['structural_sl']):
+                    stop_loss = round(float(c['structural_sl']), 2)
+                elif atr_sl_mult is not None and atr_val > 0:
+                    stop_loss = round(entry_price - atr_sl_mult * atr_val if side == "LONG" else entry_price + atr_sl_mult * atr_val, 2)
+                else:
+                    stop_loss = round(entry_price * (1.0 - stoploss_pct) if side == "LONG" else entry_price * (1.0 + stoploss_pct), 2)
+
+                # Dynamic or Structural Take Profit
+                if 'structural_tp' in c and not np.isnan(c['structural_tp']):
+                    take_profit = round(float(c['structural_tp']), 2)
+                elif atr_tp_mult is not None and atr_val > 0:
+                    take_profit = round(entry_price + atr_tp_mult * atr_val if side == "LONG" else entry_price - atr_tp_mult * atr_val, 2)
+                elif minimal_roi:
+                    roi_0 = float(minimal_roi.get("0", minimal_roi.get(0, 0.035 if not is_gold else 0.005)))
+                    take_profit = round(entry_price * (1.0 + roi_0) if side == "LONG" else entry_price * (1.0 - roi_0), 2)
+                else:
+                    take_profit = round(entry_price * (1.0 + stoploss_pct * 1.5) if side == "LONG" else entry_price * (1.0 - stoploss_pct * 1.5), 2)
+
+                # Strict Quantitative Risk Sanity Check
+                if side == "LONG" and (stop_loss >= entry_price or take_profit <= entry_price):
+                    i += 1
+                    continue
+                elif side == "SHORT" and (stop_loss <= entry_price or take_profit >= entry_price):
+                    i += 1
+                    continue
+
+                initial_sl = stop_loss
+                initial_tp = take_profit
+
+                # Sequential exit resolution
+                exit_idx = i + 1
+                exit_price = entry_price
+                exit_reason = "TIME_EXPIRATION" if getattr(strat_inst, "time_invalidation_bars", None) else "BARS_HOLD"
+                final_exit_idx = exit_idx
+
+                while exit_idx < min(i + max_bars + 1, n):
+                    bar_curr = df_c.iloc[exit_idx]
+                    curr_l = float(bar_curr['low'])
+                    curr_h = float(bar_curr['high'])
+                    curr_c = float(bar_curr['close'])
+                    bars_held = exit_idx - i
+
+                    # Target Take Profit: Preserve ATR-based TP if configured, otherwise use time-decaying minimal_roi
+                    if atr_tp_mult is not None and atr_val > 0:
+                        target_tp = take_profit
+                    elif minimal_roi:
+                        target_tp = take_profit
+                        for step_bar in sorted(roi_keys, reverse=True):
+                            if bars_held >= step_bar:
+                                step_roi = float(minimal_roi.get(str(step_bar), minimal_roi.get(step_bar, 0.0)))
+                                if step_roi > 0:
+                                    target_tp = round(entry_price * (1.0 + step_roi) if side == "LONG" else entry_price * (1.0 - step_roi), 2)
+                                break
+                    else:
+                        target_tp = take_profit
+
+                    # Pessimistic Intra-Bar Exit Resolution:
+                    # 1. Always evaluate existing Stop-Loss FIRST (worst-case intra-bar path)
+                    # 2. Then evaluate Take-Profit / Strategy Exit
+                    # 3. Only ratchet Trailing Stop at the END of the bar if the trade survived the bar
+                    if side == "LONG":
+                        if curr_l <= stop_loss:
+                            exit_price = stop_loss
+                            exit_reason = "TRAIL_STOP" if stop_loss > entry_price else "STOP_LOSS"
+                            final_exit_idx = exit_idx
+                            break
+                        elif curr_h >= target_tp and bars_held >= min_bars:
+                            exit_price = target_tp
+                            exit_reason = "TAKE_PROFIT"
+                            final_exit_idx = exit_idx
+                            break
+                        elif bars_held >= min_bars and bar_curr.get('exit_long', 0) == 1:
+                            exit_price = curr_c
+                            exit_reason = "STRATEGY_EXIT"
+                            final_exit_idx = exit_idx
+                            break
+                    else:  # SHORT
+                        if curr_h >= stop_loss:
+                            exit_price = stop_loss
+                            exit_reason = "TRAIL_STOP" if stop_loss < entry_price else "STOP_LOSS"
+                            final_exit_idx = exit_idx
+                            break
+                        elif curr_l <= target_tp and bars_held >= min_bars:
+                            exit_price = target_tp
+                            exit_reason = "TAKE_PROFIT"
+                            final_exit_idx = exit_idx
+                            break
+                        elif bars_held >= min_bars and bar_curr.get('exit_short', 0) == 1:
+                            exit_price = curr_c
+                            exit_reason = "STRATEGY_EXIT"
+                            final_exit_idx = exit_idx
+                            break
+
+                    # Ratchet Trailing Stop at bar close for the NEXT bar
+                    if use_trailing and bars_held >= 1:
+                        if side == "LONG":
+                            max_gain = (curr_h - entry_price) / entry_price
+                            if max_gain >= trail_offset:
+                                new_sl = round(curr_h * (1.0 - trail_pos), 2)
+                                stop_loss = max(stop_loss, new_sl)
+                        else:
+                            max_gain = (entry_price - curr_l) / entry_price
+                            if max_gain >= trail_offset:
+                                new_sl = round(curr_l * (1.0 + trail_pos), 2)
+                                stop_loss = min(stop_loss, new_sl)
+
+                    exit_price = curr_c
+                    final_exit_idx = exit_idx
+                    exit_idx += 1
+
+                exit_bar = df_c.iloc[final_exit_idx]
+                exit_time = int(exit_bar['timestamp']) if 'timestamp' in exit_bar else int(exit_bar.get('time', 0))
+
+                # Physical fill accounting (spread + slippage + taker fees)
+                if side == "LONG":
+                    actual_exit_fill = round(exit_price - (spread_pts / 2.0) - slippage_pts, 2)
+                    gross_pnl_pct = ((actual_exit_fill - entry_fill) / entry_fill) * 100.0
+                else:
+                    actual_exit_fill = round(exit_price + (spread_pts / 2.0) + slippage_pts, 2)
+                    gross_pnl_pct = ((entry_fill - actual_exit_fill) / entry_fill) * 100.0
+
+                total_fee_pct = (fee_pct * 2.0) * 100.0
+                pnl_pct = round(gross_pnl_pct - total_fee_pct, 4)
+
+                actual_tp = exit_price if exit_reason == "TAKE_PROFIT" else target_tp
+                actual_sl = exit_price if exit_reason == "STOP_LOSS" else stop_loss
+
+                price_fmt = f"${entry_fill:.2f}" if (is_gold or is_sp500) else f"${entry_fill:,.1f}"
+                trade_markers.append({
+                    "time": entry_time,
+                    "position": "belowBar" if side == "LONG" else "aboveBar",
+                    "color": "#26a69a" if side == "LONG" else "#ef5350",
+                    "shape": "arrowUp" if side == "LONG" else "arrowDown",
+                    "text": f"[BT] {side} {price_fmt}",
+                    "entry_price": entry_fill,
+                    "raw_signal_price": entry_price,
+                    "stop_loss": initial_sl,
+                    "take_profit": initial_tp,
+                    "trailing_stop_exit": stop_loss if exit_reason == "TRAIL_STOP" else None,
+                    "side": side
+                })
+
+                trade_markers.append({
+                    "time": exit_time,
+                    "position": "aboveBar" if side == "LONG" else "belowBar",
+                    "color": "#26a69a" if pnl_pct >= 0 else "#ef5350",
+                    "shape": "arrowDown" if side == "LONG" else "arrowUp",
+                    "text": f"[BT] EXIT {pnl_pct:+.2f}%"
+                })
+
+                friction_bps = round(((spread_pts * 2.0 / entry_price) + (fee_pct * 2.0) + (slippage_pts * 2.0 / entry_price)) * 10000.0, 1)
+
+                trades_detail.append({
+                    "id": len(trades_detail) + 1,
+                    "side": side,
+                    "entry_time": entry_time,
+                    "entry_price": entry_fill,
+                    "raw_signal_price": entry_price,
+                    "stop_loss": actual_sl,
+                    "take_profit": actual_tp,
+                    "exit_time": exit_time,
+                    "exit_price": actual_exit_fill,
+                    "raw_exit_price": exit_price,
+                    "exit_reason": exit_reason,
+                    "friction_bps": friction_bps,
+                    "pnl_pct": pnl_pct
+                })
+
+                # Advance index past exit candle or apply cooldown to prevent overlapping trades/rapid churn
+                i = max(final_exit_idx + 1, i + (25 if is_sp500 else 1))
+            else:
+                i += 1
 
     if len(trades_detail) == 0:
         raise RuntimeError(
@@ -934,8 +1057,10 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
     account_growth_models = {}
     
     # Growth multiplier relative to spot price move (calibrated for institutional lot sizing)
-    # Default 0.45% base risk yields 2.819x account leverage edge
-    account_mult = round(float(strat_risk_pct / 0.0016), 4) if strat_risk_pct else 2.8191
+    if strat_inst and hasattr(strat_inst, "generate_signals"):
+        account_mult = 1.0
+    else:
+        account_mult = round(float(strat_risk_pct / 0.0016), 4) if strat_risk_pct else 2.8191
     
     for tier in account_tiers:
         tier_bal = float(tier)
@@ -1066,3 +1191,27 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         logger.warning(f"[BacktestEngine] Could not record backtest in strategy_registry: {e_reg}")
 
     return result
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run Real Quantitative Backtest")
+    parser.add_argument("--strategy", type=str, default="", help="Strategy name")
+    parser.add_argument("--timeframe", type=str, default=None, help="Timeframe override")
+    parser.add_argument("--days", type=int, default=None, help="Lookback days window")
+    parser.add_argument("--save-active", action="store_true", help="Save as active strategy in state.json")
+    args = parser.parse_args()
+
+    res = run_real_backtest(
+        strategy_name=args.strategy,
+        save_as_active=args.save_active,
+        timeframe_override=args.timeframe,
+        days=args.days
+    )
+    s = res["summary"]
+    print(f"\n=== BACKTEST COMPLETE: {res['strategy']} ===")
+    print(f"Symbol: {res['symbol']} | Timeframe: {res['timeframe']}")
+    print(f"Trades: {s['trades']} | Win Rate: {s['win_rate']*100:.1f}% | Profit Factor: {s['profit_factor']}")
+    print(f"Sharpe: {s['sharpe']} | DSR: {s['dsr']} | Max DD: {s['max_drawdown']*100:.2f}%")
+    print(f"Period: {s['period_label']} ({s['candles_count']} bars)")
+

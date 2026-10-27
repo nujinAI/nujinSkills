@@ -43,6 +43,7 @@ pnpm-debug.log*
 data/*.csv
 data/*.json
 !data/.gitkeep
+*data/
 
 # --- Freqtrade & Trading Bot Runtime Artifacts ---
 user_data/backtest_results/

@@ -23,8 +23,8 @@ description: >-
    - **Asymmetric Payout:** Sized so expanding moves deliver $2.5R$ to $4R+$.
    - **Friction Floor:** Total round-trip spread, commission, and slippage must be $\le 10\%$ of stop distance.
 
-2. **No Static CSV Limitations:**
-   Never restrict research to truncated static CSVs. Use `tools/core/data_tool.py` to dynamically fetch fresh, continuous OHLCV data for ANY requested asset (`GC=F`, `BTC-USD`, `SPY`, `EURUSD=X`, etc.) across any timeframe (`1m`, `5m`, `15m`, `1h`, `1d`) and period (`60d`, `1y`, `2y`).
+2. **Market Data**
+   Use `tools/core/data_tool.py` to dynamically fetch fresh, continuous OHLCV data for ANY requested asset (`XAUUSD`, `BTCUSD`, `SPY`, `EURUSD`, etc.) across any timeframe (`1m`, `5m`, `15m`, `1h`, `1d`) and period (`90d`, `1y`, `2y`).
 
 3. **User-Defined Constraints:**
    Never assume arbitrary drawdown rules. If the user or prop firm specifies 5% max DD and 3% daily DD, test those exact numbers. If the user asks for a long-term swing strategy with no daily cutoff, test only the overall max drawdown.

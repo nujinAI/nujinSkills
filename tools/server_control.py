@@ -74,13 +74,17 @@ def stop_server():
     pid = get_pid()
     if pid > 0:
         try:
-            os.kill(pid, 9)
+            # Kill process group since daemon was spawned with os.setsid
+            os.killpg(os.getpgid(pid), 9)
+            print(f"[ServerControl] Killed process group for PID {pid}")
+        except Exception:
+            try:
+                os.kill(pid, 9)
+                print(f"[ServerControl] Killed process with PID {pid}")
+            except Exception as e:
+                print(f"[ServerControl] Failed to kill PID {pid}: {e}")
+        if os.path.exists(PID_FILE):
             os.remove(PID_FILE)
-            print(f"[ServerControl] Killed process with PID {pid}")
-        except Exception as e:
-            print(f"[ServerControl] Failed to kill PID {pid}: {e}")
-            if os.path.exists(PID_FILE):
-                os.remove(PID_FILE)
     else:
         print("[ServerControl] No active PID file found.")
 

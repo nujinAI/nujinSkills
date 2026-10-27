@@ -729,7 +729,10 @@ class StrategyRegistry:
                 symbol = "BTC/USDT"
 
         if not timeframe:
-            timeframe = "1m" if any(k in symbol.upper() for k in ["XAU", "SP", "ES", "S&P"]) else "15m"
+            if "GOLDSESSION" in clean.upper():
+                timeframe = "5m"
+            else:
+                timeframe = "1m" if any(k in symbol.upper() for k in ["XAU", "SP", "ES", "S&P"]) else "15m"
 
         if not target_profile:
             target_profile = f"{display_name} (Alpha Engine)"
