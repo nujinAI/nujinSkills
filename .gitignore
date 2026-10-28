@@ -96,3 +96,5 @@ plugins/*
 !plugins/.gitkeep
 !plugins/__init__.py
 !plugins/README.md
+strategies/*.py
+!strategies/.gitkeep
