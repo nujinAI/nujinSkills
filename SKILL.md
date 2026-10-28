@@ -119,6 +119,10 @@ class NewStrategyName:
     Zero hardcoded capital: pure mathematical edge, dynamic geometry, and parameterized risk %.
     """
 
+    # MANDATORY CLASS METADATA: Explicit single source of truth for asset pair and timeframe
+    symbol: str = "OANDA:XAUUSD"
+    timeframe: str = "5m"
+
     def __init__(
         self,
         risk_pct_1r: float = 0.0035,        # Risk appetite: e.g. 0.0035 = 0.35% (or 0.01 = 1.0%)

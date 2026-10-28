@@ -124,22 +124,18 @@ def resolve_strategy_metadata(strategy_name: str, timeframe_override: Optional[s
     strat_inst = load_strategy_instance(clean_name)
     strat_inst_symbol = getattr(strat_inst, "symbol", None) if strat_inst else None
     strat_inst_timeframe = getattr(strat_inst, "timeframe", None) if strat_inst else None
-    if clean_name == "GoldSessionLiquidityReversal":
-        strat_inst_symbol = strat_inst_symbol or "OANDA:XAUUSD"
-        strat_inst_timeframe = strat_inst_timeframe or "5m"
 
-    # Determine symbol and timeframe dynamically
+    # Single Source of Truth: Strategy class attributes have primary authority
     symbol = strat_inst_symbol or \
              (strat_record.get("symbol") if strat_record else None) or \
              (curr_state.get("symbol") if is_active_sys else None) or \
-             ("S&P 500 (ES)" if any(k in clean_name.upper() for k in ["SP500", "SPX", "ES", "FLUSH"]) else \
-             ("XAU/USD" if any(k in clean_name.upper() for k in ["XAU", "GOLD", "GOAT"]) else "BTC/USDT"))
+             "OANDA:XAUUSD"
 
     timeframe = timeframe_override or \
                 strat_inst_timeframe or \
                 (strat_record.get("timeframe") if strat_record else None) or \
                 (curr_state.get("timeframe") if is_active_sys else None) or \
-                ("5m" if "GOLDSESSION" in clean_name.upper() else ("1m" if any(k in symbol.upper() for k in ["XAU", "SP", "ES", "S&P"]) else "15m"))
+                "5m"
 
     target_profile = (strat_record.get("target_profile") if strat_record else None) or \
                      (curr_state.get("target_profile") if is_active_sys else None) or \
