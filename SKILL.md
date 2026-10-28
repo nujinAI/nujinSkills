@@ -81,26 +81,23 @@ Every strategy in NujinAI implements a clean, standard Python class interface. *
 
 ### The Standard Strategy Interface Contract
 
-A valid strategy must define a class matching its filename (e.g. `class GoldAsiaLiquiditySweep` in `GoldAsiaLiquiditySweep.py`), exposing:
+A strategy file is **exclusively an alpha and execution geometry engine**. It **MUST NEVER** define, calculate, manage, or hardcode lot sizes or capital. Lot sizing is 100% dynamic, handled exclusively by the core execution broker infrastructure across connected accounts.
+
+A valid strategy defines a single class matching its filename (e.g. `class GoldAsiaLiquiditySweep` in `GoldAsiaLiquiditySweep.py`), exposing:
 
 1. **Class Initialization (`__init__`)**:
-   Accepts risk and execution parameters (with sensible defaults based on the user's risk budget).
+   Defines strategy-specific indicators and geometric multipliers (`sl_atr_mult`, `tp_atr_mult`, `max_hold_bars`, etc.). **Do not put lot sizes or dollar amounts here.**
 2. **`compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame`**:
-   Accepts an OHLCV DataFrame (UTC DatetimeIndex with `open`, `high`, `low`, `close`, `volume`), calculates required math/indicators (e.g. ATR, session ranges, volatility bands), and returns the enhanced DataFrame.
+   Accepts an OHLCV DataFrame (UTC DatetimeIndex with `open`, `high`, `low`, `close`, `volume`), calculates required math/indicators (e.g. ATR, session ranges, VWAP), and returns the enhanced DataFrame.
 3. **`generate_signals(self, df: pd.DataFrame) -> pd.DataFrame`**:
-   Accepts an OHLCV DataFrame with a UTC DatetimeIndex. Returns a DataFrame with the exact same index and the following 3 mandatory columns:
+   Accepts an OHLCV DataFrame with a UTC DatetimeIndex. Returns a DataFrame with the exact same index and **strictly** the following 3 mandatory columns:
    - `entry_signal`: Integer: `1` for BUY (Long), `-1` for SELL (Short), `0` for NEUTRAL / No Trade.
-   - `stop_loss`: Float: Exact price level for the stop-loss (must be non-zero when `entry_signal != 0`).
-   - `target`: Float: Exact price level for the take-profit / exit target (must be non-zero when `entry_signal != 0`).
+   - `stop_loss`: Float: Exact structural price level for invalidation (must be non-zero when `entry_signal != 0`).
+   - `target`: Float: Exact price level for profit target (must be non-zero when `entry_signal != 0`).
 
-4. **`calculate_lot_size(self, entry_price: float, stop_loss: float, account_balance: Optional[float] = None) -> float`** (CRITICAL FOR MULTI-ACCOUNT DYNAMIC SCALING):
-   Guarantees mathematically identical % risk across **any** connected account size ($5,000, $25,000, $100,000, $500,000+).
-   - Uses `current_balance = float(account_balance) if (account_balance and account_balance > 0) else self.account_size`.
-   - Computes 1R Dollar Risk: `dollar_risk = current_balance * self.risk_pct_1r`.
-   - Computes Stop Distance: `stop_dist = abs(entry_price - stop_loss)`.
-   - Position units: `units = dollar_risk / stop_dist`.
-   - For Spot Gold (XAUUSD, 1 lot = 100 oz): `lots = units / 100.0`.
-   - Returns `max(0.01, round(lots, 2))`. Never hardcode static lot sizes or fixed dollar amounts.
+**RULE: Strategies NEVER touch lot sizing.** The broker layer automatically queries the connected account balance in real-time and computes:
+$$\text{Dollar Risk} = \text{Account Balance} \times 0.35\%$$
+$$\text{Lots} = \frac{\text{Dollar Risk}}{|\text{Entry} - \text{Stop Loss}| \times 100}$$
 
 ### Clean Canonical Strategy Skeleton
 
@@ -114,23 +111,15 @@ class NewStrategyName:
     """
     [Strategy Display Name]
     [Brief summary of core structural edge, execution windows, and invalidation criteria].
+    Zero lot size or capital logic: pure mathematical edge and execution geometry.
     """
 
     def __init__(
         self,
-        account_size: float = 100_000.0,
-        risk_pct_1r: float = 0.0035,        # e.g. 0.35% = $350 risk per 1R trade on $100k
-        max_daily_losses: int = 1,          # Hard daily circuit breaker
-        daily_profit_cap: Optional[float] = 520.0, # Target profit lock (optional)
         sl_atr_mult: float = 1.0,           # Dynamic ATR Stop Loss multiplier
         tp_atr_mult: float = 2.0,           # Dynamic ATR Take Profit multiplier (>= 2.0R asymmetric)
         max_hold_bars: int = 12             # Time invalidation cutoff in bars
     ):
-        self.account_size = account_size
-        self.risk_pct_1r = risk_pct_1r
-        self.dollar_risk_1r = account_size * risk_pct_1r
-        self.max_daily_losses = max_daily_losses
-        self.daily_profit_cap = daily_profit_cap
         self.sl_atr_mult = sl_atr_mult
         self.tp_atr_mult = tp_atr_mult
         self.max_hold_bars = max_hold_bars
@@ -183,26 +172,6 @@ class NewStrategyName:
         signals.loc[short_condition, "target"] = data.loc[short_condition, "close"] - (data.loc[short_condition, "atr"] * self.tp_atr_mult)
 
         return signals
-
-    def calculate_lot_size(
-        self,
-        entry_price: float,
-        stop_loss: float,
-        account_balance: Optional[float] = None
-    ) -> float:
-        """
-        Dynamic position sizing across ANY account scale ($5k, $25k, $100k, $500k+).
-        Guarantees exact % risk parity between backtesting and live broker accounts.
-        """
-        stop_dist = abs(entry_price - stop_loss)
-        if stop_dist <= 0:
-            return 0.01
-
-        current_balance = float(account_balance) if (account_balance is not None and float(account_balance) > 0) else self.account_size
-        dollar_risk = current_balance * self.risk_pct_1r
-        units = dollar_risk / stop_dist
-        lots = units / 100.0  # Gold spot: 1 lot = 100 oz
-        return max(0.01, round(lots, 2))
 ```
 
 ### Strategy Deployment Location
