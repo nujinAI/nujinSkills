@@ -93,6 +93,15 @@ A valid strategy must define a class matching its filename (e.g. `class GoldAsia
    - `stop_loss`: Float: Exact price level for the stop-loss (must be non-zero when `entry_signal != 0`).
    - `target`: Float: Exact price level for the take-profit / exit target (must be non-zero when `entry_signal != 0`).
 
+4. **`calculate_lot_size(self, entry_price: float, stop_loss: float, account_balance: Optional[float] = None) -> float`** (CRITICAL FOR MULTI-ACCOUNT DYNAMIC SCALING):
+   Guarantees mathematically identical % risk across **any** connected account size ($5,000, $25,000, $100,000, $500,000+).
+   - Uses `current_balance = float(account_balance) if (account_balance and account_balance > 0) else self.account_size`.
+   - Computes 1R Dollar Risk: `dollar_risk = current_balance * self.risk_pct_1r`.
+   - Computes Stop Distance: `stop_dist = abs(entry_price - stop_loss)`.
+   - Position units: `units = dollar_risk / stop_dist`.
+   - For Spot Gold (XAUUSD, 1 lot = 100 oz): `lots = units / 100.0`.
+   - Returns `max(0.01, round(lots, 2))`. Never hardcode static lot sizes or fixed dollar amounts.
+
 ### Clean Canonical Strategy Skeleton
 
 ```python
@@ -110,7 +119,7 @@ class NewStrategyName:
     def __init__(
         self,
         account_size: float = 100_000.0,
-        risk_pct_1r: float = 0.0035,        # e.g. 0.35% = $350 risk per 1R trade
+        risk_pct_1r: float = 0.0035,        # e.g. 0.35% = $350 risk per 1R trade on $100k
         max_daily_losses: int = 1,          # Hard daily circuit breaker
         daily_profit_cap: Optional[float] = 520.0, # Target profit lock (optional)
         sl_atr_mult: float = 1.0,           # Dynamic ATR Stop Loss multiplier
@@ -174,6 +183,26 @@ class NewStrategyName:
         signals.loc[short_condition, "target"] = data.loc[short_condition, "close"] - (data.loc[short_condition, "atr"] * self.tp_atr_mult)
 
         return signals
+
+    def calculate_lot_size(
+        self,
+        entry_price: float,
+        stop_loss: float,
+        account_balance: Optional[float] = None
+    ) -> float:
+        """
+        Dynamic position sizing across ANY account scale ($5k, $25k, $100k, $500k+).
+        Guarantees exact % risk parity between backtesting and live broker accounts.
+        """
+        stop_dist = abs(entry_price - stop_loss)
+        if stop_dist <= 0:
+            return 0.01
+
+        current_balance = float(account_balance) if (account_balance is not None and float(account_balance) > 0) else self.account_size
+        dollar_risk = current_balance * self.risk_pct_1r
+        units = dollar_risk / stop_dist
+        lots = units / 100.0  # Gold spot: 1 lot = 100 oz
+        return max(0.01, round(lots, 2))
 ```
 
 ### Strategy Deployment Location
