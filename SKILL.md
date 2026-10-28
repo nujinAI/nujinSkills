@@ -23,10 +23,16 @@ description: >-
    - **Asymmetric Payout:** Sized so expanding moves deliver $2.5R$ to $4R+$.
    - **Friction Floor:** Total round-trip spread, commission, and slippage must be $\le 10\%$ of stop distance.
 
-2. **Market Data**
-   Use `tools/core/data_tool.py` to dynamically fetch fresh, continuous OHLCV data for ANY requested asset (`XAUUSD`, `BTCUSD`, `SPY`, `EURUSD`, etc.) across any timeframe (`1m`, `5m`, `15m`, `1h`, `1d`) and period (`90d`, `1y`, `2y`).
+2. **Asset Scope (Cash Spot Only, Zero Commodity Futures):**
+   We trade and model **Spot Cash** (`OANDA:XAUUSD`, Forex Spot, Crypto Spot). **Never** trade, model, or backtest Commodity Futures (`GC=F`, `GC=1`, CME/COMEX) for gold because pricing, spreads, contract rollovers, and volume profiles differ fundamentally from spot CFDs.
 
-3. **User-Defined Constraints:**
+3. **Single Market Data Authority (TradingView):**
+   TradingView (`tradingview-ta`, TradingView WebSocket, or `server.data_manager`) is the single source of truth for all historical market data and technical indicators. Do NOT use `yfinance` for strategy generation, backtesting, or execution feeds. Use `tools/core/data_tool.fetch_ohlcv(symbol, timeframe, count)` to pull authentic data.
+
+4. **Zero Silent Fallbacks:**
+   Every tool, script, and strategy call requires an explicit, unambiguous symbol parameter (e.g. `OANDA:XAUUSD`, `BINANCE:BTCUSDT`). No hardcoded fallback symbols or silent fallback feeds are permitted.
+
+5. **User-Defined Constraints:**
    Never assume arbitrary drawdown rules. If the user or prop firm specifies 5% max DD and 3% daily DD, test those exact numbers. If the user asks for a long-term swing strategy with no daily cutoff, test only the overall max drawdown.
 
 ---

@@ -35,9 +35,10 @@ def _get_cache_path(symbol: str, timeframe: str, period: str) -> str:
 
 
 def fetch_ohlcv(
-    symbol: str = "GC=F",
-    timeframe: str = "1h",
-    period: str = "2y",
+    symbol: str,
+    timeframe: str = "5m",
+    count: int = 5000,
+    period: str = "60d",
     csv_path: Optional[str] = None,
     use_cache: bool = True
 ) -> pd.DataFrame:
@@ -45,6 +46,16 @@ def fetch_ohlcv(
     Returns clean DataFrame with lowercase columns:
     ['open', 'high', 'low', 'close', 'volume', 'tr', 'atr', 'norm_range', 'rel_volume', 'hour', 'day_of_week']
     """
+    if not symbol or not str(symbol).strip():
+        raise ValueError("Explicit market symbol is required (e.g. 'OANDA:XAUUSD', 'BINANCE:BTCUSDT'). No silent fallbacks permitted.")
+
+    upper_sym = str(symbol).strip().upper()
+    if any(f in upper_sym for f in ["GC=", "GC1", "GC=F", "COMEX"]):
+        raise ValueError(
+            f"Commodity Futures '{symbol}' are prohibited. We trade Spot Cash ('OANDA:XAUUSD'). "
+            "Futures have contract rollovers, artificial settlement spreads, and differing price action."
+        )
+
     df = None
 
     # 1. Custom CSV Override
@@ -54,14 +65,20 @@ def fetch_ohlcv(
         df = pd.read_csv(csv_path)
         date_col = next((c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()), None)
         if date_col:
-            df[date_col] = pd.to_datetime(df[date_col], utc=True)
+            if pd.api.types.is_numeric_dtype(df[date_col]):
+                df[date_col] = pd.to_datetime(df[date_col], unit='s', utc=True)
+            else:
+                df[date_col] = pd.to_datetime(df[date_col], utc=True)
             df.set_index(date_col, inplace=True)
         else:
-            df.index = pd.to_datetime(df.index, utc=True)
+            if pd.api.types.is_numeric_dtype(df.index):
+                df.index = pd.to_datetime(df.index, unit='s', utc=True)
+            else:
+                df.index = pd.to_datetime(df.index, utc=True)
 
-    # 2. Dynamic Fetch with Cache
+    # 2. Dynamic Fetch with Cache via TradingView Single Source of Truth
     if df is None:
-        cache_file = _get_cache_path(symbol, timeframe, period)
+        cache_file = _get_cache_path(symbol, timeframe, f"{count}_{period}")
         # Check cache freshness (valid for 4 hours)
         if use_cache and os.path.exists(cache_file):
             file_age_seconds = pd.Timestamp.now().timestamp() - os.path.getmtime(cache_file)
@@ -72,32 +89,31 @@ def fetch_ohlcv(
                     df = None
 
         if df is None:
-            import yfinance as yf
-            tf_map = {
-                "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-                "1h": "1h", "4h": "1h", "1d": "1d", "1w": "1wk"
-            }
-            interval = tf_map.get(timeframe.lower(), "1h")
+            # Primary Source of Truth: TradingView WebSocket / data_manager
+            try:
+                from server import data_manager
+                resolved_sym = data_manager.resolve_market_symbol(symbol)
+                candles = data_manager.fetch_candles_via_tv(resolved_sym, timeframe, count=count)
+                if not candles and ("XAU" in resolved_sym or "GOLD" in resolved_sym):
+                    candles = data_manager.fetch_real_broker_spot_gold_candles(interval=timeframe, count=min(count, 1000))
+                if candles:
+                    df = pd.DataFrame(candles)
+                    time_col = "time" if "time" in df.columns else ("timestamp" if "timestamp" in df.columns else None)
+                    if time_col:
+                        df[time_col] = pd.to_datetime(df[time_col], unit="s", utc=True)
+                        df.set_index(time_col, inplace=True)
+            except Exception:
+                pass
 
-            # Validate period bounds for free API
-            if interval == "1m" and period not in ["1d", "5d", "7d"]:
-                period = "7d"
-            elif interval in ["5m", "15m", "30m"] and period not in ["1mo", "60d"]:
-                period = "60d"
-            elif interval == "1h" and period not in ["1mo", "3mo", "6mo", "1y", "2y", "730d"]:
-                period = "730d"
+        if df is None or df.empty:
+            raise ValueError(f"Failed to fetch authentic market data for {symbol} ({timeframe}) via TradingView Single Source of Truth.")
 
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period, interval=interval)
-            if df.empty:
-                raise ValueError(f"Failed to fetch market data for {symbol} ({interval}, {period})")
-
-            # Save to cache
-            if use_cache:
-                try:
-                    df.to_parquet(cache_file)
-                except Exception:
-                    pass
+        # Save to cache
+        if use_cache and df is not None and not df.empty:
+            try:
+                df.to_parquet(cache_file)
+            except Exception:
+                pass
 
     # Standardize column names
     df.columns = [str(c).lower().replace(' ', '_') for c in df.columns]

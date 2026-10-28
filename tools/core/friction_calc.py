@@ -24,8 +24,8 @@ def get_roundtrip_friction(symbol: str, current_price: float, atr: float) -> flo
         return current_price * 0.0009
     elif "ETH" in sym:
         return current_price * 0.0010
-    elif "GC" in sym:  # Gold Futures
-        # ~$0.20 spread + $4 round-trip contract fee (~$0.04/oz) + $0.10 slippage = ~$0.35/oz
+    elif "XAU" in sym or "GOLD" in sym:  # Spot Gold (OANDA / Broker Spot)
+        # Typical cash spot spread ~$0.20-$0.30 + slippage = ~$0.35/oz
         return 0.35
     elif "CL" in sym:  # Crude Oil
         return 0.04
