@@ -81,12 +81,17 @@ Every strategy in NujinAI implements a clean, standard Python class interface. *
 
 ### The Standard Strategy Interface Contract
 
-A strategy file is **exclusively an alpha and execution geometry engine**. It **MUST NEVER** define, calculate, manage, or hardcode lot sizes or capital. Lot sizing is 100% dynamic, handled exclusively by the core execution broker infrastructure across connected accounts.
+A strategy file defines the **mathematical alpha, execution geometry, and risk appetite percentage**. It **MUST NEVER hardcode capital amounts ($) or static lot sizes**. 
+
+Every strategy specifies its risk appetite as a **pure percentage** (e.g. `risk_pct_1r = 0.0035` for 0.35%, or `0.01` for 1.0%), and its execution invalidation levels. The broker infrastructure dynamically maps this percentage to the actual live balance of every connected account.
 
 A valid strategy defines a single class matching its filename (e.g. `class GoldAsiaLiquiditySweep` in `GoldAsiaLiquiditySweep.py`), exposing:
 
 1. **Class Initialization (`__init__`)**:
-   Defines strategy-specific indicators and geometric multipliers (`sl_atr_mult`, `tp_atr_mult`, `max_hold_bars`, etc.). **Do not put lot sizes or dollar amounts here.**
+   Defines the strategy's risk appetite percentage and geometric multipliers:
+   - `risk_pct_1r: float = 0.0035`: The exact fractional risk per trade (e.g. `0.0035` for 0.35% prop firm mode, or `0.01` for 1.0% growth mode).
+   - `sl_atr_mult`, `tp_atr_mult`, `max_hold_bars`: Dynamic geometry multipliers.
+   - **Zero hardcoded dollar amounts ($) or static lot sizes.**
 2. **`compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame`**:
    Accepts an OHLCV DataFrame (UTC DatetimeIndex with `open`, `high`, `low`, `close`, `volume`), calculates required math/indicators (e.g. ATR, session ranges, VWAP), and returns the enhanced DataFrame.
 3. **`generate_signals(self, df: pd.DataFrame) -> pd.DataFrame`**:
@@ -95,8 +100,8 @@ A valid strategy defines a single class matching its filename (e.g. `class GoldA
    - `stop_loss`: Float: Exact structural price level for invalidation (must be non-zero when `entry_signal != 0`).
    - `target`: Float: Exact price level for profit target (must be non-zero when `entry_signal != 0`).
 
-**RULE: Strategies NEVER touch lot sizing.** The broker layer automatically queries the connected account balance in real-time and computes:
-$$\text{Dollar Risk} = \text{Account Balance} \times 0.35\%$$
+**HOW SIZING WORKS:** When the signal fires, the broker layer queries the live balance ($B$) of every connected account and computes:
+$$\text{Dollar Risk} = B \times \text{Strategy Risk\%}$$
 $$\text{Lots} = \frac{\text{Dollar Risk}}{|\text{Entry} - \text{Stop Loss}| \times 100}$$
 
 ### Clean Canonical Strategy Skeleton
@@ -111,15 +116,17 @@ class NewStrategyName:
     """
     [Strategy Display Name]
     [Brief summary of core structural edge, execution windows, and invalidation criteria].
-    Zero lot size or capital logic: pure mathematical edge and execution geometry.
+    Zero hardcoded capital: pure mathematical edge, dynamic geometry, and parameterized risk %.
     """
 
     def __init__(
         self,
+        risk_pct_1r: float = 0.0035,        # Risk appetite: e.g. 0.0035 = 0.35% (or 0.01 = 1.0%)
         sl_atr_mult: float = 1.0,           # Dynamic ATR Stop Loss multiplier
         tp_atr_mult: float = 2.0,           # Dynamic ATR Take Profit multiplier (>= 2.0R asymmetric)
         max_hold_bars: int = 12             # Time invalidation cutoff in bars
     ):
+        self.risk_pct_1r = risk_pct_1r
         self.sl_atr_mult = sl_atr_mult
         self.tp_atr_mult = tp_atr_mult
         self.max_hold_bars = max_hold_bars
