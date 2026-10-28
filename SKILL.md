@@ -75,15 +75,111 @@ Follow this autonomous loop for every user request:
 
 ---
 
-## 3. Strategy Deployment Standard (`strategies/<StrategyName>.py`)
+## 3. Strategy Implementation Interface & Deployment Standard
 
-In Nujin, every strategy is authored directly as a standard Python strategy file in the `strategies/` directory:
-`strategies/<StrategyName>.py` (e.g. `strategies/GoldIntradayTrendExhaustion.py`).
+Every strategy in NujinAI implements a clean, standard Python class interface. **NEVER inspect, read, or copy legacy strategy files from `strategies/` or plugins.** Old strategy files contain context-specific parameters, outdated conventions, and irrelevant indicators that pollute new strategy design. Implement exclusively against the formal contract below.
 
-The backend watcher in `server/main.py` monitors `strategies/*.py`. When the strategy file is written:
-1. The backend automatically detects the new strategy.
-2. It registers it into `data/strategies.json`.
-3. It broadcasts `STRATEGY_DISCOVERED` to the WebSocket and frontend cockpit in real time.
+### The Standard Strategy Interface Contract
+
+A valid strategy must define a class matching its filename (e.g. `class GoldAsiaLiquiditySweep` in `GoldAsiaLiquiditySweep.py`), exposing:
+
+1. **Class Initialization (`__init__`)**:
+   Accepts risk and execution parameters (with sensible defaults based on the user's risk budget).
+2. **`compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame`**:
+   Accepts an OHLCV DataFrame (UTC DatetimeIndex with `open`, `high`, `low`, `close`, `volume`), calculates required math/indicators (e.g. ATR, session ranges, volatility bands), and returns the enhanced DataFrame.
+3. **`generate_signals(self, df: pd.DataFrame) -> pd.DataFrame`**:
+   Accepts an OHLCV DataFrame with a UTC DatetimeIndex. Returns a DataFrame with the exact same index and the following 3 mandatory columns:
+   - `entry_signal`: Integer: `1` for BUY (Long), `-1` for SELL (Short), `0` for NEUTRAL / No Trade.
+   - `stop_loss`: Float: Exact price level for the stop-loss (must be non-zero when `entry_signal != 0`).
+   - `target`: Float: Exact price level for the take-profit / exit target (must be non-zero when `entry_signal != 0`).
+
+### Clean Canonical Strategy Skeleton
+
+```python
+from typing import Dict, Any, Optional
+import numpy as np
+import pandas as pd
+
+
+class NewStrategyName:
+    """
+    [Strategy Display Name]
+    [Brief summary of core structural edge, execution windows, and invalidation criteria].
+    """
+
+    def __init__(
+        self,
+        account_size: float = 100_000.0,
+        risk_pct_1r: float = 0.0035,        # e.g. 0.35% = $350 risk per 1R trade
+        max_daily_losses: int = 1,          # Hard daily circuit breaker
+        daily_profit_cap: Optional[float] = 520.0, # Target profit lock (optional)
+        sl_atr_mult: float = 1.0,           # Dynamic ATR Stop Loss multiplier
+        tp_atr_mult: float = 2.0,           # Dynamic ATR Take Profit multiplier (>= 2.0R asymmetric)
+        max_hold_bars: int = 12             # Time invalidation cutoff in bars
+    ):
+        self.account_size = account_size
+        self.risk_pct_1r = risk_pct_1r
+        self.dollar_risk_1r = account_size * risk_pct_1r
+        self.max_daily_losses = max_daily_losses
+        self.daily_profit_cap = daily_profit_cap
+        self.sl_atr_mult = sl_atr_mult
+        self.tp_atr_mult = tp_atr_mult
+        self.max_hold_bars = max_hold_bars
+
+    def compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculates required mathematical indicators on normalized UTC candle data.
+        """
+        data = df.copy()
+        if not isinstance(data.index, pd.DatetimeIndex):
+            data.index = pd.to_datetime(data.index, utc=True)
+        elif data.index.tz is None:
+            data.index = data.index.tz_localize("UTC")
+        else:
+            data.index = data.index.tz_convert("UTC")
+
+        # Standard True Range & Wilder's 14 ATR
+        tr1 = data["high"] - data["low"]
+        tr2 = (data["high"] - data["close"].shift(1)).abs()
+        tr3 = (data["low"] - data["close"].shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        data["atr"] = tr.ewm(alpha=1/14).mean()
+
+        # Strategy-specific indicators / time anchors here...
+        return data
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Evaluates setup conditions and returns execution signals, stop loss, and target levels.
+        """
+        data = self.compute_indicators(df)
+        signals = pd.DataFrame(index=data.index)
+        signals["entry_signal"] = 0
+        signals["stop_loss"] = 0.0
+        signals["target"] = 0.0
+
+        # Define boolean entry condition series
+        long_condition = pd.Series(False, index=data.index)
+        short_condition = pd.Series(False, index=data.index)
+
+        # Example execution geometry assignment:
+        # Long entries:
+        signals.loc[long_condition, "entry_signal"] = 1
+        signals.loc[long_condition, "stop_loss"] = data.loc[long_condition, "close"] - (data.loc[long_condition, "atr"] * self.sl_atr_mult)
+        signals.loc[long_condition, "target"] = data.loc[long_condition, "close"] + (data.loc[long_condition, "atr"] * self.tp_atr_mult)
+
+        # Short entries:
+        signals.loc[short_condition, "entry_signal"] = -1
+        signals.loc[short_condition, "stop_loss"] = data.loc[short_condition, "close"] + (data.loc[short_condition, "atr"] * self.sl_atr_mult)
+        signals.loc[short_condition, "target"] = data.loc[short_condition, "close"] - (data.loc[short_condition, "atr"] * self.tp_atr_mult)
+
+        return signals
+```
+
+### Strategy Deployment Location
+- Save proprietary strategies in `zillionsAlpha/strategies/<StrategyName>.py` (or `nujinPro/strategies/`).
+- The symlink in `nujinSkills/strategies/` links directly to the file.
+- The backend watcher in `server/main.py` detects changes in real time, automatically evaluates initial backtests, and registers the strategy without duplicating physical code.
 
 ---
 
