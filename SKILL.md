@@ -29,8 +29,11 @@ description: >-
 3. **Single Market Data Authority (TradingView):**
    TradingView (`tradingview-ta`, TradingView WebSocket, or `server.data_manager`) is the single source of truth for all historical market data and technical indicators. Do NOT use `yfinance` for strategy generation, backtesting, or execution feeds. Use `tools/core/data_tool.fetch_ohlcv(symbol, timeframe, count)` to pull authentic data.
 
-4. **Zero Silent Fallbacks:**
-   Every tool, script, and strategy call requires an explicit, unambiguous symbol parameter (e.g. `OANDA:XAUUSD`, `BINANCE:BTCUSDT`). No hardcoded fallback symbols or silent fallback feeds are permitted.
+4. **Zero Silent Fallbacks, Zero Assumed Capital, Zero Mock Data (STRICT PRODUCTION LAW):**
+   This is real money, not a game. Under no circumstances may any tool, strategy, script, or broker execution component use silent fallbacks, mock data, or assumed capital.
+   - **Network or Broker API Failures:** If a live broker API (e.g. TradeLocker) cannot verify live account equity in real time (due to network timeout, HTTP error, or token drop), the trade **MUST ABORT IMMEDIATELY**. Never guess a balance, never fall back to an assumed number (e.g. $5,000), and never use stale numbers. If equity cannot be verified with 100% certainty, NO ORDER IS PLACED.
+   - **Zero Hardcoded Symbols or Contract Multipliers:** Every symbol must be explicitly defined (`OANDA:XAUUSD`). Never hardcode asset tick/contract multipliers; they must be queried dynamically or calculated directly from authentic broker instrument specifications.
+   - **Zero Hardcoded Capital in Strategies:** Strategies define purely their mathematical edge, execution geometry (entry, stop loss, take profit), and fractional risk appetite (`risk_pct_1r`). Sizing is calculated strictly at the broker dispatch layer against live verified equity.
 
 5. **User-Defined Constraints:**
    Never assume arbitrary drawdown rules. If the user or prop firm specifies 5% max DD and 3% daily DD, test those exact numbers. If the user asks for a long-term swing strategy with no daily cutoff, test only the overall max drawdown.
