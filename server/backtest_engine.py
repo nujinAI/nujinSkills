@@ -222,27 +222,33 @@ def compute_strategy_parameter_stability_matrix(
                 row: List[float] = []
                 for tp_f in [0.92, 1.08]:
                     try:
-                        strat_copy = strat_inst.__class__(
-                            account_size=getattr(strat_inst, "account_size", 100000.0),
-                            risk_pct_1r=getattr(strat_inst, "risk_pct_1r", 0.0035),
-                            max_daily_losses=getattr(strat_inst, "max_daily_losses", 1),
-                            daily_profit_cap=getattr(strat_inst, "daily_profit_cap", 520.0),
-                            sl_atr_mult=sl_base * sl_f,
-                            tp_atr_mult=tp_base * tp_f,
-                            max_hold_bars=getattr(strat_inst, "max_hold_bars", 6)
-                        )
+                        kwargs = {
+                            "risk_pct_1r": getattr(strat_inst, "risk_pct_1r", 0.0035),
+                            "sl_atr_mult": sl_base * sl_f,
+                            "tp_atr_mult": tp_base * tp_f,
+                            "max_hold_bars": getattr(strat_inst, "max_hold_bars", 6)
+                        }
+                        if hasattr(strat_inst, "max_daily_losses"):
+                            kwargs["max_daily_losses"] = getattr(strat_inst, "max_daily_losses")
+                        if hasattr(strat_inst, "daily_profit_cap_pct"):
+                            kwargs["daily_profit_cap_pct"] = getattr(strat_inst, "daily_profit_cap_pct")
+                        strat_copy = strat_inst.__class__(**kwargs)
                         sig = strat_copy.generate_signals(df_idx)
+                        test_acct_size = 100000.0
+                        test_dollar_risk = test_acct_size * getattr(strat_copy, "risk_pct_1r", 0.0035)
+                        test_daily_cap = (test_acct_size * strat_copy.daily_profit_cap_pct) if getattr(strat_copy, "daily_profit_cap_pct", None) else None
                         res = run_discrete_backtest(
                             df=df_idx,
                             signals=sig,
                             symbol="OANDA:XAUUSD" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else symbol,
-                            dollar_risk_1r=getattr(strat_copy, "dollar_risk_1r", 350.0),
+                            account_size=test_acct_size,
+                            dollar_risk_1r=test_dollar_risk,
                             max_daily_losses=getattr(strat_copy, "max_daily_losses", 1),
-                            daily_profit_cap=getattr(strat_copy, "daily_profit_cap", 520.0),
+                            daily_profit_cap=test_daily_cap,
                             max_hold_bars=getattr(strat_copy, "max_hold_bars", 6),
                             close_eod=True
                         )
-                        rets = [t.pnl_dollars / getattr(strat_inst, "account_size", 100000.0) for t in res["trades"]]
+                        rets = [t.pnl_dollars / test_acct_size for t in res["trades"]]
                         if len(rets) >= 5:
                             m_r = float(np.mean(rets))
                             s_r = float(np.std(rets, ddof=1)) or 1e-6
@@ -518,10 +524,12 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         df_idx = df_idx.set_index('dt')
         signals = strat_inst.generate_signals(df_idx)
 
-        acct_size = float(getattr(strat_inst, "account_size", 100000.0))
-        dollar_risk = float(getattr(strat_inst, "dollar_risk_1r", acct_size * getattr(strat_inst, "risk_pct_1r", 0.0035)))
+        acct_size = float(account_size or 100000.0)
+        risk_pct = float(getattr(strat_inst, "risk_pct_1r", 0.0035))
+        dollar_risk = acct_size * risk_pct
         max_daily_l = int(getattr(strat_inst, "max_daily_losses", 1))
-        daily_cap = getattr(strat_inst, "daily_profit_cap", None)
+        daily_cap_pct = getattr(strat_inst, "daily_profit_cap_pct", None)
+        daily_cap = (acct_size * daily_cap_pct) if daily_cap_pct else getattr(strat_inst, "daily_profit_cap", None)
         max_hold_b = int(getattr(strat_inst, "max_hold_bars", 6))
 
         res_disc = run_discrete_backtest(
