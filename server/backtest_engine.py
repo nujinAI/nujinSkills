@@ -337,69 +337,38 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
     returns_file = os.path.join(data_dir, "candidate_returns.json")
     feat_miner_script = os.path.join(_ROOT, "tools", "feature_miner.py")
 
-    # 1. Resolve Candle Dataset and Sync if Needed
-    # Use Dynamic Candle Fetcher from tools/core/data_tool.py
+    # 1. Resolve Candle Dataset and Sync via Dynamic Single Source of Truth
     from tools.core.data_tool import fetch_ohlcv
-    
-    # If timeframe is 1h, 4h, or 1d, fetch real historical data dynamically
-    if timeframe in ["1h", "4h", "1d"] and not is_gold:
-        fetch_sym = ("^GSPC" if any(k in symbol.upper() for k in ["SP500", "ES", "S&P"]) else \
-                    ("BTC-USD" if "BTC" in symbol.upper() else symbol))
-        candles_file = os.path.join(data_dir, f"{fetch_sym.replace('=', '_').replace('^', '')}_candles_{timeframe}.csv")
-        logger.info(f"[BacktestEngine] Dynamically fetching {timeframe} candles for {fetch_sym} via tools/core/data_tool...")
-        try:
-            df_dynamic = fetch_ohlcv(symbol=fetch_sym, timeframe=timeframe, period="2y")
+    from server import data_manager
+
+    # Resolve canonical symbol and clean slug
+    canon_sym = data_manager.resolve_market_symbol(symbol)
+    slug = data_manager.canonical_market_slug(symbol)
+    candles_file = data_manager.get_market_dataset_path(canon_sym, timeframe, check_legacy=True)
+    is_gold = ("XAU" in canon_sym.upper()) or ("GOLD" in canon_sym.upper())
+    is_sp500 = any(k in canon_sym.upper() for k in ["SP", "ES", "US500", "S&P"])
+
+    logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}) via tools/core/data_tool...")
+    try:
+        df_dynamic = fetch_ohlcv(symbol=canon_sym, timeframe=timeframe, count=5000, period="60d", use_cache=True)
+        if df_dynamic is not None and not df_dynamic.empty:
             df_dynamic_reset = df_dynamic.reset_index()
             dt_col = df_dynamic_reset.columns[0]
-            # Convert datetime to unix timestamp in seconds
+            # Ensure standard timestamp and time columns in seconds
             df_dynamic_reset['timestamp'] = pd.to_datetime(df_dynamic_reset[dt_col], utc=True).apply(lambda x: int(x.timestamp()))
+            df_dynamic_reset['time'] = df_dynamic_reset['timestamp']
+            
+            # Maintain disk cache consistency across canonical & legacy paths
+            os.makedirs(os.path.dirname(candles_file), exist_ok=True)
             df_dynamic_reset.to_csv(candles_file, index=False)
-            cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
-        except Exception as e_dyn:
-            logger.warning(f"[BacktestEngine] Dynamic candle fetch failed: {e_dyn}, falling back to static files")
+            data_manager._save_canonical_and_legacy(canon_sym, timeframe, df_dynamic_reset, legacy_path=candles_file, source="data_tool_backtest")
+    except Exception as e_dyn:
+        logger.warning(f"[BacktestEngine] tools/core/data_tool fetch note: {e_dyn}, checking existing dataset on disk")
 
-    is_gold = ("XAU" in symbol.upper()) or ("GOLD" in symbol.upper())
-    is_sp500 = any(k in symbol.upper() for k in ["SP", "ES", "US500", "S&P"])
-    if not (timeframe in ["1h", "4h", "1d"] and os.path.exists(candles_file)):
-        if is_gold:
-            if timeframe == "5m":
-                candles_file = os.path.join(data_dir, "xauusd_candles_5m.csv")
-                if not os.path.exists(candles_file) or os.path.getsize(candles_file) < 20000:
-                    if os.path.exists("/tmp/oanda_xauusd_5m.csv"):
-                        try:
-                            df_src = pd.read_csv("/tmp/oanda_xauusd_5m.csv")
-                            dt = pd.to_datetime(df_src['Datetime'], utc=True)
-                            df_src['timestamp'] = dt.apply(lambda x: int(x.timestamp()))
-                            df_src['time'] = df_src['timestamp']
-                            df_src = df_src[['time', 'timestamp', 'open', 'high', 'low', 'close', 'volume']]
-                            df_src.to_csv(candles_file, index=False)
-                        except Exception:
-                            pass
-                cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
-            else:
-                candles_file = os.path.join(data_dir, "xauusd_candles_1m.csv")
-                if not os.path.exists(candles_file) or (time.time() - os.path.getmtime(candles_file) > 3600):
-                    try:
-                        data_manager.sync_xauusd_scalp_candles(output_path=candles_file)
-                    except Exception as e_sync:
-                        logger.warning(f"[BacktestEngine] Sync XAUUSD candles warning: {e_sync}")
-                cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
-        elif is_sp500:
-            candles_file = os.path.join(data_dir, "sp500_candles_1m.csv")
-            cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
-        else:
-            if timeframe == "5m" and os.path.exists(os.path.join(data_dir, "btc_candles_5m.csv")):
-                candles_file = os.path.join(data_dir, "btc_candles_5m.csv")
-            else:
-                candles_file = os.path.join(data_dir, "candles_15m.csv")
+    if not os.path.exists(candles_file):
+        raise FileNotFoundError(f"[BacktestEngine] Candle dataset file not found: {candles_file}")
 
-            if not os.path.exists(candles_file) or (time.time() - os.path.getmtime(candles_file) > 3600):
-                logger.info(f"[BacktestEngine] Syncing 30 days of real market data for {symbol}...")
-                try:
-                    data_manager.sync_30d_candles(symbol=symbol, output_path=candles_file)
-                except Exception as e_sync:
-                    logger.warning(f"[BacktestEngine] Sync 30d candles warning: {e_sync}")
-            cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
+    cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
 
     # Always generate fresh features.csv
     logger.info(f"[BacktestEngine] Generating fresh feature set from {candles_file}...")

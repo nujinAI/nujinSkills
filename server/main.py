@@ -1451,7 +1451,22 @@ async def get_sp500_quote():
 
 @app.get("/api/xauusd/quote")
 async def get_xauusd_quote():
-    """Live XAUUSD real-time quote, session filter status, indicators & active signal."""
+    """Live XAUUSD real-time quote, session filter status, indicators & active signal via ProviderRegistry."""
+    # 1. Primary: In-memory live ProviderRegistry quote (Single Source of Truth)
+    from server.providers.base import ProviderRegistry
+    try:
+        provider = ProviderRegistry.get_provider("OANDA:XAUUSD", "1m")
+        if provider and provider._latest_quote and provider._latest_quote.get("price"):
+            q = provider._latest_quote
+            return {
+                "quote": q,
+                "session": xauusd_engine.is_session_active(),
+                "indicators": xauusd_engine.compute_indicators(),
+                "signal": xauusd_engine.generate_signal()
+            }
+    except Exception as e_prov:
+        logger.debug(f"[XAUUSD Quote] Provider quote check: {e_prov}")
+
     return {
         "quote": xauusd_engine.current_quote,
         "session": xauusd_engine.is_session_active(),

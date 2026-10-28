@@ -47,9 +47,17 @@ def audit(strategy: str, save_state: bool, output_path: str):
         print(f"    {label:<16}: {data.get('trade_count')} trades | WR: {data.get('win_rate', 0) * 100:.1f}% | PF: {data.get('profit_factor')} | PnL: {data.get('net_pnl_pct', 0):+.2f}%")
     print("=" * 70 + "\n")
 
+    def json_converter(o):
+        import numpy as np
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        if isinstance(o, (np.integer, np.floating)):
+            return o.item()
+        return str(o)
+
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(results, f, indent=2, default=json_converter)
     print(f"[BacktestAudit] Audit report saved to {output_path}")
     if save_state:
         print(f"[BacktestAudit] Strategy state written to data/state.json via StateManager")
