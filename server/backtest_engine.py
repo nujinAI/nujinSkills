@@ -524,7 +524,7 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         df_idx = df_idx.set_index('dt')
         signals = strat_inst.generate_signals(df_idx)
 
-        acct_size = float(account_size or 100000.0)
+        acct_size = float(getattr(strat_inst, "account_size", 100000.0))
         risk_pct = float(getattr(strat_inst, "risk_pct_1r", 0.0035))
         dollar_risk = acct_size * risk_pct
         max_daily_l = int(getattr(strat_inst, "max_daily_losses", 1))
