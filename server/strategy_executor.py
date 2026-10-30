@@ -1018,32 +1018,19 @@ class NativeStrategyRunner:
 
 
         exit_reason: Optional[str] = None
+        reconciled_exit_price: Optional[float] = None
 
-        # 1. Stop Loss / Trailing Stop hit (evaluated against exact fill price: Bid for Long, Ask for Short)
-        if is_long and eval_exit_price <= sl:
-            exit_reason = "TRAIL_STOP" if sl > entry_price else "STOP_LOSS"
-        elif not is_long and eval_exit_price >= sl:
-            exit_reason = "TRAIL_STOP" if (sl > 0 and sl < entry_price) else "STOP_LOSS"
-
-        # 2. Take Profit reached (allowed once min_hold anti-arbitrage lock has passed)
-        elif is_long and eval_exit_price >= tp and elapsed_sec >= min_hold:
-            exit_reason = "TAKE_PROFIT"
-        elif not is_long and eval_exit_price <= tp and elapsed_sec >= min_hold:
-            exit_reason = "TAKE_PROFIT"
-
-        # 3. Maximum holding duration exceeded (scalp cutoff, only if explicitly configured)
-        elif max_hold is not None and elapsed_sec >= max_hold:
-            exit_reason = "TIME_CUTOFF"
-
-        # 4. Broker Server-Side Execution Reconciliation:
-        # If the broker server (e.g. TradeLocker) has executed the Stop Loss or Take Profit server-side:
-        elif elapsed_sec >= 30:
+        # 1. Broker Server-Side Execution Reconciliation (Priority 1 if connected):
+        # If an active execution broker is connected (e.g. TradeLocker live/demo account),
+        # verify whether the position was already filled/closed server-side (e.g. SL or TP execution).
+        if elapsed_sec >= 15:
             last_reconcile = getattr(self, "_last_broker_reconcile_ts", 0)
             if (now_ts - last_reconcile) >= 8:
                 self._last_broker_reconcile_ts = now_ts
                 try:
                     broker = broker_registry.get_broker()
-                    if broker and getattr(broker, "is_connected", False) and hasattr(broker, "get_open_positions"):
+                    is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
+                    if broker and getattr(broker, "is_connected", False) and not is_paper_broker and hasattr(broker, "get_open_positions"):
                         broker_positions = broker.get_open_positions(symbol=self.symbol)
                         if broker_positions is not None:
                             matches = [
@@ -1054,30 +1041,65 @@ class NativeStrategyRunner:
                                 empty_count = int(pos.get("_broker_empty_confirmations", 0)) + 1
                                 pos["_broker_empty_confirmations"] = empty_count
                                 if empty_count >= 2:
-                                    logger.info(f"[NativeStrategyRunner] 🛡️ Confirmed: Broker server closed position #{pos['id']} ({pos['strategy']}). Reconciling immediately!")
+                                    logger.info(f"[NativeStrategyRunner] 🛡️ Confirmed: Broker server closed position #{pos['id']} ({pos['strategy']}). Reconciling authentic broker execution!")
+                                    # Attempt to fetch exact execution details from broker
+                                    broker_order = pos.get("broker_order", {})
+                                    b_details = broker_order.get("details", [])
+                                    first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
+                                    b_ord_id = first_det.get("order_id") or broker_order.get("order_id")
+                                    
+                                    exec_data = None
+                                    if hasattr(broker, "get_latest_position_execution"):
+                                        exec_data = broker.get_latest_position_execution(order_id=b_ord_id)
+
+                                    if exec_data and exec_data.get("price"):
+                                        reconciled_exit_price = float(exec_data["price"])
+                                        logger.info(f"[NativeStrategyRunner] 🎯 Matched broker execution fill price: {reconciled_exit_price} (order: {b_ord_id})")
+
+                                    eff_exit_price = reconciled_exit_price or eval_exit_price
                                     if is_long:
-                                        exit_reason = "STOP_LOSS" if eval_exit_price <= entry_price else "TAKE_PROFIT"
+                                        exit_reason = "STOP_LOSS" if eff_exit_price < entry_price else "TAKE_PROFIT"
                                     else:
-                                        exit_reason = "STOP_LOSS" if eval_exit_price >= entry_price else "TAKE_PROFIT"
+                                        exit_reason = "STOP_LOSS" if eff_exit_price > entry_price else "TAKE_PROFIT"
                             else:
                                 pos["_broker_empty_confirmations"] = 0
                 except Exception as e_rec:
                     logger.debug(f"[NativeStrategyRunner] Broker reconciliation check note: {e_rec}")
 
+        # 2. Stop Loss / Trailing Stop hit (evaluated against exact fill price: Bid for Long, Ask for Short)
+        if not exit_reason:
+            if is_long and eval_exit_price <= sl:
+                exit_reason = "TRAIL_STOP" if sl > entry_price else "STOP_LOSS"
+            elif not is_long and eval_exit_price >= sl:
+                exit_reason = "TRAIL_STOP" if (sl > 0 and sl < entry_price) else "STOP_LOSS"
+
+        # 3. Take Profit reached (allowed once min_hold anti-arbitrage lock has passed)
+        if not exit_reason:
+            if is_long and eval_exit_price >= tp and elapsed_sec >= min_hold:
+                exit_reason = "TAKE_PROFIT"
+            elif not is_long and eval_exit_price <= tp and elapsed_sec >= min_hold:
+                exit_reason = "TAKE_PROFIT"
+
+        # 4. Maximum holding duration exceeded (scalp cutoff, only if explicitly configured)
+        if not exit_reason:
+            if max_hold is not None and elapsed_sec >= max_hold:
+                exit_reason = "TIME_CUTOFF"
+
         if exit_reason:
-            logger.info(f"[NativeStrategyRunner] 🏁 Closing position #{pos['id']} ({pos['strategy']}): {exit_reason} @ {current_price}")
+            final_exit_price = reconciled_exit_price if reconciled_exit_price is not None else current_price
+            logger.info(f"[NativeStrategyRunner] 🏁 Closing position #{pos['id']} ({pos['strategy']}): {exit_reason} @ {final_exit_price}")
             # Route exit through Active Execution Broker
             try:
                 broker = broker_registry.get_broker()
                 broker_order_id = pos.get("broker_order", {}).get("order_id") or str(pos.get("id"))
-                broker.close_position(broker_order_id, reason=exit_reason, current_price=current_price, symbol=self.symbol)
+                broker.close_position(broker_order_id, reason=exit_reason, current_price=final_exit_price, symbol=self.symbol)
             except Exception as e_broker_close:
                 logger.error(f"[NativeStrategyRunner] Error closing position on broker: {e_broker_close}")
 
             closed = signal_store.close_position(
                 signal_id=pos["id"],
                 strategy=self.strategy_name,
-                exit_price=current_price,
+                exit_price=final_exit_price,
                 exit_reason=exit_reason
             )
             if closed:
