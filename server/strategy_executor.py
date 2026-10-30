@@ -488,6 +488,7 @@ class NativeStrategyRunner:
             "today_loss_usd": today_loss_usd,
             "today_realized_pnl_usd": round(today_realized_usd, 2),
             "today_losses_count": today_losses_count,
+            "max_daily_losses": 0,
             "max_daily_loss_usd": max_daily_loss_usd,
             "max_daily_dd_pct": max_daily_dd_pct,
             "remaining_budget_usd": remaining_budget_usd,
@@ -498,6 +499,7 @@ class NativeStrategyRunner:
 
         # Checks:
         max_daily_losses = int(getattr(strat_inst, "max_daily_losses", 0) or risk_profile.get("max_daily_losses", 0) or 0)
+        details["max_daily_losses"] = max_daily_losses
         if max_daily_losses > 0 and today_losses_count >= max_daily_losses:
             details["message"] = f"Max daily loss count reached: {today_losses_count} >= {max_daily_losses} (Prop Firm Daily Guard)"
             return False, "MAX_DAILY_LOSSES_REACHED", details
@@ -524,15 +526,32 @@ class NativeStrategyRunner:
             return
         self._last_alerted_dd_day = today_key
 
-        reason_title = "DAILY DRAWDOWN PROTECTION ACTIVE" if "DAILY" in reason else "TOTAL DRAWDOWN LIMIT REACHED"
+        if "COUNT" in reason or "MAX_DAILY_LOSSES" in reason:
+            reason_title = "MAX DAILY LOSS COUNT REACHED"
+            sub_title = (
+                f"🛑 <b>Loss Count Gate:</b> <code>{details.get('today_losses_count', 0)} / {details.get('max_daily_losses', 2)} Losses</code>\n"
+                f"📉 <b>Today's Net Realized PnL:</b> <b>${details.get('today_realized_pnl_usd', 0.0):+.2f}</b>\n"
+            )
+        elif "TOTAL" in reason:
+            reason_title = "TOTAL DRAWDOWN LIMIT REACHED"
+            sub_title = (
+                f"🛑 <b>Max Total Loss Limit:</b> <code>-${details.get('max_total_loss_usd', 250.0):.2f}</code> (5.0% Max DD)\n"
+                f"📉 <b>Account Drawdown:</b> <b>-${details.get('today_loss_usd', 0.0):.2f}</b>\n"
+            )
+        else:
+            reason_title = "DAILY DRAWDOWN LIMIT REACHED"
+            sub_title = (
+                f"🛑 <b>Max Daily Loss Limit:</b> <code>-${details.get('max_daily_loss_usd', 150.0):.2f}</code> ({details.get('max_daily_dd_pct', 0.03)*100:.1f}% Max DD)\n"
+                f"📉 <b>Today's Net Loss:</b> <b>-${details.get('today_loss_usd', 0.0):.2f}</b>\n"
+            )
+
         msg = (
             f"🛡️ <b>[CIRCUIT BREAKER] {reason_title}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ <b>Time:</b> <code>{datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}</code>\n"
             f"📊 <b>Strategy:</b> <code>{self.strategy_name}</code>\n"
-            f"📉 <b>Today's Net Loss:</b> <b>-${details.get('today_loss_usd', 0.0):.2f}</b>\n"
-            f"🛑 <b>Max Daily Loss Limit:</b> <code>-${details.get('max_daily_loss_usd', 150.0):.2f}</code> (3.0% Max DD)\n"
-            f"💼 <b>Remaining Buffer:</b> <code>${details.get('remaining_budget_usd', 0.0):.2f}</code>\n\n"
+            f"{sub_title}"
+            f"💼 <b>Remaining Daily Dollar Buffer:</b> <code>${details.get('remaining_budget_usd', 0.0):.2f}</code>\n\n"
             f"🔒 <b>Protection Status:</b> <b>AUTOMATED TRADING LOCKED FOR TODAY</b>\n"
             f"<i>Your funded account is strictly protected. New signal entries are halted until daily rollover at 00:00 UTC.</i>"
         )
