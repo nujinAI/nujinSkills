@@ -64,6 +64,27 @@
 
     <!-- Right Section: Audio, Theme Switcher, Clock -->
     <div class="flex items-center gap-1.5 md:gap-2 shrink-0">
+      <!-- PWA Install Button -->
+      <button
+        v-if="isInstallable"
+        @click="installPwa"
+        class="btn btn-xs btn-primary gap-1 font-bold shadow-sm animate-pulse text-[11px]"
+        title="Install NujinAI as a Progressive Web App (PWA)"
+      >
+        <Download class="w-3.5 h-3.5" />
+        <span class="hidden sm:inline">Install PWA</span>
+      </button>
+
+      <!-- PWA Active Badge -->
+      <div
+        v-else-if="isStandalone"
+        class="badge badge-xs badge-ghost border-primary/30 text-primary font-mono text-[9px] px-1.5 py-1 hidden sm:flex items-center gap-1"
+        title="Running in Standalone PWA Mode"
+      >
+        <Smartphone class="w-3 h-3" />
+        <span>PWA</span>
+      </div>
+
       <!-- Local Clock (CET) -->
       <div class="hidden xl:flex items-center gap-1.5 px-2 py-1 rounded bg-base-300 border border-base-content/10 text-[11px] text-base-content/80">
         <Clock class="w-3.5 h-3.5 text-accent" />
@@ -140,9 +161,12 @@ import {
   Sun,
   Moon,
   Monitor,
+  Download,
+  Smartphone,
 } from 'lucide-vue-next';
 import { useTheme } from '../../composables/useTheme';
 import { useAudio } from '../../composables/useAudio';
+import { usePwa } from '../../composables/usePwa';
 
 defineProps<{
   activeScreen: string;
@@ -158,6 +182,7 @@ defineEmits<{
 
 const { themeMode, setThemeMode } = useTheme();
 const { soundEnabled, toggleSound, testTone } = useAudio();
+const { isInstallable, isStandalone, installPwa } = usePwa();
 
 const navTabs = [
   { id: 'CHART', label: 'Chart', icon: BarChart2, hotkey: 'F1' },

@@ -73,9 +73,11 @@ const connect = () => {
   if (typeof window === 'undefined') return;
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host = window.location.hostname || 'localhost';
-  // Use Vite proxy (/ws) or direct port 8000
-  const wsUrl = `${protocol}//${host}:8000/ws`;
+  // Prefer same host/port proxy (/ws) for seamless LAN, WAN, and reverse-proxy support.
+  // Fallback to direct port 8000 if not on standard proxy.
+  const proxyWsUrl = `${protocol}//${window.location.host}/ws`;
+  const directWsUrl = `${protocol}//${window.location.hostname || 'localhost'}:8000/ws`;
+  const wsUrl = (window.location.port === '8000') ? directWsUrl : proxyWsUrl;
 
   try {
     socket = new WebSocket(wsUrl);
