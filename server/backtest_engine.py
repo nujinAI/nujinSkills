@@ -958,7 +958,7 @@ def run_real_backtest(
     }
 
     net_pnl_dollars = round(float(sum(tr.get("pnl_dollars", 0.0) for tr in trades_detail)), 2)
-    net_pnl_pct = round(float(sum(tr.get("pnl_pct", 0.0) for tr in trades_detail)), 2)
+    net_pnl_pct = round(float(sum(tr.get("pnl_pct", 0.0) for tr in trades_detail)), 4)
 
     backtest_summary = {
         "sharpe": round(sharpe, 2),
@@ -1008,12 +1008,12 @@ def run_real_backtest(
 
     regime_trades = {"bull_market": [], "bear_market": [], "ranging_market": []}
     for tr in trades_detail:
-        curr_equity *= (1.0 + tr["pnl_pct"] / 100.0)
+        curr_equity += tr["pnl_pct"]
         peak_equity = max(peak_equity, curr_equity)
         dd_pct = round(((peak_equity - curr_equity) / peak_equity) * 100.0, 2)
         equity_curve.append({
             "time": tr["exit_time"],
-            "equity_pct": round(curr_equity, 2),
+            "equity_pct": round(curr_equity, 4),
             "drawdown_pct": dd_pct
         })
         reg = regime_map.get(tr["entry_time"], "ranging_market")
@@ -1036,13 +1036,13 @@ def run_real_backtest(
             max_reg_dd = 0.0
             reg_curve = [{"time": tr_list[0]["entry_time"], "equity_pct": 100.0, "drawdown_pct": 0.0, "trade_num": 0}]
             for idx_t, tr in enumerate(tr_list, start=1):
-                reg_eq *= (1.0 + tr["pnl_pct"] / 100.0)
+                reg_eq += tr["pnl_pct"]
                 peak_reg_eq = max(peak_reg_eq, reg_eq)
                 dd_val = round(((peak_reg_eq - reg_eq) / peak_reg_eq) * 100.0, 2)
                 max_reg_dd = max(max_reg_dd, dd_val)
                 reg_curve.append({
                     "time": tr["exit_time"],
-                    "equity_pct": round(reg_eq, 2),
+                    "equity_pct": round(reg_eq, 4),
                     "drawdown_pct": dd_val,
                     "pnl_pct": tr["pnl_pct"],
                     "trade_num": idx_t
@@ -1111,14 +1111,14 @@ def run_real_backtest(
         for tr in trades_detail:
             # Scaled account return percentage
             scaled_trade_pct = tr["pnl_pct"] * account_mult
-            trade_dollar = tier_bal * (scaled_trade_pct / 100.0)
+            trade_dollar = float(tier) * (scaled_trade_pct / 100.0)
             tier_bal += trade_dollar
             peak_b = max(peak_b, tier_bal)
             dd_val = round(((peak_b - tier_bal) / peak_b) * 100.0, 2)
             max_dd_tier = max(max_dd_tier, dd_val)
             tier_curve.append({
                 "time": tr["exit_time"],
-                "equity_pct": round((tier_bal / float(tier)) * 100.0, 2),
+                "equity_pct": round((tier_bal / float(tier)) * 100.0, 4),
                 "drawdown_pct": dd_val,
                 "balance": round(tier_bal, 2),
                 "profit_dollars": round(tier_bal - float(tier), 2)

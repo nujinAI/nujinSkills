@@ -179,6 +179,8 @@
       <UnifiedEquityChart
         :equityCurve="equityCurve"
         :initialBalance="selectedAccountTier"
+        :netPnl="netPnlDollars"
+        :netPnlPct="netPnlPct"
         :title="`${cleanSelectedName} ($${selectedAccountTier.toLocaleString()} Prop Tier)`"
         :height="260"
       />

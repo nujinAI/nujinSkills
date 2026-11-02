@@ -23,7 +23,7 @@
         <div v-else class="flex items-center gap-3">
           <span class="text-base-content/60">Net PnL:</span>
           <span :class="netPnl >= 0 ? 'text-success font-bold' : 'text-error font-bold'">
-            {{ netPnl >= 0 ? '+' : '' }}${{ formatNumber(netPnl) }} ({{ netPnlPct.toFixed(1) }}%)
+            {{ netPnl >= 0 ? '+' : '' }}${{ formatNumber(netPnl) }} ({{ (netPnlPct >= 0 ? '+' : '') + netPnlPct.toFixed(2) }}%)
           </span>
           <span class="text-base-content/40">|</span>
           <span class="text-base-content/60">Max DD:</span>
@@ -124,6 +124,8 @@ const props = withDefaults(
     title?: string;
     height?: number;
     showHeader?: boolean;
+    netPnl?: number;
+    netPnlPct?: number;
   }>(),
   {
     equityCurve: () => [],
@@ -184,6 +186,7 @@ const parsedCurve = computed(() => {
 const tradesCount = computed(() => Math.max(0, parsedCurve.value.length - 1));
 
 const netPnl = computed(() => {
+  if (props.netPnl != null) return props.netPnl;
   if (parsedCurve.value.length === 0) return 0;
   const start = parsedCurve.value[0].equity;
   const end = parsedCurve.value[parsedCurve.value.length - 1].equity;
@@ -191,6 +194,7 @@ const netPnl = computed(() => {
 });
 
 const netPnlPct = computed(() => {
+  if (props.netPnlPct != null) return props.netPnlPct;
   if (parsedCurve.value.length === 0) return 0;
   const start = parsedCurve.value[0].equity;
   return start !== 0 ? (netPnl.value / start) * 100 : 0;
