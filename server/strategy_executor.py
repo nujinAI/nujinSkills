@@ -500,6 +500,13 @@ class NativeStrategyRunner:
         # Checks:
         max_daily_losses = int(getattr(strat_inst, "max_daily_losses", 0) or risk_profile.get("max_daily_losses", 0) or 0)
         details["max_daily_losses"] = max_daily_losses
+
+        # Dynamically calculate required safety buffer:
+        # If max_daily_losses is capped at 1 trade, we only need 1.0x trade risk (plus 10% slippage/spread leeway).
+        # Otherwise, require up to 2.5x trade risk or max_daily_losses * trade_risk.
+        buffer_multiplier = 1.1 if max_daily_losses == 1 else min(2.5, float(max_daily_losses) if max_daily_losses > 0 else 2.5)
+        buffer_required_usd = round(single_trade_risk_usd * buffer_multiplier, 2)
+        details["buffer_required_usd"] = buffer_required_usd
         if max_daily_losses > 0 and today_losses_count >= max_daily_losses:
             details["message"] = f"Max daily loss count reached: {today_losses_count} >= {max_daily_losses} (Prop Firm Daily Guard)"
             return False, "MAX_DAILY_LOSSES_REACHED", details

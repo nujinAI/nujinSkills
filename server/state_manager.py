@@ -640,7 +640,32 @@ class StrategyRegistry:
         if os.path.exists(filepath):
             try:
                 with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read(8192)
+                    content = f.read(16384)
+
+                    # Robust regex search for class attributes (handles symbol: str = "...", symbol = "...", etc.)
+                    sym_m = re.search(r'symbol\s*(?::\s*str)?\s*=\s*[\"\']([^\"\']+)[\"\']', content)
+                    if sym_m:
+                        raw_sym = sym_m.group(1).strip()
+                        if any(k in raw_sym.upper() for k in ["XAU", "GOLD"]):
+                            symbol = "XAU/USD"
+                        elif any(k in raw_sym.upper() for k in ["SP", "ES", "US500", "S&P"]):
+                            symbol = "S&P 500 (ES)"
+                        elif any(k in raw_sym.upper() for k in ["MNQ", "NQ"]):
+                            symbol = "MNQ (Futures)"
+                        elif "BTC" in raw_sym.upper():
+                            symbol = "BTC/USDT"
+                        elif "ETH" in raw_sym.upper():
+                            symbol = "ETH/USDT"
+                        elif "SOL" in raw_sym.upper():
+                            symbol = "SOL/USDT"
+                        else:
+                            symbol = raw_sym
+
+                    tf_m = re.search(r'timeframe\s*(?::\s*str)?\s*=\s*[\"\']([^\"\']+)[\"\']', content)
+                    if tf_m:
+                        timeframe = tf_m.group(1).strip()
+
+                    # Fallback line-by-line inspection
                     for line in content.splitlines():
                         line_s = line.strip()
                         if line_s.startswith("# Strategy:"):
@@ -658,35 +683,21 @@ class StrategyRegistry:
                             target_profile = line_s.split(":", 1)[1].strip()
                         elif line_s.startswith("# Asset:") or line_s.startswith("# Symbol:"):
                             sym = line_s.split(":", 1)[1].strip()
-                            if "XAU" in sym.upper() or "GOLD" in sym.upper():
+                            if any(k in sym.upper() for k in ["XAU", "GOLD"]):
                                 symbol = "XAU/USD"
-                            elif "SP" in sym.upper() or "ES" in sym.upper():
+                            elif any(k in sym.upper() for k in ["SP", "ES"]):
                                 symbol = "S&P 500 (ES)"
-                            elif "MNQ" in sym.upper() or "NQ" in sym.upper():
-                                symbol = "MNQ (Futures)"
                             elif "BTC" in sym.upper():
                                 symbol = "BTC/USDT"
-                            elif "ETH" in sym.upper():
-                                symbol = "ETH/USDT"
-                            elif "SOL" in sym.upper():
-                                symbol = "SOL/USDT"
                             else:
                                 symbol = sym
-                        elif "timeframe =" in line_s or "timeframe=" in line_s:
-                            tf = line_s.split("=")[-1].strip().strip("'\"")
-                            if tf:
-                                timeframe = tf
-                        elif (line.startswith("    symbol =") or line.startswith("    symbol=") or line.startswith("symbol =") or line.startswith("symbol=")):
-                            sym = line_s.split("=")[-1].strip().rstrip(",").strip().strip("'\"")
-                            if sym and sym.lower() not in ["pair", "symbol", "none", "self.symbol", "pair_symbol"] and not sym.startswith("self."):
-                                if "XAU" in sym.upper() or "GOLD" in sym.upper():
-                                    symbol = "XAU/USD"
-                                elif "SP" in sym.upper() or "ES" in sym.upper():
-                                    symbol = "S&P 500 (ES)"
-                                elif "BTC" in sym.upper():
-                                    symbol = "BTC/USDT"
-                                else:
-                                    symbol = sym
+
+                    # If symbol not yet resolved, check docstrings for Gold / XAU keywords
+                    if not symbol or symbol == "BTC/USDT":
+                        if any(k in content.upper() for k in ["OANDA:XAUUSD", "SPOT GOLD", "CASH SPOT GOLD", "XAUUSD"]):
+                            symbol = "XAU/USD"
+                        elif any(k in content.upper() for k in ["S&P 500", "ES FUTURES", "MES "]):
+                            symbol = "S&P 500 (ES)"
 
                     # Docstring inspection fallback for thesis & display_name
                     if not thesis or not display_name:
@@ -694,12 +705,20 @@ class StrategyRegistry:
                         if doc_match:
                             doc_text = doc_match.group(1).strip()
                             doc_lines = [d.strip() for d in doc_text.splitlines() if d.strip()]
-                            if doc_lines:
-                                if not display_name and not doc_lines[0].lower().startswith("quantitative"):
-                                    display_name = doc_lines[0]
+                            valid_lines = [l for l in doc_lines if not (l.endswith(".py") or "/" in l or l.lower().startswith("quantitative"))]
+                            if valid_lines:
+                                if not display_name:
+                                    first_line = valid_lines[0]
+                                    for sep in [" — ", " -- ", " - "]:
+                                        if sep in first_line:
+                                            cand_title, cand_desc = first_line.split(sep, 1)
+                                            first_line = cand_title.strip()
+                                            if not thesis:
+                                                thesis = cand_desc.strip()
+                                            break
+                                    display_name = first_line
                                 if not thesis:
-                                    # Use docstring text excluding header
-                                    rationale = " ".join(doc_lines[1:]) if len(doc_lines) > 1 else doc_lines[0]
+                                    rationale = " ".join(valid_lines[1:]) if len(valid_lines) > 1 else valid_lines[0]
                                     thesis = rationale[:200]
             except Exception as e:
                 # `py_path` here was a copy-paste from remove_strategy() and did not exist in
@@ -708,10 +727,28 @@ class StrategyRegistry:
 
         # Derive readable fallback name
         humanized_name = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', clean)
-        humanized_name = re.sub(r'\s+', ' ', humanized_name)
+        humanized_name = re.sub(r'\s+', ' ', humanized_name).strip()
 
-        if not display_name:
+        # Sanitize display_name: if it's too long, looks like a path, or is a description sentence, fallback to clean humanized name
+        if (
+            not display_name
+            or "/" in display_name
+            or display_name.endswith(".py")
+            or len(display_name) > 42
+            or display_name.lower().startswith("engineered")
+            or display_name.lower().startswith("specifically")
+            or display_name.lower().startswith("proprietary")
+            or display_name.lower().startswith("exploits")
+            or display_name.lower().startswith("intraday")
+        ):
             display_name = humanized_name
+
+        for sep in [" — ", " -- "]:
+            if sep in display_name:
+                cand_title, _ = display_name.split(sep, 1)
+                if cand_title.strip():
+                    display_name = cand_title.strip()
+                break
 
         clean_up = clean.upper()
         if any(k in clean_up for k in ["XAU", "GOLD"]):
@@ -987,9 +1024,11 @@ class StrategyRegistry:
 
         os.makedirs(self._dir, exist_ok=True)
         # Collect core strategy files
+        seen_filenames = set()
         strategy_candidates = []
         for f in sorted(os.listdir(self._dir)):
             if f.endswith(".py"):
+                seen_filenames.add(f)
                 strategy_candidates.append({
                     "filename": f,
                     "filepath": os.path.join(self._dir, f),
@@ -999,12 +1038,16 @@ class StrategyRegistry:
                     "plugin_name": None,
                 })
 
-        # Collect plugin strategy files
+        # Collect plugin strategy files (only if not already found in core or symlink)
         if plugin_manager:
             for pfile in plugin_manager.get_plugin_strategy_files():
+                fn = pfile["filename"]
+                if fn in seen_filenames:
+                    continue
+                seen_filenames.add(fn)
                 rel_p = os.path.relpath(pfile["path"], _ROOT)
                 strategy_candidates.append({
-                    "filename": pfile["filename"],
+                    "filename": fn,
                     "filepath": pfile["path"],
                     "path_rel": rel_p,
                     "is_pro": pfile.get("is_pro", True),
@@ -1014,10 +1057,15 @@ class StrategyRegistry:
 
         now_iso = _now_local_iso()
         updated_list: List[Dict[str, Any]] = []
+        seen_processed = set()
 
         for candidate in strategy_candidates:
             py_file = candidate["filename"]
             clean_name = py_file.replace(".py", "")
+            if clean_name.lower() in seen_processed:
+                continue
+            seen_processed.add(clean_name.lower())
+
             meta = self._infer_metadata(py_file, filepath_override=candidate["filepath"])
             is_active_sys = (clean_name == clean_active)
 

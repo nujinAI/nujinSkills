@@ -317,7 +317,45 @@ def compute_strategy_parameter_stability_matrix(
         return None
 
 
-def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, timeframe_override: Optional[str] = None, days: Optional[int] = None) -> dict:
+def resolve_default_account_size(user_override: Optional[float] = None) -> float:
+    """
+    Single Source of Truth resolver for active account balance.
+    Prioritizes explicit user override -> active connected broker account -> $5,000 baseline.
+    """
+    if user_override and float(user_override) > 0:
+        return float(user_override)
+    try:
+        from server.accounts_store import accounts_store
+        active_accs = accounts_store.get_all_active_accounts()
+        if active_accs:
+            for acc in active_accs:
+                bal = acc.get("balance") or acc.get("initial_balance")
+                if bal and float(bal) > 0:
+                    return float(bal)
+    except Exception:
+        pass
+    try:
+        accts_file = os.path.join(_ROOT, "data", "broker_accounts.json")
+        if os.path.exists(accts_file):
+            with open(accts_file) as f:
+                d = json.load(f)
+                for a in d.get("accounts", []):
+                    if a.get("is_active"):
+                        bal = a.get("balance") or a.get("initial_balance")
+                        if bal and float(bal) > 0:
+                            return float(bal)
+    except Exception:
+        pass
+    return 5000.0
+
+
+def run_real_backtest(
+    strategy_name: str = "",
+    save_as_active: bool = False,
+    timeframe_override: Optional[str] = None,
+    days: Optional[int] = None,
+    account_size: Optional[float] = None
+) -> dict:
     """
     Executes real quantitative dual-directional (LONG & SHORT) backtest and DSR cynic audit.
     Zero hardcoded strategy logic: dynamically evaluates strategy definitions and rules
@@ -354,9 +392,29 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
     is_gold = ("XAU" in canon_sym.upper()) or ("GOLD" in canon_sym.upper())
     is_sp500 = any(k in canon_sym.upper() for k in ["SP", "ES", "US500", "S&P"])
 
-    logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}) via tools/core/data_tool...")
+    # Determine needed bars dynamically based on requested days and timeframe Single Source of Truth
+    days_req = int(days) if (days and days > 0) else 30
+    tf_lower = str(timeframe).lower()
+    if tf_lower in ("1m", "m1"):
+        needed_count = min(15000, max(5000, int(days_req * 1440 * 1.15)))
+    elif tf_lower in ("5m", "m5"):
+        needed_count = min(15000, max(6000, int(days_req * 288 * 1.15)))
+    elif tf_lower in ("15m", "m15"):
+        needed_count = min(15000, max(6000, int(days_req * 96 * 1.15)))
+    elif tf_lower in ("1h", "h1", "60m"):
+        needed_count = min(15000, max(2500, int(days_req * 24 * 1.15)))
+    elif tf_lower in ("4h", "h4", "240m"):
+        needed_count = min(10000, max(1500, int(days_req * 6 * 1.15)))
+    elif tf_lower in ("1d", "d1"):
+        needed_count = min(10000, max(1000, int(days_req * 1.5)))
+    else:
+        needed_count = min(15000, max(5000, int(days_req * 288 * 1.15)))
+
+    period_str = f"{max(days_req, 30)}d"
+
+    logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}, count={needed_count}, days={days_req}) via tools/core/data_tool...")
     try:
-        df_dynamic = fetch_ohlcv(symbol=canon_sym, timeframe=timeframe, count=5000, period="60d", use_cache=True)
+        df_dynamic = fetch_ohlcv(symbol=canon_sym, timeframe=timeframe, count=needed_count, period=period_str, use_cache=True)
         if df_dynamic is not None and not df_dynamic.empty:
             df_dynamic_reset = df_dynamic.reset_index()
             dt_col = df_dynamic_reset.columns[0]
@@ -365,8 +423,6 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
             df_dynamic_reset['time'] = df_dynamic_reset['timestamp']
             
             # Maintain disk cache consistency across canonical & legacy paths
-            os.makedirs(os.path.dirname(candles_file), exist_ok=True)
-            df_dynamic_reset.to_csv(candles_file, index=False)
             data_manager._save_canonical_and_legacy(canon_sym, timeframe, df_dynamic_reset, legacy_path=candles_file, source="data_tool_backtest")
     except Exception as e_dyn:
         logger.warning(f"[BacktestEngine] tools/core/data_tool fetch note: {e_dyn}, checking existing dataset on disk")
@@ -524,8 +580,9 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         df_idx = df_idx.set_index('dt')
         signals = strat_inst.generate_signals(df_idx)
 
-        acct_size = float(getattr(strat_inst, "account_size", 100000.0))
-        risk_pct = float(getattr(strat_inst, "risk_pct_1r", 0.0035))
+        target_acct_size = resolve_default_account_size(account_size)
+        acct_size = float(getattr(strat_inst, "account_size", target_acct_size))
+        risk_pct = float(getattr(strat_inst, "risk_pct_1r", getattr(strat_inst, "risk_per_trade_pct", 0.0038)))
         dollar_risk = acct_size * risk_pct
         max_daily_l = int(getattr(strat_inst, "max_daily_losses", 1))
         daily_cap_pct = getattr(strat_inst, "daily_profit_cap_pct", None)
@@ -881,7 +938,11 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
     dt_end = datetime.fromtimestamp(ds_end_ts, tz=timezone.utc)
     start_date_str = dt_start.strftime("%Y-%m-%d %H:%M UTC")
     end_date_str = dt_end.strftime("%Y-%m-%d %H:%M UTC")
-    period_label = f"{dt_start.strftime('%Y-%m-%d')} → {dt_end.strftime('%Y-%m-%d')} ({duration_days:.1f}d)"
+    provider_max_reached = bool(days and days > 0 and duration_days < (float(days) - 1.5))
+    if provider_max_reached:
+        period_label = f"{dt_start.strftime('%Y-%m-%d')} → {dt_end.strftime('%Y-%m-%d')} ({duration_days:.1f}d — max {timeframe} depth)"
+    else:
+        period_label = f"{dt_start.strftime('%Y-%m-%d')} → {dt_end.strftime('%Y-%m-%d')} ({duration_days:.1f}d)"
 
     time_period_info = {
         "start_time": ds_start_ts,
@@ -891,9 +952,13 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         "duration_days": duration_days,
         "period_label": period_label,
         "candles_count": candles_count,
+        "provider_max_reached": provider_max_reached,
         "first_trade_time": trades_detail[0]["entry_time"] if trades_detail else ds_start_ts,
         "last_trade_time": trades_detail[-1]["exit_time"] if trades_detail else ds_end_ts,
     }
+
+    net_pnl_dollars = round(float(sum(tr.get("pnl_dollars", 0.0) for tr in trades_detail)), 2)
+    net_pnl_pct = round(float(sum(tr.get("pnl_pct", 0.0) for tr in trades_detail)), 2)
 
     backtest_summary = {
         "sharpe": round(sharpe, 2),
@@ -904,13 +969,18 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
         "trades": trades,
         "profit_factor": profit_factor,
         "expectancy_bps": round(expectancy_bps, 2),
+        "account_size": acct_size,
+        "net_pnl_dollars": net_pnl_dollars,
+        "net_pnl": net_pnl_dollars,
+        "net_pnl_pct": net_pnl_pct,
         "start_time": ds_start_ts,
         "end_time": ds_end_ts,
         "start_date": start_date_str,
         "end_date": end_date_str,
         "duration_days": duration_days,
         "period_label": period_label,
-        "candles_count": candles_count
+        "candles_count": candles_count,
+        "provider_max_reached": provider_max_reached
     }
 
     # 5. Equity Curve, Return Distribution & Market Regime Breakdown
@@ -1063,13 +1133,14 @@ def run_real_backtest(strategy_name: str = "", save_as_active: bool = False, tim
             "equity_curve": tier_curve
         }
 
-    # Standard benchmark account (defaults to $5,000 baseline)
-    benchmark_model = account_growth_models.get("5000", {})
+    # Standard benchmark account (defaults to active account size or $5,000 baseline)
+    bench_tier_str = str(int(acct_size)) if str(int(acct_size)) in account_growth_models else "5000"
+    benchmark_model = account_growth_models.get(bench_tier_str, account_growth_models.get("5000", {}))
     account_summary = {
-        "benchmark_tier": 5000,
-        "net_growth_pct": benchmark_model.get("net_growth_pct", 5.82),
-        "net_profit_dollars": benchmark_model.get("net_profit_dollars", 291.0),
-        "max_drawdown_pct": benchmark_model.get("max_drawdown_pct", 1.15),
+        "benchmark_tier": int(acct_size),
+        "net_growth_pct": benchmark_model.get("net_growth_pct", net_pnl_pct),
+        "net_profit_dollars": benchmark_model.get("net_profit_dollars", net_pnl_dollars),
+        "max_drawdown_pct": benchmark_model.get("max_drawdown_pct", round(max_dd * 100, 2)),
         "account_tiers": account_growth_models
     }
 
@@ -1169,6 +1240,7 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", type=str, default="", help="Strategy name")
     parser.add_argument("--timeframe", type=str, default=None, help="Timeframe override")
     parser.add_argument("--days", type=int, default=None, help="Lookback days window")
+    parser.add_argument("--account-size", type=float, default=None, help="Account size ($)")
     parser.add_argument("--save-active", action="store_true", help="Save as active strategy in state.json")
     args = parser.parse_args()
 
@@ -1176,11 +1248,13 @@ if __name__ == "__main__":
         strategy_name=args.strategy,
         save_as_active=args.save_active,
         timeframe_override=args.timeframe,
-        days=args.days
+        days=args.days,
+        account_size=args.account_size
     )
     s = res["summary"]
     print(f"\n=== BACKTEST COMPLETE: {res['strategy']} ===")
     print(f"Symbol: {res['symbol']} | Timeframe: {res['timeframe']}")
+    print(f"Account: ${s.get('account_size', 5000):,.2f} | Net PnL: ${s.get('net_pnl_dollars', 0):+,.2f} ({s.get('net_pnl_pct', 0):+.2f}%)")
     print(f"Trades: {s['trades']} | Win Rate: {s['win_rate']*100:.1f}% | Profit Factor: {s['profit_factor']}")
     print(f"Sharpe: {s['sharpe']} | DSR: {s['dsr']} | Max DD: {s['max_drawdown']*100:.2f}%")
     print(f"Period: {s['period_label']} ({s['candles_count']} bars)")

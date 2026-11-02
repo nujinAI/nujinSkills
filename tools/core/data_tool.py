@@ -85,6 +85,8 @@ def fetch_ohlcv(
             if file_age_seconds < (4 * 3600):
                 try:
                     df = pd.read_parquet(cache_file)
+                    if df is not None and len(df) < min(int(count * 0.7), 5000):
+                        df = None
                 except Exception:
                     df = None
 

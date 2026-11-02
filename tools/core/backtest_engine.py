@@ -43,12 +43,12 @@ def run_discrete_backtest(
     df: pd.DataFrame,
     signals: pd.DataFrame,
     symbol: str = "OANDA:XAUUSD",
-    account_size: float = 100_000.0,
-    dollar_risk_1r: float = 350.0,
+    account_size: float = 5_000.0,
+    dollar_risk_1r: Optional[float] = None,
     max_daily_losses: int = 2,
     daily_profit_cap: Optional[float] = None,
     max_hold_bars: int = 24,
-    close_eod: bool = False
+    close_eod: bool = True
 ) -> Dict[str, Any]:
     """
     signals DataFrame must have columns matching index of df:
@@ -56,6 +56,9 @@ def run_discrete_backtest(
     - 'stop_loss': price level for stop
     - 'target': price level for target
     """
+    if dollar_risk_1r is None or dollar_risk_1r <= 0:
+        dollar_risk_1r = round(account_size * 0.0038, 2)
+
     trades: List[TradeRecord] = []
     current_position = None
     daily_losses = 0

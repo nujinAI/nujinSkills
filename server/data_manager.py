@@ -335,7 +335,7 @@ def _save_canonical_and_legacy(symbol: str, timeframe: str, df: pd.DataFrame, le
     if os.path.exists(canon_path):
         try:
             df_existing = pd.read_csv(canon_path)
-            if len(df_existing) > len(df):
+            if not df_existing.empty:
                 df_merged = pd.concat([df_existing, df], ignore_index=True)
                 df_merged.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
                 df_merged.sort_values(by="timestamp", inplace=True)
@@ -351,7 +351,7 @@ def _save_canonical_and_legacy(symbol: str, timeframe: str, df: pd.DataFrame, le
             if os.path.exists(legacy_path):
                 try:
                     df_leg_existing = pd.read_csv(legacy_path)
-                    if len(df_leg_existing) > len(df):
+                    if not df_leg_existing.empty:
                         df_leg_merged = pd.concat([df_leg_existing, df], ignore_index=True).drop_duplicates(subset=["timestamp"], keep="last")
                         df_leg_merged.sort_values(by="timestamp", inplace=True)
                         df = df_leg_merged

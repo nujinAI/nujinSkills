@@ -9,12 +9,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from server.backtest_engine import run_real_backtest
 from server.cynic_gates import format_matrix, MAX_MDD_99
 
-def audit(strategy: str, save_state: bool, output_path: str):
-    print(f"[BacktestAudit] Running quantitative audit for strategy: {strategy}")
+def audit(strategy: str, save_state: bool, output_path: str, days: int = 30, account_size: float = None):
+    print(f"[BacktestAudit] Running quantitative audit for strategy: {strategy} (days={days}, account_size={account_size})")
     print(f"[BacktestAudit] save_state={save_state} | output={output_path}")
 
     try:
-        results = run_real_backtest(strategy, save_as_active=save_state)
+        results = run_real_backtest(strategy, save_as_active=save_state, days=days, account_size=account_size)
     except Exception as e:
         print(f"[BacktestAudit] ERROR — backtest failed: {e}")
         sys.exit(1)
@@ -24,10 +24,16 @@ def audit(strategy: str, save_state: bool, output_path: str):
     regimes = results.get("regime_breakdown", {})
     trades  = results.get("trades_detail", [])
 
+    acct_s = summary.get("account_size", 5000)
+    pnl_d = summary.get("net_pnl_dollars", 0.0)
+    pnl_p = summary.get("net_pnl_pct", 0.0)
+
     print("\n" + "=" * 70)
     print(f"[BacktestAudit] STRATEGY AUDIT REPORT: {results.get('strategy')}")
     print("=" * 70)
     print(f"  Target Profile:        {results.get('thesis_props', {}).get('target_profile')}")
+    print(f"  Account Benchmark:     ${acct_s:,.2f}")
+    print(f"  Net Realized PnL:      ${pnl_d:+,.2f} ({pnl_p:+.2f}%)")
     print(f"  Net Sharpe Ratio:      {summary.get('sharpe')} (>= 1.8 required)")
     print(f"  Win Rate:              {summary.get('win_rate', 0) * 100:.1f}%")
     print(f"  Profit Factor:         {summary.get('profit_factor')}")
@@ -65,8 +71,10 @@ def audit(strategy: str, save_state: bool, output_path: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="EdgeMiner AI Strategy Backtest & Cynic Audit")
     parser.add_argument("--strategy",    default="PropFirmVsaWickRejectionStrategy.py", help="Strategy filename in strategies/")
-    parser.add_argument("--save-state",  action="store_true", default=False,            help="Deploy as active strategy (writes data/state.json)")
-    parser.add_argument("--json-output", default="data/audit_report.json",              help="Output JSON report path")
+    parser.add_argument("--days",         type=int, default=30,                          help="Lookback period in days (e.g. 14, 30, 60, 90)")
+    parser.add_argument("--account-size", type=float, default=None,                      help="Account size override in $ (defaults to active broker account or $5,000)")
+    parser.add_argument("--save-state",   action="store_true", default=False,            help="Deploy as active strategy (writes data/state.json)")
+    parser.add_argument("--json-output",  default="data/audit_report.json",              help="Output JSON report path")
     args = parser.parse_args()
 
-    audit(args.strategy, args.save_state, args.json_output)
+    audit(args.strategy, args.save_state, args.json_output, days=args.days, account_size=args.account_size)

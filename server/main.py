@@ -66,6 +66,8 @@ class UpdateStrategyStatusRequest(BaseModel):
 class RunStrategyBacktestRequest(BaseModel):
     strategy: str
     days: Optional[int] = 30
+    timeframe: Optional[str] = None
+    account_size: Optional[float] = None
 
 class RemoveStrategyRequest(BaseModel):
     strategy: str
@@ -1048,7 +1050,13 @@ async def run_managed_strategy_backtest(req: RunStrategyBacktestRequest):
     clean_name = req.strategy.replace(".py", "")
     curr_active = state_manager.get().get("active_strategy", "").replace(".py", "")
     is_active = (clean_name == curr_active)
-    result = run_real_backtest(req.strategy, save_as_active=is_active, days=req.days or 30)
+    result = run_real_backtest(
+        req.strategy,
+        save_as_active=is_active,
+        days=req.days or 30,
+        timeframe_override=req.timeframe,
+        account_size=req.account_size
+    )
     strategy_registry.record_backtest(req.strategy, result, is_cron=False)
     all_strats = strategy_registry.get_all(sync=False)
     portfolio = strategy_registry.get_portfolio_summary()
@@ -1370,6 +1378,32 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"[NujinSkillsServer] Error checking/resuming active strategies on startup: {e}")
 
+    # Launch Strategy Runner Auto-Healer Watchdog Loop
+    async def strategy_runner_auto_healer():
+        """
+        Active Execution Watchdog:
+        Runs continuously every 15 seconds to audit all ACTIVE_LIVE strategies.
+        If an active strategy has lost its native background runner (native_active: False),
+        it automatically revives the runner and re-subscribes it to market ticks/bars.
+        """
+        logger.info("[AutoHealer] Strategy Runner Watchdog active (15s heartbeat).")
+        while True:
+            try:
+                await asyncio.sleep(15)
+                active_strats = [s["name"] for s in strategy_registry.get_all(sync=False) if s.get("status") == "ACTIVE_LIVE"]
+                for s_name in active_strats:
+                    r_info = bot_supervisor.runners.get(s_name)
+                    native_runner = r_info.get("native_runner") if r_info else None
+                    is_active = bool(native_runner and native_runner.is_running)
+                    if not is_active:
+                        logger.warning(f"[AutoHealer] ⚠️ Inactive runner detected for ACTIVE_LIVE strategy '{s_name}'. Reviving execution pipeline...")
+                        bot_supervisor.deploy_strategy(s_name, mode="dry-run")
+                        logger.info(f"[AutoHealer] ✅ Successfully revived and re-subscribed runner for '{s_name}'.")
+            except Exception as e_heal:
+                logger.error(f"[AutoHealer] Error in watchdog heartbeat: {e_heal}")
+
+    asyncio.create_task(strategy_runner_auto_healer())
+
 
 
 @app.get("/api/sp500/quote")
@@ -1476,8 +1510,19 @@ async def get_xauusd_quote():
 
 
 @app.get("/api/xauusd/rules/gft")
-async def get_gft_rules(account_size: float = 100000.0):
+async def get_gft_rules(account_size: Optional[float] = None):
     """Calculates strict Goat Funded Trader prop firm drawdown limits and 15% consistency cap."""
+    if account_size is None or account_size <= 0:
+        try:
+            from server.accounts_store import accounts_store
+            active_accs = accounts_store.get_all_active_accounts(decrypt=False)
+            if active_accs:
+                account_size = float(active_accs[0].get("initial_balance") or active_accs[0].get("balance") or 5000.0)
+            else:
+                account_size = 5000.0
+        except Exception:
+            account_size = 5000.0
+
     profit_target = account_size * 0.08
     return {
         "account_size": account_size,

@@ -58,16 +58,17 @@ Follow this autonomous loop for every user request:
   - 'stop_loss': exact price
   - 'target': exact price
 
-[ STEP 4: EXECUTE & AUDIT ]
-  Use: tools.core.backtest_engine.run_discrete_backtest(...)
-  Use: tools.core.auditor_tool.audit_trade_log(...)
-  -> Tests 4 Institutional Gates:
+[ STEP 4: EXECUTE & AUDIT (SINGLE SOURCE OF TRUTH) ]
+  Canonical Execution Tool: python3 tools/run_backtest_audit.py --strategy <StrategyName.py> [--days 30]
+  Backend Python API: server.backtest_engine.run_real_backtest(strategy_name, days=30)
+  * Never write ad-hoc backtest loops, scratch scripts, or assume $100k capital.
+  * Baseline sizing dynamically pulls from active connected broker accounts ($5,000 baseline).
+  -> Tests 4 Institutional Gates & 8 Cynic Falsification Gates:
      1. Baseline Expectancy: PF >= 1.25, Exp >= 0.10R.
      2. Top-5 Outlier Win Removal: Net PnL must stay positive without 5 luckiest trades.
      3. 50/50 Chronological Regime Split: Profitable in both chronological halves.
-     4. Monte Carlo 1,000 Runs Stress Test:
-        - 95th Percentile Max DD MUST be strictly less than Max DD limit.
-        - Worst daily loss & simulated daily sequences MUST stay below Daily DD limit.
+     4. Monte Carlo 1,000 Runs Stress Test (MDD99 <= 3.0%, tail <= 2.5).
+     5. Canonical Cynic Gates (DSR >= 0.95, parameter stability, friction floor, linearity R² >= 0.85).
 
   * If any gate fails: Analyze WHY -> Adjust thesis/timeframe -> Re-test.
   * When ALL gates pass: Deploy the strategy class into strategies/<StrategyName>.py.

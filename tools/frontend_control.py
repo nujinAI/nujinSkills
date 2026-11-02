@@ -20,7 +20,14 @@ def setup_node_path():
 
 setup_node_path()
 
-PID_FILE = ".frontend.pid"
+ROOT_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIR = ROOT_DIR / "frontend"
+PID_FILE = ROOT_DIR / ".frontend.pid"
+LOG_FILE = ROOT_DIR / "frontend_server.log"
+SERVICE_NAME = "nujin-frontend.service"
+
+def has_systemd_service() -> bool:
+    return os.path.exists(f"/etc/systemd/system/{SERVICE_NAME}")
 
 def check_status(port: int = 3000):
     url = f"http://127.0.0.1:{port}"
@@ -35,69 +42,75 @@ def check_status(port: int = 3000):
         return False
 
 def build_frontend():
-    frontend_dir = os.path.abspath("frontend")
     print(f"[FrontendControl] Using Node version: {subprocess.getoutput('node --version')}")
-    print(f"[FrontendControl] Installing npm dependencies & building UI in {frontend_dir}...")
+    print(f"[FrontendControl] Installing npm dependencies & building UI in {FRONTEND_DIR}...")
     
-    if not os.path.exists(os.path.join(frontend_dir, "node_modules")):
-        subprocess.run(["npm", "install"], cwd=frontend_dir, check=True, env=os.environ)
+    if not (FRONTEND_DIR / "node_modules").exists():
+        subprocess.run(["npm", "install"], cwd=str(FRONTEND_DIR), check=True, env=os.environ)
         
-    subprocess.run(["npm", "run", "build"], cwd=frontend_dir, check=True, env=os.environ)
+    subprocess.run(["npm", "run", "build"], cwd=str(FRONTEND_DIR), check=True, env=os.environ)
     print("[FrontendControl] Frontend build completed successfully!")
 
 def start_frontend(port: int, daemon: bool):
-    frontend_dir = os.path.abspath("frontend")
-    
     if check_status(port):
         print(f"[FrontendControl] Frontend is already running on port {port}.")
         return
 
-    if not os.path.exists(os.path.join(frontend_dir, "node_modules")):
+    if has_systemd_service() and daemon:
+        print(f"[FrontendControl] Starting {SERVICE_NAME} via systemd...")
+        subprocess.run(["sudo", "systemctl", "start", SERVICE_NAME], check=True)
+        time.sleep(2)
+        check_status(port)
+        return
+
+    if not (FRONTEND_DIR / "node_modules").exists():
         print("[FrontendControl] Installing dependencies first...")
-        subprocess.run(["npm", "install"], cwd=frontend_dir, check=True, env=os.environ)
+        subprocess.run(["npm", "install"], cwd=str(FRONTEND_DIR), check=True, env=os.environ)
 
     cmd = ["npx", "vite", "preview", "--port", str(port), "--host"]
     print(f"[FrontendControl] Using Node version: {subprocess.getoutput('node --version')}")
     print(f"[FrontendControl] Starting Vite Preview Server on port {port}...")
     
     if daemon:
-        log_f = open("frontend_server.log", "a")
+        log_f = open(str(LOG_FILE), "a")
         proc = subprocess.Popen(
             cmd,
-            cwd=frontend_dir,
+            cwd=str(FRONTEND_DIR),
             stdout=log_f,
             stderr=log_f,
             env=os.environ,
             preexec_fn=os.setsid
         )
-        with open(PID_FILE, "w") as f:
+        with open(str(PID_FILE), "w") as f:
             f.write(str(proc.pid))
-        print(f"[FrontendControl] Frontend started in background with PID {proc.pid}. Logs: frontend_server.log")
+        print(f"[FrontendControl] Frontend started in background with PID {proc.pid}. Logs: {LOG_FILE.name}")
         time.sleep(3)
         check_status(port)
     else:
         try:
-            subprocess.run(cmd, cwd=frontend_dir, env=os.environ)
+            subprocess.run(cmd, cwd=str(FRONTEND_DIR), env=os.environ)
         except KeyboardInterrupt:
             print("\n[FrontendControl] Frontend stopped by user.")
 
 def stop_frontend():
-    if os.path.exists(PID_FILE):
+    if has_systemd_service():
+        print(f"[FrontendControl] Stopping {SERVICE_NAME} via systemd...")
+        subprocess.run(["sudo", "systemctl", "stop", SERVICE_NAME])
+
+    if PID_FILE.exists():
         try:
-            with open(PID_FILE, "r") as f:
+            with open(str(PID_FILE), "r") as f:
                 pid = int(f.read().strip())
-            # Kill process group since daemon was spawned with os.setsid
             try:
                 os.killpg(os.getpgid(pid), 9)
                 print(f"[FrontendControl] Killed process group for PID {pid}")
             except Exception:
                 os.kill(pid, 9)
                 print(f"[FrontendControl] Killed process with PID {pid}")
-            os.remove(PID_FILE)
+            PID_FILE.unlink(missing_ok=True)
         except Exception as e:
             print(f"[FrontendControl] Failed to stop frontend process: {e}")
-            if os.path.exists(PID_FILE):
-                os.remove(PID_FILE)
+            PID_FILE.unlink(missing_ok=True)
     else:
         print("[FrontendControl] No active PID file found.")
 
