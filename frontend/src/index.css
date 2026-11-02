@@ -11,100 +11,20 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-
-  [data-theme="dark"] {
-    color-scheme: dark;
-    --color-base-100: oklch(12% 0.042 264.695);
-    --color-base-200: oklch(20% 0.042 265.755);
-    --color-base-300: oklch(27% 0.041 260.031);
-    --color-base-content: oklch(96% 0.007 247.896);
-    --color-primary: oklch(85% 0.199 91.936);
-    --color-primary-content: oklch(28% 0.066 53.813);
-    --color-secondary: oklch(76% 0.177 163.223);
-    --color-secondary-content: oklch(26% 0.051 172.552);
-    --color-accent: oklch(77% 0.152 181.912);
-    --color-accent-content: oklch(27% 0.046 192.524);
-    --color-neutral: oklch(44% 0.043 257.281);
-    --color-neutral-content: oklch(98% 0.003 247.858);
-    --color-info: oklch(74% 0.16 232.661);
-    --color-info-content: oklch(29% 0.066 243.157);
-    --color-success: oklch(76% 0.177 163.223);
-    --color-success-content: oklch(26% 0.051 172.552);
-    --color-warning: oklch(85% 0.199 91.936);
-    --color-warning-content: oklch(28% 0.066 53.813);
-    --color-error: oklch(71% 0.194 13.428);
-    --color-error-content: oklch(27% 0.105 12.094);
-    --radius-selector: 1.5rem;
-    --radius-field: 1.5rem;
-    --radius-box: 1.5rem;
-    --rounded-box: 1.5rem;
-    --rounded-btn: 1.5rem;
-    --rounded-badge: 1.5rem;
-    --size-selector: 0.25rem;
-    --size-field: 0.3125rem;
-    --border: 1px;
-    --depth: 0;
-    --noise: 0;
-  }
-
-  [data-theme="light"] {
-    color-scheme: light;
-    --color-base-100: oklch(0.956 0.010 265.3);
-    --color-base-200: oklch(0.931 0.008 265.3);
-    --color-base-300: oklch(0.901 0.006 265.3);
-    --color-base-content: oklch(0.196 0.001 -7.6);
-    --color-primary: oklch(85% 0.199 91.936);
-    --color-primary-content: oklch(28% 0.066 53.813);
-    --color-secondary: oklch(76% 0.177 163.223);
-    --color-secondary-content: oklch(26% 0.051 172.552);
-    --color-accent: oklch(77% 0.152 181.912);
-    --color-accent-content: oklch(27% 0.046 192.524);
-    --color-neutral: oklch(44% 0.043 257.281);
-    --color-neutral-content: oklch(98% 0.003 247.858);
-    --color-info: oklch(74% 0.16 232.661);
-    --color-info-content: oklch(29% 0.066 243.157);
-    --color-success: oklch(76% 0.177 163.223);
-    --color-success-content: oklch(26% 0.051 172.552);
-    --color-warning: oklch(85% 0.199 91.936);
-    --color-warning-content: oklch(28% 0.066 53.813);
-    --color-error: oklch(71% 0.194 13.428);
-    --color-error-content: oklch(27% 0.105 12.094);
-    --radius-selector: 1.5rem;
-    --radius-field: 1.5rem;
-    --radius-box: 1.5rem;
-    --rounded-box: 1.5rem;
-    --rounded-btn: 1.5rem;
-    --rounded-badge: 1.5rem;
-    --size-selector: 0.25rem;
-    --size-field: 0.25rem;
-    --border: 1px;
-    --depth: 0;
-    --noise: 0;
-  }
 }
 
-/* Custom terminal scrollbars styled for DaisyUI */
+/* Custom sleek scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: rgba(140, 160, 180, 0.2);
-  border-radius: 4px;
+  border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(140, 160, 180, 0.35);
-}
-
-/* Smooth pulse animation */
-@keyframes glowPulse {
-  0%, 100% { opacity: 1; filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.6)); }
-  50% { opacity: 0.6; filter: drop-shadow(0 0 2px rgba(16, 185, 129, 0.2)); }
-}
-
-.animate-glow {
-  animation: glowPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  background: rgba(140, 160, 180, 0.4);
 }
