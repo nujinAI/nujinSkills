@@ -44,7 +44,7 @@ Follow this autonomous loop for every user request:
 ```
 [ STEP 1: COMPILE USER INTENT & RISK BUDGET ]
   Use: python3 tools/core/risk_calc.py "<user prompt>"
-  -> Derives: Account size, 1R dollar risk, daily circuit breakers, profit caps.
+  -> Derives: Account size, 1R dollar risk, daily circuit breakers, profit caps dynamically from user parameters or active broker accounts.
 
 [ STEP 2: DYNAMIC DATA FETCH & FRICTION CHECK ]
   Use: tools/core/data_tool.fetch_ohlcv(symbol, timeframe, period)
@@ -61,17 +61,20 @@ Follow this autonomous loop for every user request:
 [ STEP 4: EXECUTE & AUDIT (SINGLE SOURCE OF TRUTH) ]
   Canonical Execution Tool: python3 tools/run_backtest_audit.py --strategy <StrategyName.py> [--days 30]
   Backend Python API: server.backtest_engine.run_real_backtest(strategy_name, days=30)
-  * Never write ad-hoc backtest loops, scratch scripts, or assume $100k capital.
-  * Baseline sizing dynamically pulls from active connected broker accounts ($5,000 baseline).
-  -> Tests 4 Institutional Gates & 8 Cynic Falsification Gates:
-     1. Baseline Expectancy: PF >= 1.25, Exp >= 0.10R.
-     2. Top-5 Outlier Win Removal: Net PnL must stay positive without 5 luckiest trades.
-     3. 50/50 Chronological Regime Split: Profitable in both chronological halves.
-     4. Monte Carlo 1,000 Runs Stress Test (MDD99 <= 3.0%, tail <= 2.5).
-     5. Canonical Cynic Gates (DSR >= 0.95, parameter stability, friction floor, linearity R² >= 0.85).
+  * NEVER write ad-hoc backtest loops or hardcode capital assumptions.
+  * Sizing is strictly dynamic based on the active account context or user-provided equity.
+  -> Tests the 8 Canonical Cynic Falsification Gates (server/cynic_gates.py):
+     1. Gate 1: Deflated Sharpe Ratio (DSR >= 0.95, penalized for trial multiplicity).
+     2. Gate 2: Parameter Stability Surface (checks against performance cliff).
+     3. Gate 3: Monte Carlo Sequence Stress (MDD99 <= 3.0%, tail ratio <= 2.5).
+     4. Gate 4: Combinatorial Out-of-Sample Walk-Forward (CPCV OOS Sharpe retention >= 50%).
+     5. Gate 5: Regime Survival (verified across Bull, Bear, and Ranging market slices).
+     6. Gate 6: Microstructure Friction & Noise Floor (after authentic spread + commission).
+     7. Gate 7: Noise Jitter Resilience (>= 80% Sharpe retention under price jitter).
+     8. Gate 8: Equity Linearity Standard (R² >= 0.85, positive slope, K-ratio >= 1.5).
 
-  * If any gate fails: Analyze WHY -> Adjust thesis/timeframe -> Re-test.
-  * When ALL gates pass: Deploy the strategy class into strategies/<StrategyName>.py.
+  * If any of the 8 gates fails: Analyze WHY -> Adjust thesis/timeframe -> Re-test.
+  * Only when ALL 8 GATES PASS: Deploy the strategy class into strategies/<StrategyName>.py.
 ```
 
 ---
@@ -199,7 +202,7 @@ All scripts in `tools/core/` are pure calculation primitives with zero trading b
 - `tools/core/risk_calc.py`: Risk-of-ruin sizing and circuit breaker math.
 - `tools/core/friction_calc.py`: Dynamic spread, fee, and slippage verification.
 - `tools/core/backtest_engine.py`: Discrete simulator with **Pessimistic Intrabar Resolution** (SL triggers first if both SL and TP are hit on the same bar).
-- `tools/core/auditor_tool.py`: The 4 institutional verification gates (Expectancy, Outlier Removal, Regime Split, Monte Carlo).
+- `tools/core/auditor_tool.py`: Canonical bridge to `server/cynic_gates.py` (evaluates the 8 Canonical Cynic Falsification Gates).
 
 ---
 

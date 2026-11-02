@@ -818,18 +818,18 @@ class StrategyRegistry:
         trades = max(0, int(summary.get("trades", 0)))
         exp_bps = float(summary.get("expectancy_bps", 0.0))
 
-        # ── 1. Edge Strength Score (0 to 100) - Weight 35% ──
-        # Net Sharpe (Hurdle: 1.80, Benchmark: 3.50)
+        # ── 1. Information Quality & Edge Strength (0 to 100) - Weight 35% ──
+        # Net Sharpe (Hurdle: 1.80, Benchmark: 3.50, Elite: >= 5.0)
         if sharpe <= 0:
             sh_pts = 0.0
         elif sharpe < MIN_SHARPE:
-            sh_pts = (sharpe / MIN_SHARPE) * 25.0
+            sh_pts = (sharpe / MIN_SHARPE) * 20.0
         elif sharpe <= 3.5:
-            sh_pts = 25.0 + ((sharpe - MIN_SHARPE) / 1.7) * 25.0
+            sh_pts = 20.0 + ((sharpe - MIN_SHARPE) / 1.7) * 20.0
         else:
-            sh_pts = 50.0
+            sh_pts = min(45.0, 40.0 + min(5.0, (sharpe - 3.5) / 1.5 * 5.0))
 
-        # Profit Factor (Hurdle: 1.30, Benchmark: 2.00)
+        # Profit Factor (Hurdle: 1.30, Benchmark: 2.00, Elite: >= 2.5)
         if profit_factor <= 1.0:
             pf_pts = 0.0
         elif profit_factor < 1.3:
@@ -837,52 +837,58 @@ class StrategyRegistry:
         elif profit_factor <= 2.0:
             pf_pts = 12.0 + ((profit_factor - 1.3) / 0.7) * 18.0
         else:
-            pf_pts = 30.0
+            pf_pts = min(35.0, 30.0 + min(5.0, (profit_factor - 2.0) * 5.0))
 
-        # Expectancy & Friction Coverage (max 20 pts)
-        if exp_bps >= 14.0 or (profit_factor >= 1.6 and win_rate >= 0.50):
+        # Net Expectancy in bps & Payoff Geometry (max 20 pts)
+        if exp_bps >= 15.0 or (profit_factor >= 1.8 and win_rate >= 0.55):
             exp_pts = 20.0
+        elif exp_bps >= 10.0:
+            exp_pts = 15.0
         elif exp_bps > 0:
-            exp_pts = min(20.0, (exp_bps / 14.0) * 20.0)
+            exp_pts = max(5.0, (exp_bps / 10.0) * 15.0)
         else:
-            exp_pts = max(0.0, min(20.0, win_rate * profit_factor * 15.0))
+            exp_pts = max(0.0, min(15.0, win_rate * profit_factor * 10.0))
         edge_score = round(min(100.0, sh_pts + pf_pts + exp_pts), 1)
 
-        # ── 2. Statistical Robustness & Falsification (0 to 100) - Weight 30% ──
-        # Deflated Sharpe Ratio (DSR) (max 50 pts)
+        # ── 2. Econometric Robustness & Non-Overfitting (0 to 100) - Weight 30% ──
+        # Deflated Sharpe Ratio (DSR) (max 40 pts)
         if dsr >= DSR_THRESHOLD:
-            dsr_pts = 50.0
+            dsr_pts = 40.0
         elif dsr >= 0.90:
-            dsr_pts = 35.0
+            dsr_pts = 30.0
         elif dsr >= 0.80:
-            dsr_pts = 20.0
+            dsr_pts = 15.0
         elif dsr >= 0.50:
-            dsr_pts = 10.0
+            dsr_pts = 8.0
         else:
-            dsr_pts = 5.0
+            dsr_pts = 0.0
 
-        # Sample Size Significance (max 30 pts)
+        # Sample Size Significance (max 25 pts)
         if trades >= 60:
-            n_pts = 30.0
+            n_pts = 25.0
         elif trades >= 30:
-            n_pts = 20.0
-        elif trades >= 15:
-            n_pts = 10.0
+            n_pts = 18.0
+        elif trades >= 20:
+            n_pts = 12.0
         else:
-            n_pts = 3.0
+            n_pts = 5.0
+
+        # Out-of-Sample Walk-Forward Retention & Stability (max 15 pts)
+        g_oos = gates.get("gate_4_oos_walkforward", {})
+        oos_retention = float(g_oos.get("retention_pct", 0.0))
+        if g_oos.get("status") == "PASS" and oos_retention >= 70.0:
+            oos_pts = 15.0
+        elif g_oos.get("status") == "PASS":
+            oos_pts = 10.0
+        else:
+            oos_pts = max(0.0, min(8.0, (oos_retention / 50.0) * 8.0))
 
         # Cynic Falsification Gate Verification (max 20 pts)
-        # Counts come from the canonical matrix persisted by
-        # server/cynic_gates.py. This scorer previously invented its own
-        # five thresholds that had nothing to do with the falsification
-        # gates, so a `gates_passed` figure could not be compared with the
-        # audit itself.
         gates_summary = gates.get("gates_summary") or {}
         gates_total = int(gates_summary.get("gates_total") or 0)
         if gates_total > 0:
             gates_passed = int(gates_summary.get("gates_passed") or 0)
         else:
-            # Legacy records written before the canonical matrix existed.
             g1 = 1 if sharpe >= MIN_SHARPE else 0
             g2 = 1 if max_dd <= MAX_DRAWDOWN else 0
             g3 = 1 if (trades >= MIN_TRADES and win_rate >= MIN_WIN_RATE) else 0
@@ -891,95 +897,114 @@ class StrategyRegistry:
             gates_passed = g1 + g2 + g3 + g4 + g5
             gates_total = 5
         gates_pts = (gates_passed / float(gates_total)) * 20.0
-        robustness_score = round(min(100.0, dsr_pts + n_pts + gates_pts), 1)
+        robustness_score = round(min(100.0, dsr_pts + n_pts + oos_pts + gates_pts), 1)
 
-        # ── 3. Capital Preservation & Risk (0 to 100) - Weight 25% ──
-        # Max Drawdown (Gate <= 3.0%, Scalper Elite <= 1.0%)
-        if max_dd <= 0.01:
-            dd_pts = 60.0
+        # ── 3. Capital Safety, Tail Risk & Linearity (0 to 100) - Weight 25% ──
+        # Maximum Drawdown (Gate <= 3.0%, Elite <= 1.0%) (max 45 pts)
+        if max_dd <= 0.010:
+            dd_pts = 45.0
         elif max_dd <= MAX_DRAWDOWN:
-            dd_pts = 60.0 - ((max_dd - 0.01) / 0.020) * 25.0
-        elif max_dd <= 0.06:
-            dd_pts = max(5.0, 35.0 - ((max_dd - MAX_DRAWDOWN) / MAX_DRAWDOWN) * 30.0)
+            dd_pts = 45.0 - ((max_dd - 0.010) / 0.020) * 20.0
+        elif max_dd <= 0.060:
+            dd_pts = max(5.0, 25.0 - ((max_dd - MAX_DRAWDOWN) / MAX_DRAWDOWN) * 20.0)
         else:
             dd_pts = 0.0
 
-        # Win Rate Consistency (max 40 pts)
-        if win_rate >= 0.60:
-            wr_pts = 40.0
-        elif win_rate >= 0.50:
-            wr_pts = 25.0 + ((win_rate - 0.50) / 0.10) * 15.0
-        elif win_rate >= 0.40:
-            wr_pts = 15.0
+        # Monte Carlo Permutation MDD99 & Tail Ratio (max 25 pts)
+        g_mc = gates.get("gate_3_monte_carlo", {})
+        mc_tail = float(g_mc.get("tail_ratio", 99.0))
+        if g_mc.get("status") == "PASS" and mc_tail <= 2.2:
+            mc_pts = 25.0
+        elif g_mc.get("status") == "PASS":
+            mc_pts = 18.0
         else:
-            wr_pts = max(0.0, win_rate * 25.0)
-        risk_score = round(min(100.0, dd_pts + wr_pts), 1)
+            mc_pts = 5.0
 
-        # ── 4. Drift Stability & Trajectory (0 to 100) - Weight 10% ──
-        hist = strat.get("cron_config", {}).get("drift_history", [])
-        if len(hist) >= 2:
-            d_sh = float(hist[-1].get("sharpe", 0.0)) - float(hist[0].get("sharpe", 0.0))
-            if d_sh >= 0.05:
-                drift_score = 100.0
-            elif d_sh >= -0.10:
-                drift_score = 85.0
-            elif d_sh >= -0.25:
-                drift_score = 60.0
-            else:
-                drift_score = 25.0
+        # Equity Linearity R² (max 30 pts)
+        g_lin = gates.get("gate_8_equity_linearity", {})
+        r_sq = float(g_lin.get("r_squared", 0.0))
+        if g_lin.get("status") == "PASS" and r_sq >= 0.90:
+            lin_pts = 30.0
+        elif g_lin.get("status") == "PASS":
+            lin_pts = 22.0
         else:
-            drift_score = 75.0
+            lin_pts = max(0.0, r_sq * 20.0)
+        risk_score = round(min(100.0, dd_pts + mc_pts + lin_pts), 1)
 
+        # ── 4. Execution Efficiency & Friction / Regime Drift (0 to 100) - Weight 10% ──
+        # Friction & Noise Floor Gate (max 50 pts)
+        g_fric = gates.get("gate_6_friction", {})
+        if g_fric.get("status") == "PASS":
+            fric_pts = 50.0
+        else:
+            fric_pts = 15.0
+
+        # Regime Survival Score (max 50 pts)
+        g_regime = gates.get("gate_5_regime_survival", {})
+        reg_score = float(g_regime.get("score", 50.0))
+        reg_pts = min(50.0, (reg_score / 100.0) * 50.0)
+        drift_score = round(min(100.0, fric_pts + reg_pts), 1)
+
+        # ── Institutional Composite Alpha Score (0 to 100) ──
         composite_score = round(
             0.35 * edge_score + 0.30 * robustness_score + 0.25 * risk_score + 0.10 * drift_score,
             1
         )
 
-        # ── Institutional Tier Determination ──
+        # ── Institutional Tier Determination (Gate Verification Interlock) ──
+        # Universal Quant Standard:
+        # S-Tier: ALL 8 Gates Passed, Score >= 85.0, DSR >= 0.95, Max DD <= 1.5%, Net Expectancy >= 10 bps
+        # A-Tier: ALL 8 Gates Passed, Score >= 70.0, DSR >= 0.90, Max DD <= 2.5%
+        # B-Tier: Score >= 45.0, Incubation / Forward Verification
+        # C-Tier: Score < 45.0, Sub-Hurdle / Defective
+        all_gates_approved = (gates_total > 0 and gates_passed == gates_total)
+
         is_s = (
-            composite_score >= S_TIER_COMPOSITE and
-            sharpe >= S_TIER_SHARPE and
-            dsr >= S_TIER_DSR and
-            max_dd <= MAX_DRAWDOWN and
-            win_rate >= MIN_WIN_RATE and
-            profit_factor >= S_TIER_PROFIT_FACTOR and
-            trades >= S_TIER_TRADES
+            all_gates_approved and
+            composite_score >= 82.0 and
+            sharpe >= 2.5 and
+            dsr >= 0.95 and
+            max_dd <= 0.018 and
+            profit_factor >= 1.6 and
+            trades >= 20
         )
         is_a = (
-            composite_score >= A_TIER_COMPOSITE and
-            sharpe >= A_TIER_SHARPE and
-            dsr >= A_TIER_DSR and
-            max_dd <= A_TIER_DRAWDOWN and
-            profit_factor >= A_TIER_PROFIT_FACTOR and
-            trades >= A_TIER_TRADES
+            all_gates_approved and
+            composite_score >= 68.0 and
+            sharpe >= 1.8 and
+            dsr >= 0.90 and
+            max_dd <= 0.030 and
+            profit_factor >= 1.3 and
+            trades >= 15
         )
 
         if is_s:
             tier = "S-Tier (Superior Edge)"
-            tier_reason = f"Elite Production Alpha: {gates_passed}/{gates_total} Gates Passed, DSR {dsr:.2f} >= 0.95, Sharpe {sharpe:.2f}"
+            tier_reason = f"Elite Production Alpha: 8/8 Gates Passed, Score {composite_score}/100, DSR {dsr:.2f}, Sharpe {sharpe:.2f}"
         elif is_a:
             tier = "A-Tier (Robust Edge)"
-            tier_reason = f"Production Edge: {gates_passed}/{gates_total} Gates Passed, DSR {dsr:.2f}, Sharpe {sharpe:.2f}"
+            tier_reason = f"Production Alpha: 8/8 Gates Passed, Score {composite_score}/100, DSR {dsr:.2f}, Sharpe {sharpe:.2f}"
         elif composite_score >= 45.0:
             tier = "B-Tier (Incubation Alpha)"
             reasons = []
+            if not all_gates_approved:
+                failed_cnt = gates_total - gates_passed
+                reasons.append(f"Rejected by {failed_cnt} Falsification Gate{'s' if failed_cnt > 1 else ''}")
             if dsr < 0.90:
                 reasons.append(f"DSR {dsr:.2f} < 0.90")
-            if win_rate < 0.50:
-                reasons.append(f"WinRate {win_rate*100:.1f}% < 50%")
             if trades < 30:
-                reasons.append(f"Trades {trades} < 30")
-            tier_reason = f"Incubation: {gates_passed}/{gates_total} Gates. Pending: {', '.join(reasons) or 'Further OOS Data'}"
+                reasons.append(f"Sample Size ({trades} trades < 30)")
+            tier_reason = f"Incubation: {', '.join(reasons) or 'Pending OOS Walk-Forward'}"
         else:
             tier = "C-Tier (Sub-Hurdle)"
             reasons = []
+            if not all_gates_approved:
+                reasons.append(f"Failed {gates_total - gates_passed}/{gates_total} Gates")
             if sharpe < 1.2:
                 reasons.append(f"Low Sharpe ({sharpe:.2f})")
             if max_dd > 0.030:
-                reasons.append(f"High Drawdown ({max_dd*100:.1f}%)")
-            if profit_factor < 1.1:
-                reasons.append(f"Low PF ({profit_factor:.2f})")
-            tier_reason = f"Sub-Hurdle: {gates_passed}/{gates_total} Gates. {', '.join(reasons) or 'Fails Core Gates'}"
+                reasons.append(f"Excessive DD ({max_dd*100:.1f}%)")
+            tier_reason = f"Sub-Hurdle: {', '.join(reasons) or 'Fails Core Verification'}"
 
         return {
             "ranking_score": composite_score,
@@ -1003,11 +1028,17 @@ class StrategyRegistry:
             strat["tier"] = meta["tier"]
             strat["ranking_breakdown"] = meta["ranking_breakdown"]
 
-        # Sort descending by ranking_score
-        strategies.sort(key=lambda s: s.get("ranking_score", 0.0), reverse=True)
-        for idx, strat in enumerate(strategies, start=1):
+        # Sort: First APPROVED strategies by ranking_score descending, then non-approved (Incubation/Rejected)
+        approved = [s for s in strategies if s.get("falsification_gates", {}).get("gates_summary", {}).get("verdict") == "APPROVED"]
+        unapproved = [s for s in strategies if s.get("falsification_gates", {}).get("gates_summary", {}).get("verdict") != "APPROVED"]
+
+        approved.sort(key=lambda s: s.get("ranking_score", 0.0), reverse=True)
+        unapproved.sort(key=lambda s: s.get("ranking_score", 0.0), reverse=True)
+
+        sorted_strats = approved + unapproved
+        for idx, strat in enumerate(sorted_strats, start=1):
             strat["rank"] = idx
-        return strategies
+        return sorted_strats
 
     def recalculate_and_save(self) -> List[Dict[str, Any]]:
         """Recalculates multi-factor quantitative rankings across all strategies and saves to disk."""

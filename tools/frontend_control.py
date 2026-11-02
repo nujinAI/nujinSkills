@@ -9,6 +9,11 @@ from pathlib import Path
 
 # Ensure modern Node.js is in PATH if nvm is available
 def setup_node_path():
+    # Prioritize /snap/bin if available for Node 22+
+    snap_bin = "/snap/bin"
+    if os.path.exists(snap_bin) and snap_bin not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{snap_bin}:{os.environ.get('PATH', '')}"
+
     nvm_node_dir = Path.home() / ".nvm" / "versions" / "node"
     if nvm_node_dir.exists():
         # Find latest node version
@@ -29,17 +34,24 @@ SERVICE_NAME = "nujin-frontend.service"
 def has_systemd_service() -> bool:
     return os.path.exists(f"/etc/systemd/system/{SERVICE_NAME}")
 
+import ssl
+
 def check_status(port: int = 3000):
-    url = f"http://127.0.0.1:{port}"
-    try:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with opener.open(req, timeout=3) as resp:
-            print(f"[FrontendControl] ONLINE (Port {port}, Status {resp.status})")
-            return True
-    except Exception:
-        print(f"[FrontendControl] OFFLINE (Port {port})")
-        return False
+    for scheme in ["https", "http"]:
+        url = f"{scheme}://127.0.0.1:{port}"
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), urllib.request.ProxyHandler({}))
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with opener.open(req, timeout=3) as resp:
+                print(f"[FrontendControl] ONLINE ({scheme.upper()} Port {port}, Status {resp.status})")
+                return True
+        except Exception:
+            continue
+    print(f"[FrontendControl] OFFLINE (Port {port})")
+    return False
 
 def build_frontend():
     print(f"[FrontendControl] Using Node version: {subprocess.getoutput('node --version')}")

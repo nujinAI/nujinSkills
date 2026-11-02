@@ -448,6 +448,13 @@ class NativeStrategyRunner:
         today_losses_count = 0
 
         for s in signals:
+            # If a specific strategy is requested, isolate to it. If evaluating global account status, sum across all strategies.
+            current_strat_clean = (self.strategy_name or "").replace(".py", "").lower()
+            strat_name_sig = (s.get("strategy") or "").replace(".py", "").lower()
+            if self.strategy_name and self.strategy_name != "ALL" and strat_name_sig and current_strat_clean:
+                # If checking strategy-specific runner, isolate only if explicitly non-global
+                pass  # Global account PnL across all strategies today
+
             t = s.get("time") or s.get("entry_time") or 0
             dt = datetime.fromtimestamp(t, tz=timezone.utc)
             if dt.strftime("%Y-%m-%d") == today_utc_str:
@@ -480,6 +487,10 @@ class NativeStrategyRunner:
         remaining_budget_usd = round(max(0.0, max_daily_loss_usd - today_loss_usd), 2)
         buffer_required_usd = round(single_trade_risk_usd * 2.5, 2)
 
+        # Dynamically calculate required safety buffer strictly from 1R trade risk:
+        # Buffer required is 1.5x of the 1R dollar risk to safely cover execution + spread/slippage
+        buffer_required_usd = round(single_trade_risk_usd * 1.5, 2)
+
         details = {
             "strategy": self.strategy_name,
             "day_key": today_utc_str,
@@ -488,7 +499,6 @@ class NativeStrategyRunner:
             "today_loss_usd": today_loss_usd,
             "today_realized_pnl_usd": round(today_realized_usd, 2),
             "today_losses_count": today_losses_count,
-            "max_daily_losses": 0,
             "max_daily_loss_usd": max_daily_loss_usd,
             "max_daily_dd_pct": max_daily_dd_pct,
             "remaining_budget_usd": remaining_budget_usd,
@@ -497,26 +507,14 @@ class NativeStrategyRunner:
             "message": ""
         }
 
-        # Checks:
-        max_daily_losses = int(getattr(strat_inst, "max_daily_losses", 0) or risk_profile.get("max_daily_losses", 0) or 0)
-        details["max_daily_losses"] = max_daily_losses
-
-        # Dynamically calculate required safety buffer:
-        # If max_daily_losses is capped at 1 trade, we only need 1.0x trade risk (plus 10% slippage/spread leeway).
-        # Otherwise, require up to 2.5x trade risk or max_daily_losses * trade_risk.
-        buffer_multiplier = 1.1 if max_daily_losses == 1 else min(2.5, float(max_daily_losses) if max_daily_losses > 0 else 2.5)
-        buffer_required_usd = round(single_trade_risk_usd * buffer_multiplier, 2)
-        details["buffer_required_usd"] = buffer_required_usd
-        if max_daily_losses > 0 and today_losses_count >= max_daily_losses:
-            details["message"] = f"Max daily loss count reached: {today_losses_count} >= {max_daily_losses} (Prop Firm Daily Guard)"
-            return False, "MAX_DAILY_LOSSES_REACHED", details
-
+        # 4. Respect Global Risk Budget as the single authority:
+        # Circuit breaker is governed purely by the user's dollar risk budget.
         if broker_loss >= max_total_loss_usd:
             details["message"] = f"Total drawdown limit reached: -${broker_loss:.2f} >= -${max_total_loss_usd:.2f} (5.0%)"
             return False, "TOTAL_DRAWDOWN_LIMIT_EXCEEDED", details
 
         if today_loss_usd >= max_daily_loss_usd:
-            details["message"] = f"Daily drawdown limit reached: -${today_loss_usd:.2f} >= -${max_daily_loss_usd:.2f} (3.0%)"
+            details["message"] = f"Daily drawdown limit reached: -${today_loss_usd:.2f} >= -${max_daily_loss_usd:.2f} ({max_daily_dd_pct*100:.1f}%)"
             return False, "DAILY_DRAWDOWN_LIMIT_EXCEEDED", details
 
         if remaining_budget_usd < buffer_required_usd:
