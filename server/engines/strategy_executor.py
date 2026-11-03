@@ -586,7 +586,7 @@ class NativeStrategyRunner:
             if len(returns) < 8:
                 return True, {"status": "HEALTHY", "reason": "Insufficient return samples"}
 
-            from server.engines.cynic_gates import compute_cusum_degradation
+            from core.cynic_gates import compute_cusum_degradation
             res = compute_cusum_degradation(np.array(returns[-30:]), threshold_sigma=2.5)
             healthy = (res.get("status") != "DEGRADED")
             return healthy, res

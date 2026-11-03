@@ -7,7 +7,7 @@ and Systematic Strategy Execution Gateway.
 Modular 2026 FastAPI Architecture:
   - Bounded context routers under server/api/routes/
   - Typed request & response schemas under server/schemas/
-  - Core configuration & modern async lifespan under server/core/
+  - Core configuration & modern async lifespan under server/runtime/
   - Single Market Authority: TradingView Provider for ANY asset.
 """
 
@@ -16,9 +16,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Core configuration & modern lifespan
-from server.core.config import APP_TITLE, APP_VERSION, APP_DESCRIPTION
-from server.core.lifespan import lifespan
-from server.core.audio import play_system_alert
+from server.runtime.config import APP_TITLE, APP_VERSION, APP_DESCRIPTION
+from server.runtime.lifespan import lifespan
+from server.runtime.audio import play_system_alert
 
 # API presentation layer
 from server.api import register_routes

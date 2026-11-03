@@ -8,7 +8,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from server.engines.cynic_gates import (
+from core.cynic_gates import (
     CANONICAL_GATES,
     GATE_KEYS,
     INCONCLUSIVE,

@@ -9,7 +9,7 @@ from server.api.deps import (
     strategy_registry,
     state_manager,
 )
-from server.core.background import (
+from server.runtime.background import (
     cron_backtest_scheduler,
     strategy_auto_discovery_watcher,
     strategy_runner_auto_healer,
