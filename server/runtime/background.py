@@ -142,6 +142,7 @@ async def strategy_auto_discovery_watcher():
                 last_json_mtime = _get_json_mtime()
 
             elif json_changed_externally:
+                last_json_mtime = curr_json_mtime
                 logger.info(f"[StrategyWatcher] data/strategies.json changed externally. Broadcasting update...")
                 all_strats = strategy_registry.get_all(sync=False)
                 portfolio = strategy_registry.get_portfolio_summary()
@@ -155,7 +156,6 @@ async def strategy_auto_discovery_watcher():
                         "distribution_analytics": distribution,
                     },
                 })
-                last_json_mtime = curr_json_mtime
 
         except Exception as e:
             logger.error(f"[StrategyWatcher] Auto-discovery loop error: {e}")

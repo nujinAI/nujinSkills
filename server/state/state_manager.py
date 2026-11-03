@@ -530,6 +530,12 @@ class StrategyRegistry:
         return _read_json_locked(self._path, [])
 
     def _write_raw(self, data: List[Dict[str, Any]]) -> None:
+        try:
+            curr = self._read_raw()
+            if curr == data:
+                return
+        except Exception:
+            pass
         _write_json_locked(self._path, data)
 
     def get_active_strategy_name(self) -> str:
@@ -1246,8 +1252,6 @@ class StrategyRegistry:
             strategies = self.sync_with_filesystem()
         else:
             strategies = self._read_raw()
-            if not strategies:
-                strategies = self.sync_with_filesystem()
 
         # Enrich with real live signals & equity curve
         for strat in strategies:

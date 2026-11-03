@@ -19,7 +19,16 @@ async def get_drawdown_status(strategy: Optional[str] = None):
         if active_list:
             target_strat = active_list[0]
         else:
-            target_strat = state_manager.get_key("active_strategy") or "AutonomousAlphaModel"
+            target_strat = state_manager.get_key("active_strategy") or ""
+
+    if not target_strat:
+        return {
+            "status": "IDLE",
+            "reason": "No active strategy deployed",
+            "is_safe": True,
+            "daily_drawdown_pct": 0.0,
+            "total_drawdown_pct": 0.0,
+        }
 
     runner = NativeStrategyRunner(target_strat)
     safe, reason, details = runner.check_drawdown_safety()
