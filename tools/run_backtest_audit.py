@@ -70,7 +70,7 @@ def audit(strategy: str, save_state: bool, output_path: str, days: int = 30, acc
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI Strategy Backtest & Cynic Audit")
-    parser.add_argument("--strategy",    type=str, required=True,                      help="Strategy filename in strategies/ (required, no hardcoded defaults)")
+    parser.add_argument("--strategy",     type=str, required=True,                       help="Strategy filename in strategies/ (required, no hardcoded defaults)")
     parser.add_argument("--days",         type=int, default=30,                          help="Lookback period in days (e.g. 14, 30, 60, 90)")
     parser.add_argument("--account-size", type=float, default=None,                      help="Account size override in $ (defaults to active broker account or $5,000)")
     parser.add_argument("--save-state",   action="store_true", default=False,            help="Deploy as active strategy (writes data/state.json)")
