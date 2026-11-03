@@ -41,12 +41,12 @@ from server.schemas import (
 
 # Core singletons & dependencies (Single Source of Truth)
 from server.state.state_manager import state_manager, signal_store, strategy_registry
-from server.engines.bot_runner import bot_supervisor
+from server.services.bot_runner import bot_supervisor
 from server.telegram.telegram_bot import telegram_gateway
 from server.plugin_loader import plugin_manager
 from server.brokers.registry import broker_registry
-from server.engines.backtest_engine import run_real_backtest
-from server.engines import data_manager
+from server.services.backtest_engine import run_real_backtest
+from server.services import data_manager
 
 # Route handlers re-exported for backwards compatibility with tests & internal callers
 from server.api.routes.brokers import (

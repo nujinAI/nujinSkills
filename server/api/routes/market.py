@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from server.api.deps import manager, strategy_registry
 from server.providers.base import ProviderRegistry
-from server.engines import data_manager
+from server.services import data_manager
 
 logger = logging.getLogger("NujinMarketRouter")
 router = APIRouter(tags=["Market Data & Quotes"])
@@ -55,7 +55,7 @@ def _extract_primitives_for_response(strategy_name: Optional[str], candles_data:
     if not strat:
         return {"lines": [], "series": {}, "boxes": [], "levels": [], "hud_items": []}
     try:
-        from server.engines.chart_primitives import extract_strategy_primitives
+        from server.services.chart_primitives import extract_strategy_primitives
         clean_name = strat.replace(".py", "")
         return extract_strategy_primitives(clean_name, candles_data)
     except Exception as e:
