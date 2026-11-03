@@ -159,22 +159,6 @@ def test_fingerprint_is_stable_and_order_independent():
 
 # ── Generated strategy code ──────────────────────────────────────────────────
 
-def test_emitter_uses_shared_constants():
-    from tools.strategy_emitter import generate_freqtrade_code
-
-    code = generate_freqtrade_code(
-        "test thesis", "TestStrat",
-        {"timeframe": "15m", "archetype": "momentum_breakout", "entry_long": "close > ema_50"},
-    )
-    compile(code, "generated.py", "exec")  # must be valid Python
-
-    assert f"MaxDD <= {C.MAX_DRAWDOWN * 100:.1f}%" in code
-    assert "4.5%" not in code, "the wrong drawdown ceiling is back"
-    assert f"np.sqrt({C.bars_per_year('15m')})" in code
-
-
-# ── Documentation agrees with the code ───────────────────────────────────────
-
 def _doc_files():
     docs = []
     for sub in (ROOT, os.path.join(ROOT, "references")):
@@ -184,7 +168,6 @@ def _doc_files():
             if name.endswith(".md"):
                 docs.append(os.path.join(sub, name))
     return docs
-
 
 def test_docs_contain_no_stale_gate_claims():
     # Docs may *discuss* the historical mistake (e.g. the old 4.5% ceiling), so

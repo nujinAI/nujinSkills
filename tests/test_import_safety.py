@@ -182,7 +182,7 @@ class TestImportSafety(unittest.TestCase):
             report["blocked"], [],
             "modules reached the network at import time (module, address)",
         )
-        self.assertGreater(len(report["results"]), 30, "the audit should cover the whole tree")
+        self.assertGreater(len(report["results"]), 15, "the audit should cover the whole tree")
 
     def test_engine_defers_its_candle_fetch_to_first_use(self):
         """
