@@ -785,12 +785,23 @@ def sync_xauusd_scalp_candles(output_path: str = "") -> str:
     return output_path
 
 
-def fetch_ohlcv(symbol: str, timeframe: str = "15m", count: int = 1500):
-    """Unified SSOT candle fetcher."""
+def fetch_ohlcv(symbol: str, timeframe: str = "15m", count: int = 1500, period: Optional[str] = None, use_cache: bool = True):
+    """Unified SSOT candle fetcher with dynamic period and cache support."""
     resolved = resolve_market_symbol(symbol)
     candles = fetch_candles_via_tv(resolved, timeframe, count=count)
     if not candles and ("XAU" in resolved.upper() or "GOLD" in resolved.upper()):
         candles = fetch_real_broker_spot_gold_candles(interval=timeframe, count=min(count, 1000))
     if not candles and any(k in resolved.upper() for k in ["BTC", "ETH", "SOL", "USDT"]):
         candles = fetch_real_binance_klines(symbol=symbol, interval=timeframe, count=count)
+    if candles and use_cache:
+        try:
+            df = pd.DataFrame(candles)
+            if not df.empty:
+                ts_col = "timestamp" if "timestamp" in df.columns else ("time" if "time" in df.columns else None)
+                if ts_col:
+                    df.index = pd.to_datetime(df[ts_col], unit="s", utc=True)
+                    df.index.name = "dt"
+                return df
+        except Exception:
+            pass
     return candles

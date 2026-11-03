@@ -391,11 +391,13 @@ def run_real_backtest(
     try:
         df_dynamic = fetch_ohlcv(symbol=canon_sym, timeframe=timeframe, count=needed_count, period=period_str, use_cache=True)
         if df_dynamic is not None and not df_dynamic.empty:
-            df_dynamic_reset = df_dynamic.reset_index()
-            dt_col = df_dynamic_reset.columns[0]
-            # Ensure standard timestamp and time columns in seconds
-            df_dynamic_reset['timestamp'] = pd.to_datetime(df_dynamic_reset[dt_col], utc=True).apply(lambda x: int(x.timestamp()))
-            df_dynamic_reset['time'] = df_dynamic_reset['timestamp']
+            df_dynamic_reset = df_dynamic.copy()
+            if not isinstance(df_dynamic_reset.index, pd.RangeIndex):
+                df_dynamic_reset = df_dynamic_reset.reset_index(drop=True)
+            if "time" in df_dynamic_reset.columns and "timestamp" not in df_dynamic_reset.columns:
+                df_dynamic_reset["timestamp"] = df_dynamic_reset["time"]
+            elif "timestamp" in df_dynamic_reset.columns and "time" not in df_dynamic_reset.columns:
+                df_dynamic_reset["time"] = df_dynamic_reset["timestamp"]
             
             # Maintain disk cache consistency across canonical & legacy paths
             data_manager._save_canonical_and_legacy(canon_sym, timeframe, df_dynamic_reset, legacy_path=candles_file, source="data_tool_backtest")
@@ -405,14 +407,16 @@ def run_real_backtest(
     if not os.path.exists(candles_file):
         raise FileNotFoundError(f"[BacktestEngine] Candle dataset file not found: {candles_file}")
 
-    cmd_feat = [sys.executable, feat_miner_script, "--input", candles_file, "--output", features_file]
-
-    # Always generate fresh features.csv
-    logger.info(f"[BacktestEngine] Generating fresh feature set from {candles_file}...")
+    # Generate fresh features.csv in-process using canonical core indicator library
     try:
-        subprocess.run(cmd_feat, cwd=_ROOT, check=True)
+        from core.indicators import compute_all_standard_features
+        df_raw = pd.read_csv(candles_file)
+        if not df_raw.empty:
+            df_feat = compute_all_standard_features(df_raw)
+            df_feat.to_csv(features_file, index=False)
+            logger.info(f"[BacktestEngine] Synchronized fresh feature set ({len(df_feat)} rows) to {features_file}")
     except Exception as e_feat:
-        logger.warning(f"[BacktestEngine] Feature miner warning: {e_feat}")
+        logger.warning(f"[BacktestEngine] Feature generation note: {e_feat}")
 
     # 2. Dynamic Strategy Loading & Indicator Computation
     strat_inst = load_strategy_instance(clean_name)
