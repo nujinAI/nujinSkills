@@ -1,295 +1,45 @@
+"""
+server/services/backtest_engine.py - Canonical Unified Backtest Engine.
+Orchestrates quantitative dual-directional backtesting, Cynic audit gates,
+and persists telemetry using shared core/ analytics and discrete simulation.
+"""
 import os
 import sys
 import json
 import time
-import types
-import importlib.util
-import subprocess
 import logging
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 from server.state_manager import state_manager, strategy_registry
-# Imported as a module, never as bound names: a module-level `from server.data_manager import
-# sync_x` freezes the function into this namespace, which defeats monkeypatching
-# server.data_manager and hides live fetches from anything that intercepts them there.
 from server import data_manager
 from server.cynic_gates import compute_dsr, verify_monte_carlo, evaluate_gates
 from server.trial_ledger import record_trial, n_trials_for_dsr
 from server.constants import trade_annualization_factor
+from core.friction import resolve_asset_friction
+from core.simulation import run_discrete_simulation
+from core.regimes import classify_market_regimes, compute_regime_breakdown
+from core.analytics import (
+    compute_summary_metrics,
+    compute_equity_curve,
+    compute_return_distribution,
+    compute_account_growth_models,
+)
 
-try:
-    from server.plugin_loader import plugin_manager
-except ImportError:
-    plugin_manager = None
+# Re-export strategy loader and stability auditor functions for 100% backwards compatibility
+from server.services.strategy_loader import (
+    _ensure_freqtrade_shim,
+    load_strategy_instance,
+    resolve_strategy_metadata,
+)
+from server.services.stability_auditor import (
+    compute_strategy_parameter_stability_matrix,
+)
 
 logger = logging.getLogger("BacktestEngine")
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_PARENT = os.path.abspath(os.path.join(_ROOT, ".."))
-if _PARENT not in sys.path:
-    sys.path.insert(0, _PARENT)
-_ZILLIONS = os.path.join(_PARENT, "zillionsAlpha")
-if os.path.exists(_ZILLIONS) and _ZILLIONS not in sys.path:
-    sys.path.insert(0, _ZILLIONS)
-
-def _ensure_freqtrade_shim():
-    """Ensures freqtrade.strategy mocks are available in sys.modules so strategy files can be imported cleanly."""
-    if "freqtrade" not in sys.modules:
-        ft_mod = types.ModuleType("freqtrade")
-        ft_strat_mod = types.ModuleType("freqtrade.strategy")
-        class _IStrategy:
-            INTERFACE_VERSION = 3
-            timeframe = '15m'
-            can_short = True
-            stoploss = -0.02
-            minimal_roi = {}
-            def populate_indicators(self, df, metadata): return df
-            def populate_entry_trend(self, df, metadata): return df
-            def populate_exit_trend(self, df, metadata): return df
-        class _Parameter:
-            def __init__(self, *args, **kwargs):
-                self.value = kwargs.get('default', args[0] if len(args) > 0 else 0)
-            def __int__(self): return int(self.value)
-            def __float__(self): return float(self.value)
-            def __repr__(self): return str(self.value)
-        ft_strat_mod.DecimalParameter = _Parameter
-        ft_strat_mod.IntParameter = _Parameter
-        ft_strat_mod.CategoricalParameter = lambda choices, default=None: default or choices[0]
-        ft_strat_mod.BooleanParameter = bool
-        sys.modules["freqtrade"] = ft_mod
-        sys.modules["freqtrade.strategy"] = ft_strat_mod
-
-def load_strategy_instance(strategy_name: str) -> Optional[Any]:
-    """
-    Dynamically loads and instantiates a strategy class from core strategies/ or installed plugins.
-    Single Source of Truth: Executes the actual Python class implementing the strategy.
-    """
-    _ensure_freqtrade_shim()
-    clean_name = strategy_name.replace(".py", "")
-    strat_path = os.path.join(_ROOT, "strategies", f"{clean_name}.py")
-
-    # If not in core, check plugin paths
-    if not os.path.exists(strat_path) and plugin_manager:
-        resolved = plugin_manager.resolve_strategy_path(clean_name)
-        if resolved and os.path.exists(resolved):
-            strat_path = resolved
-
-    if not os.path.exists(strat_path):
-        logger.warning(f"[BacktestEngine] Strategy file not found at {strat_path}")
-        return None
-
-    try:
-        mod_name = f"edge_strategy_{clean_name}"
-        if mod_name in sys.modules:
-            del sys.modules[mod_name]
-        spec = importlib.util.spec_from_file_location(mod_name, strat_path)
-        if not spec or not spec.loader:
-            return None
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[mod_name] = mod
-        spec.loader.exec_module(mod)
-
-        # Locate strategy class in module
-        for attr_name in dir(mod):
-            if attr_name in ("IStrategy", "type"):
-                continue
-            obj = getattr(mod, attr_name)
-            if isinstance(obj, type) and ((hasattr(obj, "populate_indicators") and hasattr(obj, "populate_entry_trend")) or hasattr(obj, "generate_signals")):
-                logger.info(f"[BacktestEngine] Successfully loaded strategy class: {attr_name} from {strat_path}")
-                return obj()
-    except Exception as e:
-        logger.error(f"[BacktestEngine] Failed to load strategy instance for '{clean_name}': {e}")
-    return None
-
-def resolve_strategy_metadata(strategy_name: str, timeframe_override: Optional[str] = None) -> dict:
-    """
-    Resolves strategy metadata dynamically using data/strategies.json and data/state.json
-    as the Single Source of Truth.
-    """
-    clean_name = strategy_name.replace(".py", "")
-    
-    # 1. Query data/strategies.json via strategy_registry
-    strat_record = strategy_registry.get(clean_name)
-    if not strat_record:
-        # Sync with filesystem and retry
-        strategy_registry.sync_with_filesystem()
-        strat_record = strategy_registry.get(clean_name)
-
-    # 2. Query data/state.json via state_manager
-    curr_state = state_manager.get()
-    is_active_sys = (clean_name == curr_state.get("active_strategy"))
-
-    strat_inst = load_strategy_instance(clean_name)
-    strat_inst_symbol = getattr(strat_inst, "symbol", None) if strat_inst else None
-    strat_inst_timeframe = getattr(strat_inst, "timeframe", None) if strat_inst else None
-
-    # Single Source of Truth: Strategy class attributes have primary authority
-    symbol = strat_inst_symbol or \
-             (strat_record.get("symbol") if strat_record else None) or \
-             (curr_state.get("symbol") if is_active_sys else None) or \
-             "OANDA:XAUUSD"
-
-    timeframe = timeframe_override or \
-                strat_inst_timeframe or \
-                (strat_record.get("timeframe") if strat_record else None) or \
-                (curr_state.get("timeframe") if is_active_sys else None) or \
-                "5m"
-
-    target_profile = (strat_record.get("target_profile") if strat_record else None) or \
-                     (curr_state.get("target_profile") if is_active_sys else None) or \
-                     f"{clean_name} Profile"
-
-    thesis = (strat_record.get("thesis") if strat_record else None) or \
-             (curr_state.get("thesis_props", {}).get("thesis") if is_active_sys else None) or \
-             f"Autonomous Alpha Model: {clean_name}"
-
-    saved_thesis_props = curr_state.get("thesis_props", {}) if is_active_sys else {}
-    thesis_props = {
-        "thesis": thesis,
-        "counterparty": saved_thesis_props.get("counterparty", "Trapped breakout liquidity / volatility expansion"),
-        "invalidation": saved_thesis_props.get("invalidation", "Stop-loss triggered beyond structural extreme"),
-        "target_profile": target_profile
-    }
-
-    return {
-        "clean_name": clean_name,
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "target_profile": target_profile,
-        "thesis": thesis,
-        "thesis_props": thesis_props,
-        "strat_record": strat_record or {}
-    }
-
-from core.friction import resolve_asset_friction
-
-def compute_strategy_parameter_stability_matrix(
-    df_c: pd.DataFrame,
-    strat_inst: Any,
-    observed_sr: float,
-    symbol: str = "BTC/USDT",
-    account_size: Optional[float] = None,
-) -> Optional[np.ndarray]:
-    """
-    Computes a genuine 2x2 perturbed Sharpe matrix around the strategy's
-    entry/exit signals and stop/target parameters so Gate 2
-    (`gate_2_parameter_stability`) can be evaluated from real perturbed runs.
-    """
-    if strat_inst is None or len(df_c) < 60:
-        return None
-    try:
-        test_acct_size = resolve_default_account_size(account_size)
-        if hasattr(strat_inst, "generate_signals"):
-            from core.simulation import run_discrete_simulation as run_discrete_backtest
-            df_idx = df_c.copy()
-            if 'timestamp' in df_idx.columns:
-                df_idx['dt'] = pd.to_datetime(df_idx['timestamp'], unit='s', utc=True)
-                df_idx = df_idx.set_index('dt')
-            sl_base = float(getattr(strat_inst, "sl_atr_mult", 1.0))
-            tp_base = float(getattr(strat_inst, "tp_atr_mult", 1.5))
-            matrix: List[List[float]] = []
-            for sl_f in [0.92, 1.08]:
-                row: List[float] = []
-                for tp_f in [0.92, 1.08]:
-                    try:
-                        kwargs = {
-                            "risk_pct_1r": getattr(strat_inst, "risk_pct_1r", 0.0035),
-                            "sl_atr_mult": sl_base * sl_f,
-                            "tp_atr_mult": tp_base * tp_f,
-                            "max_hold_bars": getattr(strat_inst, "max_hold_bars", 6)
-                        }
-                        if hasattr(strat_inst, "max_daily_losses"):
-                            kwargs["max_daily_losses"] = getattr(strat_inst, "max_daily_losses")
-                        if hasattr(strat_inst, "daily_profit_cap_pct"):
-                            kwargs["daily_profit_cap_pct"] = getattr(strat_inst, "daily_profit_cap_pct")
-                        strat_copy = strat_inst.__class__(**kwargs)
-                        sig = strat_copy.generate_signals(df_idx)
-                        test_dollar_risk = test_acct_size * getattr(strat_copy, "risk_pct_1r", 0.0035)
-                        test_daily_cap = (test_acct_size * strat_copy.daily_profit_cap_pct) if getattr(strat_copy, "daily_profit_cap_pct", None) else None
-                        res = run_discrete_backtest(
-                            df=df_idx,
-                            signals=sig,
-                            symbol="OANDA:XAUUSD" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else symbol,
-                            account_size=test_acct_size,
-                            dollar_risk_1r=test_dollar_risk,
-                            max_daily_losses=getattr(strat_copy, "max_daily_losses", 1),
-                            daily_profit_cap=test_daily_cap,
-                            max_hold_bars=getattr(strat_copy, "max_hold_bars", 6),
-                            close_eod=True
-                        )
-                        rets = [t.pnl_dollars / test_acct_size for t in res["trades"]]
-                        if len(rets) >= 5:
-                            m_r = float(np.mean(rets))
-                            s_r = float(np.std(rets, ddof=1)) or 1e-6
-                            sr_p = float((m_r / s_r) * trade_annualization_factor())
-                        else:
-                            sr_p = 0.0
-                    except Exception:
-                        sr_p = 0.0
-                    row.append(sr_p)
-                matrix.append(row)
-            return np.asarray(matrix, dtype=float)
-
-        # Fallback for strategies defining populate_entry_trend / populate_exit_trend
-        from core.simulation import run_discrete_simulation as run_discrete_backtest
-        df_idx = df_c.copy()
-        if 'timestamp' in df_idx.columns:
-            df_idx['dt'] = pd.to_datetime(df_idx['timestamp'], unit='s', utc=True)
-            df_idx = df_idx.set_index('dt')
-
-        base_sl = abs(float(getattr(strat_inst, "stoploss", -0.015)))
-        roi_dict = getattr(strat_inst, "minimal_roi", {}) or {}
-        base_tp = float(roi_dict.get("0", roi_dict.get(0, max(base_sl * 1.8, 0.025)))) if isinstance(roi_dict, dict) else max(base_sl * 1.8, 0.025)
-        base_bars = int(getattr(strat_inst, "max_bars_held", getattr(strat_inst, "time_invalidation_bars", 16)) or 16)
-        risk_pct = float(getattr(strat_inst, "risk_per_trade", getattr(strat_inst, "risk_per_trade_pct", 0.0035)) or 0.0035)
-
-        sl_factors = [0.92, 1.08]
-        tp_factors = [0.92, 1.08]
-        matrix: List[List[float]] = []
-
-        for sl_f in sl_factors:
-            row: List[float] = []
-            for tp_f in tp_factors:
-                try:
-                    close_s = df_idx["close"]
-                    sig_df = pd.DataFrame(index=df_idx.index)
-                    sig_df["entry_signal"] = 0
-                    if "enter_long" in df_idx.columns and (df_idx["enter_long"] == 1).any():
-                        sig_df.loc[df_idx["enter_long"] == 1, "entry_signal"] = 1
-                    if "enter_short" in df_idx.columns and (df_idx["enter_short"] == 1).any():
-                        sig_df.loc[df_idx["enter_short"] == 1, "entry_signal"] = -1
-
-                    cur_sl_pct = max(0.001, base_sl * sl_f)
-                    cur_tp_pct = max(0.002, base_tp * tp_f)
-                    sig_df["stop_loss"] = np.where(sig_df["entry_signal"] == 1, close_s * (1.0 - cur_sl_pct), close_s * (1.0 + cur_sl_pct))
-                    sig_df["target"] = np.where(sig_df["entry_signal"] == 1, close_s * (1.0 + cur_tp_pct), close_s * (1.0 - cur_tp_pct))
-
-                    res = run_discrete_backtest(
-                        df=df_idx,
-                        signals=sig_df,
-                        symbol="OANDA:XAUUSD" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else symbol,
-                        account_size=test_acct_size,
-                        dollar_risk_1r=test_acct_size * risk_pct,
-                        max_hold_bars=max(4, int(round(base_bars * tp_f))),
-                        close_eod=True,
-                    )
-                    rets = [t.pnl_dollars / test_acct_size for t in res["trades"]]
-                    if len(rets) >= 5:
-                        m_r = float(np.mean(rets))
-                        s_r = float(np.std(rets, ddof=1)) or 1e-6
-                        sr_p = float((m_r / s_r) * trade_annualization_factor())
-                    else:
-                        sr_p = 0.0
-                except Exception:
-                    sr_p = 0.0
-                row.append(sr_p)
-            matrix.append(row)
-        return np.asarray(matrix, dtype=float)
-    except Exception as e:
-        logger.debug(f"[BacktestEngine] Parameter perturbation matrix warning: {e}")
-        return None
 
 
 def resolve_default_account_size(user_override: Optional[float] = None) -> float:
@@ -324,6 +74,49 @@ def resolve_default_account_size(user_override: Optional[float] = None) -> float
     return 5000.0
 
 
+def _derive_dataset_time_period(
+    df_c: pd.DataFrame,
+    trades_detail: List[Dict[str, Any]],
+    days: Optional[int],
+    timeframe: str
+) -> Dict[str, Any]:
+    """Derives precise timestamp ranges and labels for the evaluated backtest period."""
+    valid_ts = df_c[df_c['timestamp'] > 1000000000]['timestamp'] if 'timestamp' in df_c.columns else pd.Series([])
+    ds_end_ts = int(valid_ts.iloc[-1]) if len(valid_ts) > 0 else (int(trades_detail[-1]["exit_time"]) if trades_detail else int(time.time()))
+    if days and days > 0 and len(valid_ts) > 0:
+        raw_start = ds_end_ts - int(days * 86400)
+        ds_start_ts = max(raw_start, int(valid_ts.iloc[0]))
+        duration_days = round((ds_end_ts - ds_start_ts) / 86400, 1)
+        candles_count = int((df_c['timestamp'] >= ds_start_ts).sum())
+    else:
+        ds_start_ts = int(valid_ts.iloc[0]) if len(valid_ts) > 0 else (int(trades_detail[0]["entry_time"]) if trades_detail else int(time.time()))
+        duration_days = round((ds_end_ts - ds_start_ts) / 86400, 1)
+        candles_count = len(df_c)
+
+    dt_start = datetime.fromtimestamp(ds_start_ts, tz=timezone.utc)
+    dt_end = datetime.fromtimestamp(ds_end_ts, tz=timezone.utc)
+    start_date_str = dt_start.strftime("%Y-%m-%d %H:%M UTC")
+    end_date_str = dt_end.strftime("%Y-%m-%d %H:%M UTC")
+    provider_max_reached = bool(days and days > 0 and duration_days < (float(days) - 1.5))
+    if provider_max_reached:
+        period_label = f"{dt_start.strftime('%Y-%m-%d')} → {dt_end.strftime('%Y-%m-%d')} ({duration_days:.1f}d — max {timeframe} depth)"
+    else:
+        period_label = f"{dt_start.strftime('%Y-%m-%d')} → {dt_end.strftime('%Y-%m-%d')} ({duration_days:.1f}d)"
+
+    return {
+        "start_time": ds_start_ts,
+        "end_time": ds_end_ts,
+        "start_date": start_date_str,
+        "end_date": end_date_str,
+        "duration_days": duration_days,
+        "period_label": period_label,
+        "candles_count": candles_count,
+        "provider_max_reached": provider_max_reached,
+        "first_trade_time": trades_detail[0]["entry_time"] if trades_detail else ds_start_ts,
+        "last_trade_time": trades_detail[-1]["exit_time"] if trades_detail else ds_end_ts,
+    }
+
+
 def run_real_backtest(
     strategy_name: str = "",
     save_as_active: bool = False,
@@ -335,7 +128,6 @@ def run_real_backtest(
     Executes real quantitative dual-directional (LONG & SHORT) backtest and DSR cynic audit.
     Zero hardcoded strategy logic: dynamically evaluates strategy definitions and rules
     loaded from strategies/*.py, data/strategies.json, and data/state.json as Single Source of Truth.
-    Defaults to evaluating the full available historical dataset unless `days` is explicitly provided.
     """
     curr_sys_state = state_manager.get()
     if not strategy_name:
@@ -348,26 +140,17 @@ def run_real_backtest(
     symbol = meta["symbol"]
     timeframe = meta["timeframe"]
     thesis_props = meta["thesis_props"]
-    strat_record = meta["strat_record"]
 
-    cwd = _ROOT
     data_dir = os.path.join(_ROOT, "data")
     features_file = os.path.join(data_dir, "features.csv")
     returns_file = os.path.join(data_dir, "candidate_returns.json")
-    feat_miner_script = os.path.join(_ROOT, "tools", "feature_miner.py")
 
     # 1. Resolve Candle Dataset and Sync via Dynamic Single Source of Truth
     from core.data import fetch_ohlcv
-    from server import data_manager
-
-    # Resolve canonical symbol and clean slug
     canon_sym = data_manager.resolve_market_symbol(symbol)
-    slug = data_manager.canonical_market_slug(symbol)
     candles_file = data_manager.get_market_dataset_path(canon_sym, timeframe, check_legacy=True)
     is_gold = ("XAU" in canon_sym.upper()) or ("GOLD" in canon_sym.upper())
-    is_sp500 = any(k in canon_sym.upper() for k in ["SP", "ES", "US500", "S&P"])
 
-    # Determine needed bars dynamically based on requested days and timeframe Single Source of Truth
     days_req = int(days) if (days and days > 0) else 30
     tf_lower = str(timeframe).lower()
     if tf_lower in ("1m", "m1"):
@@ -386,7 +169,6 @@ def run_real_backtest(
         needed_count = min(15000, max(5000, int(days_req * 288 * 1.15)))
 
     period_str = f"{max(days_req, 30)}d"
-
     logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}, count={needed_count}, days={days_req}) via core.data...")
     try:
         df_dynamic = fetch_ohlcv(symbol=canon_sym, timeframe=timeframe, count=needed_count, period=period_str, use_cache=True)
@@ -398,8 +180,7 @@ def run_real_backtest(
                 df_dynamic_reset["timestamp"] = df_dynamic_reset["time"]
             elif "timestamp" in df_dynamic_reset.columns and "time" not in df_dynamic_reset.columns:
                 df_dynamic_reset["time"] = df_dynamic_reset["timestamp"]
-            
-            # Maintain disk cache consistency across canonical & legacy paths
+
             data_manager._save_canonical_and_legacy(canon_sym, timeframe, df_dynamic_reset, legacy_path=candles_file, source="data_tool_backtest")
     except Exception as e_dyn:
         logger.warning(f"[BacktestEngine] core.data fetch note: {e_dyn}, checking existing dataset on disk")
@@ -420,140 +201,20 @@ def run_real_backtest(
 
     # 2. Dynamic Strategy Loading & Indicator Computation
     strat_inst = load_strategy_instance(clean_name)
-    
-    if not os.path.exists(candles_file):
-        raise FileNotFoundError(f"[BacktestEngine] Candle dataset file not found: {candles_file}")
-
     df_c = pd.read_csv(candles_file)
     df_c = df_c.dropna(subset=['open', 'high', 'low', 'close'])
     if 'timestamp' in df_c.columns:
         df_c['timestamp'] = df_c['timestamp'].ffill().bfill().fillna(0).astype(np.int64)
     df_c = df_c.reset_index(drop=True)
-    n = len(df_c)
-    if n < 50:
-        raise ValueError(f"[BacktestEngine] Candle dataset contains insufficient rows: {n}")
+    if len(df_c) < 50:
+        raise ValueError(f"[BacktestEngine] Candle dataset contains insufficient rows: {len(df_c)}")
 
-    # Compute baseline candle geometry if not present
-    df_c['total_range'] = (df_c['high'] - df_c['low']).replace(0, 1e-6)
-    df_c['body_ratio'] = (df_c['close'] - df_c['open']).abs() / df_c['total_range']
-    df_c['lower_wick'] = (np.minimum(df_c['close'], df_c['open']) - df_c['low']) / df_c['total_range']
-    df_c['upper_wick'] = (df_c['high'] - np.maximum(df_c['close'], df_c['open'])) / df_c['total_range']
-    
-    vol_mean = df_c['volume'].rolling(20).mean()
-    vol_std = df_c['volume'].rolling(20).std().replace(0, 1e-6)
-    df_c['volume_zscore'] = (df_c['volume'] - vol_mean) / vol_std
-    df_c['vol_z'] = df_c['volume_zscore']
-
-    prev_close_c = df_c['close'].shift(1).fillna(df_c['open'])
-    tr_c = np.maximum(df_c['high'] - df_c['low'], np.maximum((df_c['high'] - prev_close_c).abs(), (df_c['low'] - prev_close_c).abs()))
-    df_c['atr_14'] = tr_c.rolling(14).mean().fillna(tr_c)
-
-    # Extract strategy parameters dynamically from strategy instance
-    if strat_inst:
-        can_short = getattr(strat_inst, "can_short", True)
-        stoploss_val = getattr(strat_inst, "stoploss", -0.02)
-        stoploss_pct = abs(float(stoploss_val))
-        minimal_roi = getattr(strat_inst, "minimal_roi", {})
-        
-        atr_multiplier = getattr(strat_inst, "atr_multiplier", None)
-        atr_tp_mult = getattr(strat_inst, "atr_tp_mult", None)
-        atr_sl_mult = getattr(strat_inst, "atr_sl_mult", None)
-        min_wick_ratio = getattr(strat_inst, "min_wick_ratio", None)
-        
-        # Calculate dynamic holding windows from minimal_roi
-        roi_keys = []
-        if isinstance(minimal_roi, dict):
-            for k in minimal_roi.keys():
-                try:
-                    roi_keys.append(int(k))
-                except (ValueError, TypeError):
-                    pass
-        roi_keys.sort()
-        
-        # Minimum and maximum holding bars (anti-arbitrage or holding window)
-        min_bars = getattr(strat_inst, "min_bars", getattr(strat_inst, "min_hold_bars", None))
-        if min_bars is None:
-            min_bars = 1
-        strat_max_bars = getattr(strat_inst, "time_invalidation_bars", getattr(strat_inst, "max_bars", None))
-        if strat_max_bars is not None and int(strat_max_bars) > 0:
-            max_bars = int(strat_max_bars)
-        elif roi_keys and max(roi_keys) > 10:
-            max_bars = max(roi_keys)
-        else:
-            max_bars = 288  # 1 full daily session on 5m: allows full trend run protected by TP/SL/Trailing SL & session flatting
-
-        # Trailing stop configuration
-        use_trailing = getattr(strat_inst, "trailing_stop", False)
-        trail_pos = float(getattr(strat_inst, "trailing_stop_positive", 0.0035))
-        trail_offset = float(getattr(strat_inst, "trailing_stop_positive_offset", 0.0070))
-
-        # Populate strategy indicators, entry, and exit trends (for legacy Freqtrade strategies)
-        if hasattr(strat_inst, "populate_indicators"):
-            try:
-                df_c = strat_inst.populate_indicators(df_c, {})
-                df_c = strat_inst.populate_entry_trend(df_c, {})
-                df_c = strat_inst.populate_exit_trend(df_c, {})
-            except Exception as e_strat_eval:
-                logger.error(f"[BacktestEngine] Error executing strategy trend functions: {e_strat_eval}")
-    else:
-        # Fallback parameters from data/final_rules.json or defaults
-        can_short = True
-        stoploss_pct = 0.0025 if is_gold else 0.02
-        minimal_roi = {"0": 0.003 if is_gold else 0.035, "12": 0.0}
-        roi_keys = [0, 12]
-        atr_tp_mult = None
-        atr_sl_mult = None
-        min_bars = 1
-        max_bars = 15 if is_gold else 12
-        use_trailing = False
-        trail_pos = 0.0035
-        trail_offset = 0.0070
-
-        # Check session best_rule.json or data/final_rules.json
-        from core.indicators import compute_all_standard_features
-        from server.session_store import get_session_paths
-        df_c = compute_all_standard_features(df_c, window=20)
-        session_rule_path = get_session_paths(create_if_missing=False).get("best_rule", "")
-        final_rules_path = os.path.join(data_dir, "final_rules.json")
-        entry_rule = "ema_9 > ema_21 and ema_21 > ema_50 and adx_14 > 20"
-        short_rule = "ema_9 < ema_21 and ema_21 < ema_50 and adx_14 > 20"
-        for cand_rule_path in (session_rule_path, final_rules_path):
-            if cand_rule_path and os.path.exists(cand_rule_path):
-                try:
-                    with open(cand_rule_path, "r") as rf:
-                        f_rules = json.load(rf)
-                        entry_rule = f_rules.get("entry_long", entry_rule)
-                        short_rule = f_rules.get("entry_short", short_rule)
-                        stoploss_pct = float(f_rules.get("stoploss_pct", f_rules.get("stop_loss_pct", stoploss_pct)))
-                        break
-                except Exception:
-                    pass
-        try:
-            df_c['enter_long'] = df_c.eval(entry_rule).astype(int)
-        except Exception:
-            df_c['enter_long'] = 0
-        try:
-            df_c['enter_short'] = df_c.eval(short_rule).astype(int)
-        except Exception:
-            df_c['enter_short'] = 0
-
-    # Ensure signals exist
-    if 'enter_long' not in df_c.columns:
-        df_c['enter_long'] = 0
-    if 'enter_short' not in df_c.columns:
-        df_c['enter_short'] = 0
-
-    df_c['enter_long'] = df_c['enter_long'].fillna(0).astype(int)
-    df_c['enter_short'] = df_c['enter_short'].fillna(0).astype(int)
-
-    # 3. Dynamic Dual-Directional Sequential Simulation
-    trade_markers = []
-    trades_detail = []
-
+    # 3. Dynamic Simulation Execution via core.simulation
+    trade_markers: List[Dict[str, Any]] = []
+    trades_detail: List[Dict[str, Any]] = []
     cutoff_time = (int(df_c['timestamp'].iloc[-1]) - int(days * 86400)) if (days and days > 0 and len(df_c) > 0 and 'timestamp' in df_c.columns) else 0
 
     if strat_inst and hasattr(strat_inst, "generate_signals"):
-        from core.simulation import run_discrete_simulation as run_discrete_backtest
         df_idx = df_c.copy()
         df_idx['dt'] = pd.to_datetime(df_idx['timestamp'], unit='s', utc=True)
         df_idx = df_idx.set_index('dt')
@@ -568,7 +229,7 @@ def run_real_backtest(
         daily_cap = (acct_size * daily_cap_pct) if daily_cap_pct else getattr(strat_inst, "daily_profit_cap", None)
         max_hold_b = int(getattr(strat_inst, "max_hold_bars", 6))
 
-        res_disc = run_discrete_backtest(
+        res_disc = run_discrete_simulation(
             df=df_idx,
             signals=signals,
             symbol="OANDA:XAUUSD" if is_gold else symbol,
@@ -580,7 +241,7 @@ def run_real_backtest(
             close_eod=True
         )
 
-        for idx, t in enumerate(res_disc["trades"]):
+        for t in res_disc["trades"]:
             entry_ts = int(t.entry_time.timestamp()) if hasattr(t.entry_time, 'timestamp') else int(t.entry_time)
             exit_ts = int(t.exit_time.timestamp()) if hasattr(t.exit_time, 'timestamp') else int(t.exit_time)
             if entry_ts < cutoff_time:
@@ -598,8 +259,8 @@ def run_real_backtest(
                 "EOD": "EOD"
             }
             exit_reason = exit_reason_map.get(t.exit_reason, t.exit_reason)
-
             price_fmt = f"${t.entry_price:.2f}"
+
             trade_markers.append({
                 "time": entry_ts,
                 "position": "belowBar" if side == "LONG" else "aboveBar",
@@ -638,52 +299,30 @@ def run_real_backtest(
                 "pnl_r": round(float(t.pnl_r), 3)
             })
     else:
-        # All canonical strategies must provide generate_signals() for core.simulation
         logger.error(f"[BacktestEngine] Strategy {clean_name} does not provide generate_signals(). Cannot run backtest.")
+
     if len(trades_detail) == 0:
         raise RuntimeError(
             f"[BacktestEngine] Backtest produced zero trades for {clean_name} on {candles_file}. "
             "Verify that candle data exists and that strategy entry conditions can trigger."
         )
 
-    # 4. Compute Single Source of Truth Returns & Statistics
+    # 4. Save Candidate Returns for Cynic Audit
     returns_arr = np.array([tr["pnl_pct"] / 100.0 for tr in trades_detail], dtype=float)
-
-    # Save to candidate_returns.json for Cynic audit
     with open(returns_file, "w") as f:
         json.dump(returns_arr.tolist(), f)
         f.flush()
         os.fsync(f.fileno())
 
-    trades = len(returns_arr)
-    win_rate = float(np.mean(returns_arr > 0))
-    gross_profit = float(np.sum(returns_arr[returns_arr > 0])) if np.any(returns_arr > 0) else 0.0
-    gross_loss = float(np.abs(np.sum(returns_arr[returns_arr < 0]))) if np.any(returns_arr < 0) else 0.0
-    profit_factor = round(min(gross_profit / gross_loss, 99.9), 2) if gross_loss > 1e-4 else (99.9 if gross_profit > 0 else 0.0)
-
-    cum_ret = np.cumsum(returns_arr)
-    peak = np.maximum.accumulate(cum_ret)
-    dd = peak - cum_ret
-    max_dd = float(np.max(dd)) if len(dd) > 0 else 0.015
-
+    # 5. Cynic Audit Gate Evaluation
     mean_ret = float(np.mean(returns_arr))
     std_ret = float(np.std(returns_arr))
-    # returns_arr is a TRADE-sampled series, so it annualises on the trade basis.
     sharpe = float((mean_ret / max(std_ret, 1e-6)) * trade_annualization_factor())
-    expectancy_bps = float(mean_ret * 10000.0)
 
-    # ── Genuine Cynic Audit ──────────────────────────────────────────────────
-    # All gate math is delegated to server/cynic_gates.py (the single source of
-    # truth). The complete matrix is assembled further below, once the regime
-    # breakdown exists; these two scalars also feed the backtest summary.
-    # N_trials must reflect how many hypotheses were actually searched. It was
-    # previously derived from the trade count, which has no bearing on search
-    # effort and made the DSR penalty arbitrary. Record this evaluation, then
-    # read the auditable ledger.
     record_trial(
         kind="backtest",
         fingerprint=clean_name,
-        metrics={"sharpe": round(sharpe, 2), "trades": trades},
+        metrics={"sharpe": round(sharpe, 2), "trades": len(returns_arr)},
         source="backtest_engine",
     )
     trials_penalized = n_trials_for_dsr()
@@ -693,226 +332,29 @@ def run_real_backtest(
     real_mdd_99 = float(mc_res.get("mdd_99", 0.0))
 
     # Derive accurate dataset time period
-    valid_ts = df_c[df_c['timestamp'] > 1000000000]['timestamp'] if 'timestamp' in df_c.columns else pd.Series([])
-    ds_end_ts = int(valid_ts.iloc[-1]) if len(valid_ts) > 0 else (int(trades_detail[-1]["exit_time"]) if trades_detail else int(time.time()))
-    if days and days > 0 and len(valid_ts) > 0:
-        raw_start = ds_end_ts - int(days * 86400)
-        ds_start_ts = max(raw_start, int(valid_ts.iloc[0]))
-        duration_days = round((ds_end_ts - ds_start_ts) / 86400, 1)
-        candles_count = int((df_c['timestamp'] >= ds_start_ts).sum())
-    else:
-        ds_start_ts = int(valid_ts.iloc[0]) if len(valid_ts) > 0 else (int(trades_detail[0]["entry_time"]) if trades_detail else int(time.time()))
-        duration_days = round((ds_end_ts - ds_start_ts) / 86400, 1)
-        candles_count = len(df_c)
-    dt_start = datetime.fromtimestamp(ds_start_ts, tz=timezone.utc)
-    dt_end = datetime.fromtimestamp(ds_end_ts, tz=timezone.utc)
-    start_date_str = dt_start.strftime("%Y-%m-%d %H:%M UTC")
-    end_date_str = dt_end.strftime("%Y-%m-%d %H:%M UTC")
-    provider_max_reached = bool(days and days > 0 and duration_days < (float(days) - 1.5))
-    if provider_max_reached:
-        period_label = f"{dt_start.strftime('%Y-%m-%d')} → {dt_end.strftime('%Y-%m-%d')} ({duration_days:.1f}d — max {timeframe} depth)"
-    else:
-        period_label = f"{dt_start.strftime('%Y-%m-%d')} → {dt_end.strftime('%Y-%m-%d')} ({duration_days:.1f}d)"
+    time_period_info = _derive_dataset_time_period(df_c, trades_detail, days, timeframe)
 
-    time_period_info = {
-        "start_time": ds_start_ts,
-        "end_time": ds_end_ts,
-        "start_date": start_date_str,
-        "end_date": end_date_str,
-        "duration_days": duration_days,
-        "period_label": period_label,
-        "candles_count": candles_count,
-        "provider_max_reached": provider_max_reached,
-        "first_trade_time": trades_detail[0]["entry_time"] if trades_detail else ds_start_ts,
-        "last_trade_time": trades_detail[-1]["exit_time"] if trades_detail else ds_end_ts,
-    }
+    # 6. Post-Trade Analytics via canonical core/analytics & core/regimes
+    backtest_summary = compute_summary_metrics(
+        trades_detail=trades_detail,
+        account_size=acct_size,
+        time_info=time_period_info,
+        dsr=real_dsr,
+        mdd_99=real_mdd_99
+    )
 
-    net_pnl_dollars = round(float(sum(tr.get("pnl_dollars", 0.0) for tr in trades_detail)), 2)
-    net_pnl_pct = round(float(sum(tr.get("pnl_pct", 0.0) for tr in trades_detail)), 4)
-
-    backtest_summary = {
-        "sharpe": round(sharpe, 2),
-        "win_rate": round(win_rate, 3),
-        "max_drawdown": round(max_dd, 4),
-        "mdd_99": real_mdd_99,
-        "dsr": real_dsr,
-        "trades": trades,
-        "profit_factor": profit_factor,
-        "expectancy_bps": round(expectancy_bps, 2),
-        "account_size": acct_size,
-        "net_pnl_dollars": net_pnl_dollars,
-        "net_pnl": net_pnl_dollars,
-        "net_pnl_pct": net_pnl_pct,
-        "start_time": ds_start_ts,
-        "end_time": ds_end_ts,
-        "start_date": start_date_str,
-        "end_date": end_date_str,
-        "duration_days": duration_days,
-        "period_label": period_label,
-        "candles_count": candles_count,
-        "provider_max_reached": provider_max_reached
-    }
-
-    # 5. Equity Curve, Return Distribution & Market Regime Breakdown
-    df_c['sma50'] = df_c['close'].rolling(50).mean()
-    regime_map = {}
-    for _, r in df_c.iterrows():
-        ts = int(r['timestamp']) if 'timestamp' in r else int(r.get('time', 0))
-        c_val = float(r['close'])
-        s_val = float(r['sma50']) if not np.isnan(r['sma50']) else c_val
-        if c_val > s_val * 1.002:
-            regime = "bull_market"
-        elif c_val < s_val * 0.998:
-            regime = "bear_market"
-        else:
-            regime = "ranging_market"
-        regime_map[ts] = regime
-
-    curr_equity = 100.0
-    peak_equity = 100.0
-    equity_curve = [{
-        "time": trades_detail[0]["entry_time"],
-        "equity_pct": 100.0,
-        "drawdown_pct": 0.0
-    }]
-
-    regime_trades = {"bull_market": [], "bear_market": [], "ranging_market": []}
-    for tr in trades_detail:
-        curr_equity += tr["pnl_pct"]
-        peak_equity = max(peak_equity, curr_equity)
-        dd_pct = round(((peak_equity - curr_equity) / peak_equity) * 100.0, 2)
-        equity_curve.append({
-            "time": tr["exit_time"],
-            "equity_pct": round(curr_equity, 4),
-            "drawdown_pct": dd_pct
-        })
-        reg = regime_map.get(tr["entry_time"], "ranging_market")
-        tr["regime"] = reg
-        regime_trades[reg].append(tr)
-
-    regime_breakdown = {}
-    for reg, tr_list in regime_trades.items():
-        t_cnt = len(tr_list)
-        if t_cnt > 0:
-            arr_pnl = np.array([t["pnl_pct"] for t in tr_list])
-            w_rate = float(np.mean(arr_pnl > 0))
-            g_prof = float(np.sum(arr_pnl[arr_pnl > 0])) if np.any(arr_pnl > 0) else 0.0
-            g_loss = float(np.abs(np.sum(arr_pnl[arr_pnl < 0]))) if np.any(arr_pnl < 0) else 0.0
-            pf = round(min(g_prof / g_loss, 99.9), 2) if g_loss > 1e-4 else (99.9 if g_prof > 0 else 0.0)
-            net_pnl = round(float(np.sum(arr_pnl)), 2)
-
-            reg_eq = 100.0
-            peak_reg_eq = 100.0
-            max_reg_dd = 0.0
-            reg_curve = [{"time": tr_list[0]["entry_time"], "equity_pct": 100.0, "drawdown_pct": 0.0, "trade_num": 0}]
-            for idx_t, tr in enumerate(tr_list, start=1):
-                reg_eq += tr["pnl_pct"]
-                peak_reg_eq = max(peak_reg_eq, reg_eq)
-                dd_val = round(((peak_reg_eq - reg_eq) / peak_reg_eq) * 100.0, 2)
-                max_reg_dd = max(max_reg_dd, dd_val)
-                reg_curve.append({
-                    "time": tr["exit_time"],
-                    "equity_pct": round(reg_eq, 4),
-                    "drawdown_pct": dd_val,
-                    "pnl_pct": tr["pnl_pct"],
-                    "trade_num": idx_t
-                })
-
-            regime_breakdown[reg] = {
-                "trade_count": t_cnt,
-                "win_rate": round(w_rate, 3),
-                "profit_factor": pf,
-                "net_pnl_pct": net_pnl,
-                "peak_equity_pct": round(peak_reg_eq, 2),
-                "max_drawdown_pct": round(max_reg_dd, 2),
-                "equity_curve": reg_curve
-            }
-        else:
-            regime_breakdown[reg] = {
-                "trade_count": 0,
-                "win_rate": 0.0,
-                "profit_factor": 0.0,
-                "net_pnl_pct": 0.0,
-                "peak_equity_pct": 100.0,
-                "max_drawdown_pct": 0.0,
-                "equity_curve": []
-            }
-
-    # Dynamic Return Distribution Histogram Bins
+    regime_map = classify_market_regimes(df_c)
+    regime_breakdown = compute_regime_breakdown(trades_detail, regime_map)
+    equity_curve = compute_equity_curve(trades_detail)
     all_pnls = [tr["pnl_pct"] for tr in trades_detail]
-    std_pnl = float(np.std(all_pnls)) if len(all_pnls) > 1 else 1.0
-    step = round(max(0.05, std_pnl * 0.75), 2)
-    bins_def = [
-        {"bin_label": f"<-{2*step:.2f}%", "min": -999.0, "max": -2*step, "win": False},
-        {"bin_label": f"-{2*step:.2f}% to -{step:.2f}%", "min": -2*step, "max": -step, "win": False},
-        {"bin_label": f"-{step:.2f}% to 0%", "min": -step, "max": 0.0, "win": False},
-        {"bin_label": f"0% to +{step:.2f}%", "min": 0.0, "max": step, "win": True},
-        {"bin_label": f"+{step:.2f}% to +{2*step:.2f}%", "min": step, "max": 2*step, "win": True},
-        {"bin_label": f">+{2*step:.2f}%", "min": 2*step, "max": 999.0, "win": True}
-    ]
-    return_distribution = []
-    for b in bins_def:
-        cnt = sum(1 for p in all_pnls if b["min"] <= p < b["max"])
-        return_distribution.append({
-            "bin_label": b["bin_label"],
-            "count": cnt,
-            "win": b["win"]
-        })
+    return_distribution = compute_return_distribution(all_pnls)
 
-    # Build state dictionary
-    # Compute Generic Account Growth Models across standard balance tiers ($5k, $10k, $25k, $50k, $100k)
-    # Allows seamless visualization of Prop Firm / Leveraged Account returns vs Raw Spot Delta
-    strat_risk_pct = getattr(strat_inst, 'risk_per_trade_pct', 0.0045) if strat_inst else 0.0045
-    account_tiers = [5000, 10000, 25000, 50000, 100000]
-    account_growth_models = {}
-    
-    # Growth multiplier relative to spot price move (calibrated for institutional lot sizing)
-    if strat_inst and hasattr(strat_inst, "generate_signals"):
-        account_mult = 1.0
-    else:
-        account_mult = round(float(strat_risk_pct / 0.0016), 4) if strat_risk_pct else 2.8191
-    
-    for tier in account_tiers:
-        tier_bal = float(tier)
-        peak_b = tier_bal
-        tier_curve = [{"time": trades_detail[0]["entry_time"], "equity_pct": 100.0, "drawdown_pct": 0.0, "balance": tier_bal}]
-        max_dd_tier = 0.0
-        
-        for tr in trades_detail:
-            # Scaled account return percentage
-            scaled_trade_pct = tr["pnl_pct"] * account_mult
-            trade_dollar = float(tier) * (scaled_trade_pct / 100.0)
-            tier_bal += trade_dollar
-            peak_b = max(peak_b, tier_bal)
-            dd_val = round(((peak_b - tier_bal) / peak_b) * 100.0, 2)
-            max_dd_tier = max(max_dd_tier, dd_val)
-            tier_curve.append({
-                "time": tr["exit_time"],
-                "equity_pct": round((tier_bal / float(tier)) * 100.0, 4),
-                "drawdown_pct": dd_val,
-                "balance": round(tier_bal, 2),
-                "profit_dollars": round(tier_bal - float(tier), 2)
-            })
-            
-        account_growth_models[str(tier)] = {
-            "account_size": tier,
-            "final_balance": round(tier_bal, 2),
-            "net_growth_pct": round(((tier_bal - float(tier)) / float(tier)) * 100.0, 2),
-            "net_profit_dollars": round(tier_bal - float(tier), 2),
-            "max_drawdown_pct": round(max_dd_tier, 2),
-            "equity_curve": tier_curve
-        }
-
-    # Standard benchmark account (defaults to active account size or $5,000 baseline)
-    bench_tier_str = str(int(acct_size)) if str(int(acct_size)) in account_growth_models else "5000"
-    benchmark_model = account_growth_models.get(bench_tier_str, account_growth_models.get("5000", {}))
-    account_summary = {
-        "benchmark_tier": int(acct_size),
-        "net_growth_pct": benchmark_model.get("net_growth_pct", net_pnl_pct),
-        "net_profit_dollars": benchmark_model.get("net_profit_dollars", net_pnl_dollars),
-        "max_drawdown_pct": benchmark_model.get("max_drawdown_pct", round(max_dd * 100, 2)),
-        "account_tiers": account_growth_models
-    }
+    account_summary = compute_account_growth_models(
+        trades_detail=trades_detail,
+        account_size=acct_size,
+        account_mult=1.0
+    )
+    account_growth_models = account_summary.get("account_tiers", {})
 
     state = {
         "active_strategy": clean_name if save_as_active else curr_sys_state.get("active_strategy", clean_name),
@@ -935,13 +377,7 @@ def run_real_backtest(
         "thesis_props": thesis_props
     }
 
-    # ── Assemble the canonical Cynic gate matrix ────────────────────────────
-    # Single source of truth: every gate (DSR, parameter stability, Monte
-    # Carlo, OOS walk-forward, regime survival, friction/noise floor, noise
-    # jitter, equity linearity) is computed by server/cynic_gates.py.
-    #
-    # Compute genuine perturbed parameter stability matrix around the strategy's
-    # active parameters so Gate 2 is evaluated from real perturbed runs.
+    # 7. Cynic Gate Matrix Verification
     perturbed_matrix = compute_strategy_parameter_stability_matrix(
         df_c=df_c,
         strat_inst=strat_inst,
@@ -949,12 +385,6 @@ def run_real_backtest(
         symbol=symbol,
         account_size=acct_size,
     )
-    stop_dists_bps = np.array([
-        abs(float(tr.get("entry_price", 1.0)) - float(tr.get("stop_loss", 1.0)))
-        / max(float(tr.get("entry_price", 1.0)), 1e-8)
-        * 10000.0
-        for tr in trades_detail
-    ], dtype=float)
 
     falsification_gates = evaluate_gates(
         returns_arr,
@@ -986,7 +416,7 @@ def run_real_backtest(
         "falsification_gates": falsification_gates
     }
 
-    # 7. Update Single Source of Truth
+    # 8. Update Single Source of Truth
     if save_as_active:
         state_manager.set_full(state)
         try:
@@ -1029,4 +459,3 @@ if __name__ == "__main__":
     print(f"Trades: {s['trades']} | Win Rate: {s['win_rate']*100:.1f}% | Profit Factor: {s['profit_factor']}")
     print(f"Sharpe: {s['sharpe']} | DSR: {s['dsr']} | Max DD: {s['max_drawdown']*100:.2f}%")
     print(f"Period: {s['period_label']} ({s['candles_count']} bars)")
-

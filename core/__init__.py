@@ -10,6 +10,13 @@ from core.risk import (
     apply_equity_curve_governor,
 )
 from core.simulation import run_discrete_simulation, TradeRecord
+from core.regimes import classify_market_regimes, compute_regime_breakdown
+from core.analytics import (
+    compute_summary_metrics,
+    compute_equity_curve,
+    compute_return_distribution,
+    compute_account_growth_models,
+)
 from core.cynic_gates import evaluate_cynic_gates, render_gate_matrix
 from core.indicators import sma, ema, rsi, atr
 from core.market_structure import detect_swing_points, extract_market_structure
@@ -27,6 +34,12 @@ __all__ = [
     "apply_equity_curve_governor",
     "run_discrete_simulation",
     "TradeRecord",
+    "classify_market_regimes",
+    "compute_regime_breakdown",
+    "compute_summary_metrics",
+    "compute_equity_curve",
+    "compute_return_distribution",
+    "compute_account_growth_models",
     "evaluate_cynic_gates",
     "render_gate_matrix",
     "sma",

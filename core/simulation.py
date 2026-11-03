@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 import pandas as pd
 from core.friction import get_roundtrip_friction
+from core.analytics import compute_trade_records_summary
 
 @dataclass
 class TradeRecord:
@@ -166,38 +167,4 @@ def run_discrete_simulation(
                         'bars_held': 0
                     }
 
-    if not trades:
-        return {
-            "total_trades": 0,
-            "win_rate": 0.0,
-            "profit_factor": 0.0,
-            "net_pnl_dollars": 0.0,
-            "net_pnl_r": 0.0,
-            "trades": []
-        }
-
-    r_multiples = np.array([t.pnl_r for t in trades])
-    dollar_pnls = np.array([t.pnl_dollars for t in trades])
-    wins = dollar_pnls[dollar_pnls > 0]
-    losses = dollar_pnls[dollar_pnls < 0]
-
-    win_rate = len(wins) / len(dollar_pnls)
-    gross_win = wins.sum() if len(wins) > 0 else 0.0
-    gross_loss = abs(losses.sum()) if len(losses) > 0 else 1e-9
-    profit_factor = gross_win / gross_loss
-
-    equity_curve = np.cumsum(dollar_pnls) + account_size
-    peak = np.maximum.accumulate(equity_curve)
-    drawdowns = (peak - equity_curve) / peak
-    max_dd_pct = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
-
-    return {
-        "total_trades": len(trades),
-        "win_rate": round(float(win_rate), 4),
-        "profit_factor": round(float(profit_factor), 2),
-        "net_pnl_dollars": round(float(dollar_pnls.sum()), 2),
-        "net_pnl_r": round(float(r_multiples.sum()), 2),
-        "expectancy_r": round(float(np.mean(r_multiples)), 3),
-        "max_drawdown_pct": round(max_dd_pct, 4),
-        "trades": trades
-    }
+    return compute_trade_records_summary(trades, account_size)
