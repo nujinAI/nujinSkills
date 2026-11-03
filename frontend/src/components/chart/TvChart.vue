@@ -78,6 +78,7 @@ const hoveredBar = ref<{
 } | null>(null);
 
 let resizeObserver: ResizeObserver | null = null;
+let lastRenderedCount = 0;
 
 const getThemeColors = (isDark: boolean) => ({
   bg: isDark ? '#0b0f17' : '#ffffff',
@@ -222,6 +223,7 @@ const updateData = () => {
 
   candleSeries.value.setData(candleData);
   volumeSeries.value.setData(volData);
+  lastRenderedCount = candleData.length;
 
   updateMarkers();
 };
@@ -304,7 +306,35 @@ watch(
   }
 );
 
-watch(() => props.candles, () => {
+watch(() => props.candles, (newCandles) => {
+  if (!candleSeries.value || !volumeSeries.value || !newCandles || newCandles.length === 0) return;
+
+  // Incremental real-time tick/bar update if only the latest bar updated or appended
+  if (
+    lastRenderedCount > 0 &&
+    (newCandles.length === lastRenderedCount || newCandles.length === lastRenderedCount + 1)
+  ) {
+    const isDark = props.theme === 'dark';
+    const colors = getThemeColors(isDark);
+    const lastBar = newCandles[newCandles.length - 1];
+
+    candleSeries.value.update({
+      time: lastBar.time as Time,
+      open: lastBar.open,
+      high: lastBar.high,
+      low: lastBar.low,
+      close: lastBar.close,
+    });
+    volumeSeries.value.update({
+      time: lastBar.time as Time,
+      value: lastBar.volume || 1,
+      color: lastBar.close >= lastBar.open ? colors.upVol : colors.downVol,
+    });
+    lastRenderedCount = newCandles.length;
+    return;
+  }
+
+  // Full dataset replace (symbol change, timeframe change, or initial load)
   updateData();
 }, { deep: true });
 

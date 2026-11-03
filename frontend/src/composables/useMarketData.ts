@@ -99,16 +99,21 @@ export function useMarketData() {
           if (tick.candle.volume != null) {
             lastCandle.volume = tick.candle.volume;
           }
+          // Trigger shallow/deep reactivity
+          candles.value = [...candles.value];
         } else if (lastCandle && tickTimeSec > lastCandle.time) {
           // Append new bar
-          candles.value.push({
-            time: tickTimeSec,
-            open: tick.candle.open,
-            high: tick.candle.high,
-            low: tick.candle.low,
-            close: tick.candle.close,
-            volume: tick.candle.volume || 0,
-          });
+          candles.value = [
+            ...candles.value,
+            {
+              time: tickTimeSec,
+              open: tick.candle.open,
+              high: tick.candle.high,
+              low: tick.candle.low,
+              close: tick.candle.close,
+              volume: tick.candle.volume || 0,
+            },
+          ];
         }
       }
     }

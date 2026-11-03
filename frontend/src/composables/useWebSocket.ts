@@ -187,6 +187,18 @@ const connect = () => {
             latestMarketTick.value = payload;
             break;
           }
+          case 'BAR_CLOSED': {
+            if (payload) {
+              latestMarketTick.value = {
+                symbol: payload.symbol,
+                timeframe: payload.timeframe,
+                price: payload.bar?.close,
+                candle: payload.bar,
+                is_bar_closed: true,
+              };
+            }
+            break;
+          }
           case 'STRATEGY_DISCOVERED': {
             latestDiscoveredStrategy.value = {
               ...payload,

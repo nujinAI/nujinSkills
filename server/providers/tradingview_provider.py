@@ -122,14 +122,8 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                     }
                     self._latest_quote = quote
 
-                    # Dispatch tick
-                    for cb in list(self._tick_callbacks):
-                        try:
-                            res = cb(quote)
-                            if asyncio.iscoroutine(res):
-                                await res
-                        except Exception as e_cb:
-                            logger.debug(f"[TradingViewProvider] Tick callback error: {e_cb}")
+                    # Broadcast real-time market tick to WebSocket clients
+                    await self._notify_tick(quote)
 
                     # Check for completed new bar
                     if b_ts > self._last_bar_time:
@@ -143,14 +137,7 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                             self._candles.append(last_b)
 
                         logger.info(f"[TradingViewProvider] 🔔 New {self.timeframe} bar finalized for {self.tv_symbol}: {p} @ {b_ts}")
-                        # Dispatch bar callback
-                        for cb in list(self._bar_callbacks):
-                            try:
-                                res = cb(last_b)
-                                if asyncio.iscoroutine(res):
-                                    await res
-                            except Exception as e_cb:
-                                logger.error(f"[TradingViewProvider] Bar callback error: {e_cb}")
+                        await self._notify_bar(last_b)
 
             except asyncio.CancelledError:
                 break
