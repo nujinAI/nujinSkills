@@ -28,9 +28,17 @@ def audit(strategy: str, save_state: bool, output_path: str, days: int = 30, acc
     pnl_d = summary.get("net_pnl_dollars", 0.0)
     pnl_p = summary.get("net_pnl_pct", 0.0)
 
+    from core.analytics import compute_institutional_tier
+    strat_meta = compute_institutional_tier(summary, gates)
+    rank_tier = strat_meta.get("tier", "N/A")
+    rank_score = strat_meta.get("ranking_score", 0.0)
+    tier_reason = strat_meta.get("tier_reason", "")
+
     print("\n" + "=" * 70)
     print(f"[BacktestAudit] STRATEGY AUDIT REPORT: {results.get('strategy')}")
     print("=" * 70)
+    print(f"  Institutional Tier:    {rank_tier}")
+    print(f"  Ranking Score:         {rank_score}/100 ({tier_reason})")
     print(f"  Target Profile:        {results.get('thesis_props', {}).get('target_profile')}")
     print(f"  Account Benchmark:     ${acct_s:,.2f}")
     print(f"  Net Realized PnL:      ${pnl_d:+,.2f} ({pnl_p:+.2f}%)")

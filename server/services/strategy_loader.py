@@ -136,9 +136,9 @@ def resolve_strategy_metadata(strategy_name: str, timeframe_override: Optional[s
 
     if strat_record:
         cron_cfg = strat_record.get("cron_config", {})
-        symbol = cron_cfg.get("symbol")
+        symbol = cron_cfg.get("symbol") or strat_record.get("symbol")
         if not timeframe:
-            timeframe = cron_cfg.get("timeframe")
+            timeframe = cron_cfg.get("timeframe") or strat_record.get("timeframe")
         thesis_props = strat_record.get("thesis_props", {})
 
     # Fallback to state.json if still unpopulated
