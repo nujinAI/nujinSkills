@@ -210,7 +210,7 @@ def compute_strategy_parameter_stability_matrix(
         return None
     try:
         if hasattr(strat_inst, "generate_signals"):
-            from tools.core.backtest_engine import run_discrete_backtest
+            from core.simulation import run_discrete_simulation as run_discrete_backtest
             df_idx = df_c.copy()
             if 'timestamp' in df_idx.columns:
                 df_idx['dt'] = pd.to_datetime(df_idx['timestamp'], unit='s', utc=True)
@@ -382,7 +382,7 @@ def run_real_backtest(
     feat_miner_script = os.path.join(_ROOT, "tools", "feature_miner.py")
 
     # 1. Resolve Candle Dataset and Sync via Dynamic Single Source of Truth
-    from tools.core.data_tool import fetch_ohlcv
+    from core.data import fetch_ohlcv
     from server import data_manager
 
     # Resolve canonical symbol and clean slug
@@ -574,7 +574,7 @@ def run_real_backtest(
     cutoff_time = (int(df_c['timestamp'].iloc[-1]) - int(days * 86400)) if (days and days > 0 and len(df_c) > 0 and 'timestamp' in df_c.columns) else 0
 
     if strat_inst and hasattr(strat_inst, "generate_signals"):
-        from tools.core.backtest_engine import run_discrete_backtest
+        from core.simulation import run_discrete_simulation as run_discrete_backtest
         df_idx = df_c.copy()
         df_idx['dt'] = pd.to_datetime(df_idx['timestamp'], unit='s', utc=True)
         df_idx = df_idx.set_index('dt')
