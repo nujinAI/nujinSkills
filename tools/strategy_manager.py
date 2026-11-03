@@ -127,14 +127,14 @@ def show_correlation(endpoint: str, threshold: float = 0.50, as_json: bool = Fal
     if res and "correlation_matrix" in res:
         data = res
     else:
-        from tools.portfolio_cynic import evaluate_portfolio
+        from core.portfolio import evaluate_portfolio
         data = evaluate_portfolio(correlation_threshold=threshold)
 
     if as_json:
         print(json.dumps(data, indent=2))
         return
 
-    from tools.portfolio_cynic import print_ascii_report
+    from core.portfolio import print_ascii_report
     print_ascii_report(data)
 
 def show_drift_distribution(endpoint: str):

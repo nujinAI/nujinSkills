@@ -170,6 +170,7 @@ def compute_strategy_parameter_stability_matrix(
     strat_inst: Any,
     observed_sr: float,
     symbol: str = "BTC/USDT",
+    account_size: Optional[float] = None,
 ) -> Optional[np.ndarray]:
     """
     Computes a genuine 2x2 perturbed Sharpe matrix around the strategy's
@@ -179,6 +180,7 @@ def compute_strategy_parameter_stability_matrix(
     if strat_inst is None or len(df_c) < 60:
         return None
     try:
+        test_acct_size = resolve_default_account_size(account_size)
         if hasattr(strat_inst, "generate_signals"):
             from core.simulation import run_discrete_simulation as run_discrete_backtest
             df_idx = df_c.copy()
@@ -204,7 +206,6 @@ def compute_strategy_parameter_stability_matrix(
                             kwargs["daily_profit_cap_pct"] = getattr(strat_inst, "daily_profit_cap_pct")
                         strat_copy = strat_inst.__class__(**kwargs)
                         sig = strat_copy.generate_signals(df_idx)
-                        test_acct_size = 100000.0
                         test_dollar_risk = test_acct_size * getattr(strat_copy, "risk_pct_1r", 0.0035)
                         test_daily_cap = (test_acct_size * strat_copy.daily_profit_cap_pct) if getattr(strat_copy, "daily_profit_cap_pct", None) else None
                         res = run_discrete_backtest(
@@ -231,25 +232,18 @@ def compute_strategy_parameter_stability_matrix(
                 matrix.append(row)
             return np.asarray(matrix, dtype=float)
 
-        from tools.vectorized_screener import simulate_trades_fast
-
-        enter_long = (df_c.get("enter_long", pd.Series(0, index=df_c.index)) == 1)
-        enter_short = (df_c.get("enter_short", pd.Series(0, index=df_c.index)) == 1)
-        exit_long = (df_c.get("exit_long", pd.Series(0, index=df_c.index)) == 1)
-        exit_short = (df_c.get("exit_short", pd.Series(0, index=df_c.index)) == 1)
+        # Fallback for strategies defining populate_entry_trend / populate_exit_trend
+        from core.simulation import run_discrete_simulation as run_discrete_backtest
+        df_idx = df_c.copy()
+        if 'timestamp' in df_idx.columns:
+            df_idx['dt'] = pd.to_datetime(df_idx['timestamp'], unit='s', utc=True)
+            df_idx = df_idx.set_index('dt')
 
         base_sl = abs(float(getattr(strat_inst, "stoploss", -0.015)))
         roi_dict = getattr(strat_inst, "minimal_roi", {}) or {}
         base_tp = float(roi_dict.get("0", roi_dict.get(0, max(base_sl * 1.8, 0.025)))) if isinstance(roi_dict, dict) else max(base_sl * 1.8, 0.025)
         base_bars = int(getattr(strat_inst, "max_bars_held", getattr(strat_inst, "time_invalidation_bars", 16)) or 16)
-        risk_pct = float(getattr(strat_inst, "risk_per_trade", getattr(strat_inst, "risk_per_trade_pct", 0.0045)) or 0.0045)
-        use_trail = bool(getattr(strat_inst, "trailing_stop", False))
-        base_trail_off = float(getattr(strat_inst, "trailing_stop_positive_offset", 0.010) or 0.010)
-
-        med_price = float(df_c["close"].median()) if "close" in df_c.columns and len(df_c) > 0 else 100.0
-        spread_pts, fee_pct, slip_pts = resolve_asset_friction(symbol, med_price)
-        asset_fee_bps = float(fee_pct * 10000.0)
-        asset_slip_bps = float(((spread_pts * 0.5 + slip_pts) / max(med_price, 1e-8)) * 10000.0)
+        risk_pct = float(getattr(strat_inst, "risk_per_trade", getattr(strat_inst, "risk_per_trade_pct", 0.0035)) or 0.0035)
 
         sl_factors = [0.92, 1.08]
         tp_factors = [0.92, 1.08]
@@ -258,26 +252,37 @@ def compute_strategy_parameter_stability_matrix(
         for sl_f in sl_factors:
             row: List[float] = []
             for tp_f in tp_factors:
-                rets, _ = simulate_trades_fast(
-                    df_c,
-                    enter_long=enter_long,
-                    enter_short=enter_short,
-                    exit_long=exit_long,
-                    exit_short=exit_short,
-                    stoploss_pct=max(0.001, base_sl * sl_f),
-                    takeprofit_pct=max(0.002, base_tp * tp_f),
-                    max_bars_held=max(4, int(round(base_bars * tp_f))),
-                    fee_bps=asset_fee_bps,
-                    slippage_bps=asset_slip_bps,
-                    risk_per_trade_pct=risk_pct,
-                    trailing_stop=use_trail,
-                    trailing_offset_pct=max(0.001, base_trail_off * tp_f),
-                )
-                if len(rets) >= 5:
-                    m_r = float(np.mean(rets))
-                    s_r = float(np.std(rets, ddof=1)) or 1e-6
-                    sr_p = float((m_r / s_r) * trade_annualization_factor())
-                else:
+                try:
+                    close_s = df_idx["close"]
+                    sig_df = pd.DataFrame(index=df_idx.index)
+                    sig_df["entry_signal"] = 0
+                    if "enter_long" in df_idx.columns and (df_idx["enter_long"] == 1).any():
+                        sig_df.loc[df_idx["enter_long"] == 1, "entry_signal"] = 1
+                    if "enter_short" in df_idx.columns and (df_idx["enter_short"] == 1).any():
+                        sig_df.loc[df_idx["enter_short"] == 1, "entry_signal"] = -1
+
+                    cur_sl_pct = max(0.001, base_sl * sl_f)
+                    cur_tp_pct = max(0.002, base_tp * tp_f)
+                    sig_df["stop_loss"] = np.where(sig_df["entry_signal"] == 1, close_s * (1.0 - cur_sl_pct), close_s * (1.0 + cur_sl_pct))
+                    sig_df["target"] = np.where(sig_df["entry_signal"] == 1, close_s * (1.0 + cur_tp_pct), close_s * (1.0 - cur_tp_pct))
+
+                    res = run_discrete_backtest(
+                        df=df_idx,
+                        signals=sig_df,
+                        symbol="OANDA:XAUUSD" if ("XAU" in symbol.upper() or "GOLD" in symbol.upper()) else symbol,
+                        account_size=test_acct_size,
+                        dollar_risk_1r=test_acct_size * risk_pct,
+                        max_hold_bars=max(4, int(round(base_bars * tp_f))),
+                        close_eod=True,
+                    )
+                    rets = [t.pnl_dollars / test_acct_size for t in res["trades"]]
+                    if len(rets) >= 5:
+                        m_r = float(np.mean(rets))
+                        s_r = float(np.std(rets, ddof=1)) or 1e-6
+                        sr_p = float((m_r / s_r) * trade_annualization_factor())
+                    else:
+                        sr_p = 0.0
+                except Exception:
                     sr_p = 0.0
                 row.append(sr_p)
             matrix.append(row)
@@ -382,7 +387,7 @@ def run_real_backtest(
 
     period_str = f"{max(days_req, 30)}d"
 
-    logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}, count={needed_count}, days={days_req}) via tools/core/data_tool...")
+    logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}, count={needed_count}, days={days_req}) via core.data...")
     try:
         df_dynamic = fetch_ohlcv(symbol=canon_sym, timeframe=timeframe, count=needed_count, period=period_str, use_cache=True)
         if df_dynamic is not None and not df_dynamic.empty:
@@ -395,7 +400,7 @@ def run_real_backtest(
             # Maintain disk cache consistency across canonical & legacy paths
             data_manager._save_canonical_and_legacy(canon_sym, timeframe, df_dynamic_reset, legacy_path=candles_file, source="data_tool_backtest")
     except Exception as e_dyn:
-        logger.warning(f"[BacktestEngine] tools/core/data_tool fetch note: {e_dyn}, checking existing dataset on disk")
+        logger.warning(f"[BacktestEngine] core.data fetch note: {e_dyn}, checking existing dataset on disk")
 
     if not os.path.exists(candles_file):
         raise FileNotFoundError(f"[BacktestEngine] Candle dataset file not found: {candles_file}")
@@ -938,6 +943,7 @@ def run_real_backtest(
         strat_inst=strat_inst,
         observed_sr=sharpe,
         symbol=symbol,
+        account_size=acct_size,
     )
     stop_dists_bps = np.array([
         abs(float(tr.get("entry_price", 1.0)) - float(tr.get("stop_loss", 1.0)))

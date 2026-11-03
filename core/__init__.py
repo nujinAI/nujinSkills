@@ -13,6 +13,7 @@ from core.simulation import run_discrete_simulation, TradeRecord
 from core.cynic_gates import evaluate_cynic_gates, render_gate_matrix
 from core.indicators import sma, ema, rsi, atr
 from core.market_structure import detect_swing_points, extract_market_structure
+from core.portfolio import evaluate_portfolio, print_ascii_report
 
 __all__ = [
     "fetch_ohlcv",
@@ -33,5 +34,7 @@ __all__ = [
     "rsi",
     "atr",
     "detect_swing_points",
-    "extract_market_structure"
+    "extract_market_structure",
+    "evaluate_portfolio",
+    "print_ascii_report",
 ]

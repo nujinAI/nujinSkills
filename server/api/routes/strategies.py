@@ -184,7 +184,7 @@ async def get_portfolio_correlation(threshold: float = 0.50, strategies: Optiona
     ensemble metrics, and redundancy/complementarity audit flags.
     """
     try:
-        from tools.portfolio_cynic import evaluate_portfolio
+        from core.portfolio import evaluate_portfolio
         s_list = [s.strip() for s in strategies.split(",") if s.strip()] if strategies else None
         report = evaluate_portfolio(strategy_names=s_list, data_path=data_path, correlation_threshold=threshold)
         return report

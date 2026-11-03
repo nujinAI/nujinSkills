@@ -76,13 +76,15 @@ async def get_system_state():
 @router.post("/api/state")
 async def update_system_state(req: UpdateStateRequest):
     """Patch or deploy strategy — all writes go through StateManager."""
-    if req.active_strategy:
+    if req.active_strategy is not None and req.active_strategy.strip():
         result = run_real_backtest(req.active_strategy, save_as_active=True)
         new_state = result.get("state", state_manager.get())
         await manager.broadcast({"event_type": "STATE_UPDATED", "payload": new_state})
         return {"status": "SUCCESS", "state": new_state}
 
     updates: Dict[str, Any] = {}
+    if req.active_strategy is not None:
+        updates["active_strategy"] = req.active_strategy.strip()
     if req.target_profile:
         updates["target_profile"] = req.target_profile
     if req.status:

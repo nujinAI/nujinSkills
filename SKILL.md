@@ -27,7 +27,7 @@ description: >-
    We trade and model **Spot Cash** (`OANDA:XAUUSD`, Forex Spot, Crypto Spot). **Never** trade, model, or backtest Commodity Futures (`GC=F`, `GC=1`, CME/COMEX) for gold because pricing, spreads, contract rollovers, and volume profiles differ fundamentally from spot CFDs.
 
 3. **Single Market Data Authority (TradingView):**
-   TradingView (`tradingview-ta`, TradingView WebSocket, or `server.data_manager`) is the single source of truth for all historical market data and technical indicators. Do NOT use `yfinance` for strategy generation, backtesting, or execution feeds. Use `tools/core/data_tool.fetch_ohlcv(symbol, timeframe, count)` to pull authentic data.
+   TradingView (`tradingview-ta`, TradingView WebSocket, or `core.data`) is the single source of truth for all historical market data and technical indicators. Do NOT use `yfinance` for strategy generation, backtesting, or execution feeds. Use `core.data.fetch_ohlcv(symbol, timeframe, count)` to pull authentic data.
 
 4. **Zero Silent Fallbacks:**
    Every tool, script, and strategy call requires an explicit, unambiguous symbol parameter (e.g. `OANDA:XAUUSD`, `BINANCE:BTCUSDT`). No hardcoded fallback symbols or silent fallback feeds are permitted.
@@ -43,12 +43,12 @@ Follow this autonomous loop for every user request:
 
 ```
 [ STEP 1: COMPILE USER INTENT & RISK BUDGET ]
-  Use: python3 tools/core/risk_calc.py "<user prompt>"
+  Use: core.risk.parse_prompt_to_risk("<user prompt>")
   -> Derives: Account size, 1R dollar risk, daily circuit breakers, profit caps dynamically from user parameters or active broker accounts.
 
 [ STEP 2: DYNAMIC DATA FETCH & FRICTION CHECK ]
-  Use: tools/core/data_tool.fetch_ohlcv(symbol, timeframe, period)
-  Use: tools/core/friction_calc.check_friction_hurdle(...)
+  Use: core.data.fetch_ohlcv(symbol, timeframe, period)
+  Use: core.friction.check_friction_hurdle(...)
   -> Ensures: (Round-Trip Friction / Stop Distance) <= 10.0%.
 
 [ STEP 3: FORMULATE THESIS & GENERATE SIGNALS ]
@@ -63,7 +63,7 @@ Follow this autonomous loop for every user request:
   Backend Python API: server.backtest_engine.run_real_backtest(strategy_name, days=30)
   * NEVER write ad-hoc backtest loops or hardcode capital assumptions.
   * Sizing is strictly dynamic based on the active account context or user-provided equity.
-  -> Tests the 8 Canonical Cynic Falsification Gates (server/cynic_gates.py):
+  -> Tests the 8 Canonical Cynic Falsification Gates (core/cynic_gates.py):
      1. Gate 1: Deflated Sharpe Ratio (DSR >= 0.95, penalized for trial multiplicity).
      2. Gate 2: Parameter Stability Surface (checks against performance cliff).
      3. Gate 3: Monte Carlo Sequence Stress (MDD99 <= 3.0%, tail ratio <= 2.5).
@@ -195,14 +195,15 @@ class NewStrategyName:
 
 ---
 
-## 4. Pure Core Tools Reference (`tools/core/`)
+## 4. Pure Core Library Reference (`core/`)
 
-All scripts in `tools/core/` are pure calculation primitives with zero trading bias:
-- `tools/core/data_tool.py`: Dynamic candle fetcher (eliminates truncated CSVs) with True Range, ATR, and relative volume.
-- `tools/core/risk_calc.py`: Risk-of-ruin sizing and circuit breaker math.
-- `tools/core/friction_calc.py`: Dynamic spread, fee, and slippage verification.
-- `tools/core/backtest_engine.py`: Discrete simulator with **Pessimistic Intrabar Resolution** (SL triggers first if both SL and TP are hit on the same bar).
-- `tools/core/auditor_tool.py`: Canonical bridge to `server/cynic_gates.py` (evaluates the 8 Canonical Cynic Falsification Gates).
+All modules in `core/` are pure calculation primitives with zero trading bias and zero hardcoded capital:
+- `core/data.py`: Dynamic candle fetcher (eliminates truncated CSVs) with True Range, ATR, and relative volume.
+- `core/risk.py`: Dynamic risk-of-ruin sizing, 1R units, and circuit breaker math.
+- `core/friction.py`: Dynamic spread, fee, and slippage verification.
+- `core/simulation.py`: Discrete simulator with **Pessimistic Intrabar Resolution** (SL triggers first if both SL and TP are hit on the same bar).
+- `core/cynic_gates.py`: The 8 Canonical Cynic Falsification Gates & Monte Carlo Stress.
+- `core/portfolio.py`: Correlation matrix, regime orthogonality, and ensemble diversification.
 
 ---
 

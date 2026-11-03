@@ -118,7 +118,7 @@ class TelegramListener:
                         logger.warning(f"[TelegramListener] Could not save daily report date: {e_w}")
 
                     try:
-                        from tools.send_daily_report import broadcast_report
+                        from server.telegram.daily_report import broadcast_report
                         await asyncio.to_thread(broadcast_report)
                     except Exception as e_br:
                         logger.error(f"[TelegramListener] Error in automated daily report broadcast: {e_br}")
@@ -575,7 +575,7 @@ class TelegramListener:
     async def _cmd_daily_report(self, chat_id: int | str) -> None:
         """Generates and sends the daily quant report directly to the requesting Telegram chat."""
         try:
-            from tools.send_daily_report import broadcast_report
+            from server.telegram.daily_report import broadcast_report
             await asyncio.to_thread(broadcast_report, specific_chat_id=str(chat_id))
         except Exception as e:
             logger.error(f"[TelegramListener] Error executing /dailyreport command: {e}")

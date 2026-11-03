@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Optional
-from server.market_structure import extract_market_structure, synthesize_ai_trade_setup
+from core.market_structure import extract_market_structure, synthesize_ai_trade_setup
 
 logger = logging.getLogger("ChartPrimitives")
 

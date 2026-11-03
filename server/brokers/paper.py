@@ -25,9 +25,23 @@ class PaperExecutionBroker(BaseExecutionBroker):
 
     def __init__(self):
         super().__init__(broker_id="paper", name="Nujin Simulated Paper Execution")
-        self.initial_balance = 100000.0
+        self.initial_balance = self._resolve_initial_balance()
         self.balance = self.initial_balance
         self.is_connected = True
+
+    @staticmethod
+    def _resolve_initial_balance() -> float:
+        """Dynamically resolves account balance from active account store or configured broker."""
+        try:
+            from server.state.accounts_store import accounts_store
+            active_accs = accounts_store.get_all_active_accounts(decrypt=False)
+            if active_accs:
+                bal = active_accs[0].get("balance") or active_accs[0].get("initial_balance")
+                if bal and float(bal) > 0:
+                    return float(bal)
+        except Exception:
+            pass
+        return 5000.0
 
     def connect(self, config: Optional[Dict[str, Any]] = None) -> bool:
         self.is_connected = True

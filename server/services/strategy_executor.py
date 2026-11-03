@@ -288,7 +288,7 @@ class StrategyEvaluator:
 
                     raw_lots = float(strat_inst.calculate_lot_size(**call_kwargs))
                     if "account_balance" not in sig_params:
-                        base_size = float(getattr(strat_inst, "account_size", 100000.0))
+                        base_size = float(getattr(strat_inst, "account_size", target_equity))
                         scale = (target_equity / base_size) if base_size > 0 else 1.0
                         lots = raw_lots * scale
                     else:
@@ -297,7 +297,14 @@ class StrategyEvaluator:
                     logger.warning(f"[StrategyEvaluator] Error calculating lot size via strategy lotsizer: {e_lots}")
 
             if lots is None or lots <= 0:
-                lots = 0.02 if (is_xau or "USD" in symbol) else 0.10
+                # Dynamic 1R risk sizing arithmetic (Zero hardcoded lots)
+                dollar_risk_1r = target_equity * float(getattr(strat_inst, "risk_pct_1r", 0.0035))
+                stop_dist = abs(curr_p - sl) if sl > 0 else (atr_v * 1.5 if atr_v > 0 else curr_p * 0.005)
+                if stop_dist > 0:
+                    multiplier = 100.0 if is_xau else 1.0
+                    lots = dollar_risk_1r / (stop_dist * multiplier)
+                else:
+                    lots = 0.01
 
             lots = max(0.01, round(lots, 2))
 
