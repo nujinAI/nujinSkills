@@ -24,7 +24,6 @@ from unittest.mock import patch
 # offline path; no test in this suite asserts on live market data.
 _STUBBED: Dict[str, Any] = {
     "server.data_manager.fetch_real_oanda_candles": [],
-    "server.data_manager.fetch_real_broker_spot_gold_candles": [],
     "server.data_manager.fetch_real_sp500_candles": [],
     "server.data_manager.fetch_real_binance_klines": [],
     "server.data_manager.fetch_candles_via_tv": [],

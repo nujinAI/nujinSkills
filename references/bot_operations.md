@@ -104,8 +104,8 @@ nujinSkills/.venv/bin/python3 tools/telegram_broadcast.py broadcast --type updat
 
 ## 🛡️ Data Integrity Guarantees
 
-Live market data must never be synthesised. The XAU/USD feed (`server/xauusd_streamer.py`) polls an
-OANDA spot quote, which carries a **price but no volume**, so:
+Live market data must never be synthesised. The unified market data feed (`server/providers/tradingview_provider.py` / `ProviderRegistry`)
+ingests real-time ticks and continuous authentic candles across all requested assets (Crypto, Equities, Forex, Spot Commodities):
 
 - **Prices are served verbatim.** No random "micro-pip" jitter is applied to the close or to bid/ask.
 - **Volume is labelled, never faked.** Bars built from the polled stream carry

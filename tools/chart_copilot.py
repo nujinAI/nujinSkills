@@ -60,7 +60,7 @@ def main():
         include_zones=not args.no_zones,
         thesis=args.thesis
     )
-    result = res_obj.dict()
+    result = res_obj.model_dump() if hasattr(res_obj, "model_dump") else res_obj.dict()
 
     # Broadcast live over HTTP -> WebSocket bridge
     try:

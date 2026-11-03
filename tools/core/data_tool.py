@@ -96,8 +96,8 @@ def fetch_ohlcv(
                 from server import data_manager
                 resolved_sym = data_manager.resolve_market_symbol(symbol)
                 candles = data_manager.fetch_candles_via_tv(resolved_sym, timeframe, count=count)
-                if not candles and ("XAU" in resolved_sym or "GOLD" in resolved_sym):
-                    candles = data_manager.fetch_real_broker_spot_gold_candles(interval=timeframe, count=min(count, 1000))
+                if not candles:
+                    candles = data_manager.fetch_real_binance_klines(symbol=symbol, interval=timeframe, count=count)
                 if candles:
                     df = pd.DataFrame(candles)
                     time_col = "time" if "time" in df.columns else ("timestamp" if "timestamp" in df.columns else None)

@@ -26,7 +26,7 @@ from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("AccountsStore")
 
-_ROOT_DIR = Path(__file__).resolve().parent.parent
+_ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 _DATA_DIR = _ROOT_DIR / "data"
 _ACCOUNTS_FILE = _DATA_DIR / "broker_accounts.json"
 _KEY_FILE = _ROOT_DIR / ".nujin" / ".secret_key"

@@ -201,7 +201,7 @@ class TestMultiAccountBroker(unittest.TestCase):
         registry logs a warning and falls back to the paper broker, so multi-account
         behaviour simply cannot be exercised — say so instead of asserting against paper.
         """
-        broker = broker_registry.get_broker("tradelocker")
+        broker = broker_registry.get_broker("tradelocker", connect=False)
         if getattr(broker, "broker_id", "") != "tradelocker":
             raise unittest.SkipTest(
                 "nujinPro TradeLocker broker not installed "
@@ -498,6 +498,7 @@ class TestMultiAccountBroker(unittest.TestCase):
             mock_strat.atr_tp_mult = None
             mock_strat.min_bars = 1
             mock_strat.max_bars = 4
+            del mock_strat.generate_signals
 
             def mock_pop_ind(df, meta):
                 df["volume_zscore"] = 1.0

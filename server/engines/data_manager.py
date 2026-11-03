@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 
 logger = logging.getLogger("DataManager")
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 MARKET_DIR = os.path.join(_ROOT, "data", "market")
 CATALOG_PATH = os.path.join(MARKET_DIR, "catalog.json")
 
@@ -462,11 +462,8 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
         except Exception as e:
             logger.warning(f"[DataManager] Error reading cached OANDA 1m CSV: {e}")
 
-    # 2. Fetch fresh authentic bars via TradingView WebSocket (OANDA:XAUUSD) or Broker Spot Fallback
+    # 2. Fetch fresh authentic bars via TradingView WebSocket (OANDA:XAUUSD)
     fresh = fetch_candles_via_tv("OANDA:XAUUSD", "1m", max(count or 2880, 5000))
-    if not fresh or len(fresh) < 50:
-        logger.info("[DataManager] TV WS yielded insufficient bars; attempting TradeLocker Spot Gold fallback...")
-        fresh = fetch_real_broker_spot_gold_candles(interval="1m", count=max(count or 2880, 5000))
 
     if fresh and len(fresh) >= 50:
         try:
@@ -555,48 +552,7 @@ def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refr
             return candles[-count:] if count else candles
         return resample_candles(candles, interval)[-count:]
 
-    # 4. Fallback to broker Spot Gold directly
-    return fetch_real_broker_spot_gold_candles(interval=interval, count=count)
-
-
-def fetch_real_broker_spot_gold_candles(interval: str = "1m", count: int = 2880) -> List[Dict[str, Any]]:
-    """
-    Fetches genuine Spot Gold (XAUUSD) OHLCV candles directly from TradeLocker broker.
-    Guarantees 100% price alignment with live execution without futures basis distortion.
-    """
-    logger.info(f"[DataManager] Fetching TradeLocker broker Spot Gold candles ({interval})...")
-    try:
-        from server.brokers.registry import broker_registry
-        from server.accounts_store import accounts_store
-        broker = broker_registry.get_broker("tradelocker")
-        if not broker:
-            return []
-        active_accs = accounts_store.get_all_active_accounts("tradelocker", decrypt=True)
-        if not active_accs:
-            return []
-        client = broker._get_or_create_client(active_accs[0])
-        if not client:
-            return []
-        res_str = "1m" if interval == "1m" else ("5m" if interval == "5m" else ("15m" if interval == "15m" else "1h"))
-        bars_df = client.get_price_history(instrument_id=6310, resolution=res_str, lookback_period="2D")
-        if bars_df is None or len(bars_df) == 0:
-            return []
-        candles = []
-        for _, row in bars_df.iterrows():
-            ts = int(row["t"] / 1000) if row["t"] > 1e11 else int(row["t"])
-            candles.append({
-                "time": ts,
-                "timestamp": ts,
-                "open": round(float(row["o"]), 2),
-                "high": round(float(row["h"]), 2),
-                "low": round(float(row["l"]), 2),
-                "close": round(float(row["c"]), 2),
-                "volume": round(float(row["v"] or 10.0), 2)
-            })
-        return candles[-count:] if count else candles
-    except Exception as e:
-        logger.warning(f"[DataManager] Broker Spot Gold fetch error: {e}")
-        return []
+    return []
 
 
 def fetch_real_sp500_candles(interval: str = "1m", count: int = 2880) -> List[Dict[str, Any]]:

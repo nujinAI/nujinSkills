@@ -431,11 +431,11 @@ export function getStrategyIndicatorProfile(rawStratName?: string): StrategyIndi
     };
   }
 
-  // 2. Goat Funded Trader London Open OTAD Scalper
-  if (name.includes('otad') || (name.includes('london') && (name.includes('goat') || name.includes('scalper')))) {
+  // 2. London Open OTAD Scalper
+  if (name.includes('otad') || (name.includes('london') && name.includes('scalper'))) {
     return {
-      strategyKey: 'GoatLondonOpenOtadScalper',
-      strategyDisplayName: 'Goat Funded Trader London Open OTAD Scalper',
+      strategyKey: 'LondonOpenOtadScalper',
+      strategyDisplayName: 'London Open OTAD Scalper',
       frameworkBadge: 'LONDON OPEN VOLATILITY ABSORPTION (ATR 1.8x) + ASIAN RANGE',
       frameworkDescription: 'One-Trade-A-Day (OTAD) London Open Volatility Extension Fade & Asian Range Reversion',
       badgeClass: 'badge-warning',
@@ -505,11 +505,11 @@ export function getStrategyIndicatorProfile(rawStratName?: string): StrategyIndi
     };
   }
 
-  // 4. Goat Funded Trader XAUUSD Scalper (The Gold Momentum Train)
-  if (name.includes('goat') || (name.includes('xau') && !name.includes('hybrid') && !name.includes('atr'))) {
+  // 4. Institutional Momentum Ribbon Scalper
+  if (name.includes('momentum') || (name.includes('xau') && !name.includes('hybrid') && !name.includes('atr'))) {
     return {
-      strategyKey: 'GoatFundedTraderXauusdScalper',
-      strategyDisplayName: 'Goat Funded Trader XAUUSD Scalper',
+      strategyKey: 'InstitutionalMomentumRibbonScalper',
+      strategyDisplayName: 'Institutional Momentum Ribbon Scalper',
       frameworkBadge: 'MOMENTUM RIBBON (EMA 9/21/200) + HH/LL 15 BREAKOUT',
       frameworkDescription: '9/21/200 Exponential Moving Average Accelerator Ribbon and 15-Bar Breakout Channel',
       badgeClass: 'badge-warning',

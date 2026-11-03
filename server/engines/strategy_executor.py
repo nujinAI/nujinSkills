@@ -22,7 +22,7 @@ logger = logging.getLogger("StrategyExecutor")
 class StrategyEvaluator:
     """
     Evaluates algorithmic trading rules against incoming market candles.
-    Supports GFT XAUUSD Momentum Train, Prop Firm VSA Wick Rejection, TrapFade, and generic strategies.
+    Supports generic systematic alpha strategies across any requested asset class.
     """
     @staticmethod
     def is_session_active(strategy_name: str, timestamp: Optional[int] = None) -> Dict[str, Any]:
@@ -102,7 +102,7 @@ class StrategyEvaluator:
         curr_uw = float(upper_wick.iloc[curr_i]) if not np.isnan(upper_wick.iloc[curr_i]) else 0.0
 
         bar_ts = int(curr_bar.get("time", curr_bar.get("timestamp", 0)))
-        is_xau = "XAU" in symbol.upper() or "GOLD" in symbol.upper() or "GOAT" in clean_name.upper()
+        is_xau = "XAU" in symbol.upper() or "GOLD" in symbol.upper()
 
         # Dynamic evaluation via strategy class Single Source of Truth
         try:
@@ -380,7 +380,7 @@ class NativeStrategyRunner:
         """
         Active Live Risk & Drawdown Circuit Breaker.
         Strictly enforces strategy-configured max_daily_drawdown_pct and max_total_drawdown_pct
-        across connected broker accounts (e.g. Goat Funded Trader Prop Firm limits).
+        across connected broker accounts (e.g. Prop Firm or custom broker limits).
         Prevents funded account breaches by halting new entries when daily or total loss limits
         are reached, or when the remaining daily budget is less than 2.5x single trade risk ($75 safety buffer).
         """
@@ -396,9 +396,7 @@ class NativeStrategyRunner:
         initial_balance = None
         try:
             if accounts_store:
-                active_accs = accounts_store.get_all_active_accounts(broker_id="tradelocker", decrypt=False)
-                if not active_accs:
-                    active_accs = accounts_store.get_all_active_accounts(decrypt=False)
+                active_accs = accounts_store.get_all_active_accounts(decrypt=False)
                 if not active_accs and hasattr(accounts_store, "_read_raw"):
                     active_accs = accounts_store._read_raw().get("accounts", [])
                 if active_accs:
@@ -485,11 +483,8 @@ class NativeStrategyRunner:
         signals_loss = abs(today_realized_usd) if today_realized_usd < 0 else 0.0
         today_loss_usd = round(max(broker_loss, signals_loss), 2)
         remaining_budget_usd = round(max(0.0, max_daily_loss_usd - today_loss_usd), 2)
+        # Dynamically calculate required safety buffer strictly from 1R trade risk (2.5x safety buffer):
         buffer_required_usd = round(single_trade_risk_usd * 2.5, 2)
-
-        # Dynamically calculate required safety buffer strictly from 1R trade risk:
-        # Buffer required is 1.5x of the 1R dollar risk to safely cover execution + spread/slippage
-        buffer_required_usd = round(single_trade_risk_usd * 1.5, 2)
 
         details = {
             "strategy": self.strategy_name,
@@ -591,7 +586,7 @@ class NativeStrategyRunner:
             if len(returns) < 8:
                 return True, {"status": "HEALTHY", "reason": "Insufficient return samples"}
 
-            from tools.validation_cynic import compute_cusum_degradation
+            from server.engines.cynic_gates import compute_cusum_degradation
             res = compute_cusum_degradation(np.array(returns[-30:]), threshold_sigma=2.5)
             healthy = (res.get("status") != "DEGRADED")
             return healthy, res
@@ -852,7 +847,7 @@ class NativeStrategyRunner:
                     f"📊 <b>Strategy:</b> <code>{self.strategy_name}</code>\n"
                     f"⚠️ <b>Action:</b> {sig.get('action')} @ {sig.get('price')}\n"
                     f"🛑 <b>Reason:</b> <code>{err_msg}</code>\n\n"
-                    f"<i>Order was rejected by TradeLocker. No position is tracked.</i>",
+                    f"<i>Order was rejected by broker. No position is tracked.</i>",
                     parse_mode="HTML",
                 )
                 return

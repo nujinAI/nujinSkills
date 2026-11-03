@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 from server.session_store import get_active_session_id, get_session_paths
 
-_LEDGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".nujin"))
+_LEDGER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".nujin"))
 LEDGER_PATH = os.path.join(_LEDGER_DIR, "trial_ledger.jsonl")
 
 # log(1) == 0 makes the expected-maximum-Sharpe term degenerate, so never report

@@ -339,7 +339,7 @@ class TelegramListener:
             f"🚀 <b>Connecting {target_broker.upper()} Account</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "Step 1/5: What is your <b>Broker Server</b> name?\n"
-            "<i>(e.g., <code>GFTTL</code>, <code>FunderPro</code>, <code>TradeLocker Demo</code>)</i>\n\n"
+            "<i>(e.g., <code>Demo Server</code>, <code>Live Broker Server</code>)</i>\n\n"
             "<i>Type <code>/cancel</code> anytime to abort.</i>"
         )
         telegram_gateway.send_message(msg, target_chat_id=str(chat_id))

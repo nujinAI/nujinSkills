@@ -26,7 +26,7 @@ except ImportError:
     plugin_manager = None
 
 logger = logging.getLogger("BacktestEngine")
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _PARENT = os.path.abspath(os.path.join(_ROOT, ".."))
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
@@ -494,7 +494,7 @@ def run_real_backtest(
         # Minimum and maximum holding bars (anti-arbitrage or holding window)
         min_bars = getattr(strat_inst, "min_bars", getattr(strat_inst, "min_hold_bars", None))
         if min_bars is None:
-            min_bars = 2 if "GOAT" in clean_name.upper() else 1
+            min_bars = 1
         strat_max_bars = getattr(strat_inst, "time_invalidation_bars", getattr(strat_inst, "max_bars", None))
         if strat_max_bars is not None and int(strat_max_bars) > 0:
             max_bars = int(strat_max_bars)

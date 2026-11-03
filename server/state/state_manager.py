@@ -57,7 +57,7 @@ logger = logging.getLogger("StateManager")
 # ─────────────────────────────────────────────────────────────
 # Paths (relative to project root, resolved at import time)
 # ─────────────────────────────────────────────────────────────
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 STATE_FILE = os.path.join(_ROOT, "data", "state.json")
 SIGNALS_FILE = os.path.join(_ROOT, "data", "signals.json")
 STRATEGIES_FILE = os.path.join(_ROOT, "data", "strategies.json")
@@ -258,7 +258,7 @@ class SignalStore:
 
     Usage:
         from server.state_manager import signal_store
-        signal_store.add({"action": "BUY", "price": 63404, "strategy": "GoatFundedTraderXauusdScalper"})
+        signal_store.add({"action": "BUY", "price": 63404, "strategy": "TrendMomentumAlpha"})
         all_sigs = signal_store.get_all()
         stats     = signal_store.get_stats()
 
@@ -301,7 +301,7 @@ class SignalStore:
         pair = signal.get("pair")
         if not pair:
             lower = clean_strat.lower()
-            if "xau" in lower or "gold" in lower or "goat" in lower:
+            if "xau" in lower or "gold" in lower:
                 pair = "XAU/USD"
             elif "eth" in lower:
                 pair = "ETH/USDT"

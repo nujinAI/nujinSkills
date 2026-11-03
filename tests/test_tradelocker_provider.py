@@ -228,41 +228,6 @@ class TestTradeLockerPriceFeed(unittest.TestCase):
 
         self.assertEqual(provider.get_candles()[-1]["close"], tick)
 
-    def test_xauusd_streamer_switches_to_broker_feed(self):
-        """Tests that XauusdScalpEngine checks and adopts active connected broker quote."""
-        # The import itself builds a module-level engine, and the engine seeds its first
-        # candles from the live OANDA/TradingView feed — so the import has to sit inside
-        # the stub too, not just the constructor call.
-        with live_feeds_stubbed():
-            from server.xauusd_streamer import XauusdScalpEngine
-            engine = XauusdScalpEngine()
-
-        mock_broker = MagicMock()
-        mock_broker.broker_id = "tradelocker"
-        mock_broker.is_connected = True
-        mock_broker.name = "TradeLocker Institutional Gateway [PRO]"
-        mock_broker.get_latest_quote.return_value = {
-            "symbol": "XAU/USD",
-            "price": 4425.80,
-            "bid": 4425.65,
-            "ask": 4425.95,
-            "timestamp": int(time.time()),
-            "source": "tradelocker_stream"
-        }
-
-        # The engine itself must resolve the broker feed: a connected broker wins.
-        with patch.object(broker_registry, "get_broker", return_value=mock_broker):
-            broker, quote = engine._broker_feed()
-        self.assertIs(broker, mock_broker)
-        self.assertEqual(quote["price"], 4425.80)
-        self.assertEqual(quote["source"], "tradelocker_stream")
-
-        # A disconnected broker must yield no broker feed, so the public feed is used.
-        mock_broker.is_connected = False
-        with patch.object(broker_registry, "get_broker", return_value=mock_broker):
-            broker, quote = engine._broker_feed()
-        self.assertIsNone(broker)
-        self.assertIsNone(quote)
 
     def test_tradelocker_provider_initial_candles_seed(self):
         """Tests that TradeLockerMarketDataProvider adopts the historical candles fetched on init."""

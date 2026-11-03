@@ -34,7 +34,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 NUJIN_DIR = os.path.join(_ROOT, ".nujin")
 SESSIONS_DIR = os.path.join(NUJIN_DIR, "sessions")
 LEGACY_EXPERIMENTS_DIR = os.path.join(NUJIN_DIR, "experiments")

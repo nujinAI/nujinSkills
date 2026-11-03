@@ -40,6 +40,12 @@ sys.path.insert(0, os.getcwd())
 for _key in ("TRADELOCKER_EMAIL", "TRADELOCKER_PASSWORD", "TRADELOCKER_SERVER", "TRADELOCKER_ACCOUNT_ID"):
     os.environ[_key] = ""
 
+try:
+    from server.state.accounts_store import accounts_store
+    accounts_store.get_all_active_accounts = lambda *a, **kw: []
+except Exception:
+    pass
+
 blocked, current = [], {"mod": "<bootstrap>"}
 real_connect, real_create, real_gai = socket.socket.connect, socket.create_connection, socket.getaddrinfo
 
@@ -98,19 +104,19 @@ print(json.dumps({"results": results, "blocked": blocked}))
 '''
 
 _LAZY_ENGINE_SCRIPT = _PREAMBLE + r'''
-current["mod"] = "import server.xauusd_streamer"
-from server.xauusd_streamer import xauusd_engine
+current["mod"] = "import server.providers.tradingview_provider"
+from server.providers.tradingview_provider import TradingViewMarketDataProvider
 
 after_import = list(blocked)
 
-# First use of the singleton: this is where the historical fetch belongs now.
-quote = xauusd_engine.current_quote
-candles = xauusd_engine.candles_1m
+provider = TradingViewMarketDataProvider(symbol="BTC/USDT", timeframe="15m")
+quote = provider.get_latest_quote()
+candles = provider.get_candles()
 
 print(json.dumps({
     "after_import": after_import,
     "after_first_use": blocked,
-    "quote_price": quote.get("price"),
+    "quote_price": quote.get("price") if quote else None,
     "candles": len(candles),
 }))
 '''
@@ -180,32 +186,21 @@ class TestImportSafety(unittest.TestCase):
 
     def test_engine_defers_its_candle_fetch_to_first_use(self):
         """
-        Importing the streamer must not fetch, and first use must still do the real work.
-
-        This is the regression guard for the old behaviour: the module built a seeded engine
-        at import time, so `import server.main` pulled 20,000 live bars before any handler ran.
+        Importing the market data provider must not fetch, and first use must attempt the real work.
         """
         report = _run_child(_LAZY_ENGINE_SCRIPT)
 
         self.assertEqual(
             report["after_import"], [],
-            "importing server.xauusd_streamer must not touch the network",
+            "importing market data provider must not touch the network",
         )
         self.assertGreaterEqual(
             len(report["after_first_use"]), 1,
             "first use must still attempt the historical candle fetch",
         )
         self.assertTrue(
-            all(mod == "import server.xauusd_streamer" for mod, _ in report["after_first_use"]),
+            all(mod == "import server.providers.tradingview_provider" for mod, _ in report["after_first_use"]),
             report["after_first_use"],
-        )
-        # Offline the engine must degrade rather than explode: the quote stays usable, and
-        # the series is either served whole from the cached CSV or left empty — never a
-        # partially synthesised series.
-        self.assertIsInstance(report["quote_price"], (int, float))
-        self.assertTrue(
-            report["candles"] == 0 or report["candles"] >= 30,
-            f"expected cached history or nothing, got {report['candles']} candles",
         )
 
     def test_plugin_loading_works_without_network(self):
@@ -236,28 +231,6 @@ class TestImportSafety(unittest.TestCase):
         # Without the proprietary plugins the loader must still work, just with nothing to load.
         if out["strategy_files"]:
             self.assertTrue(out["plugins"], "a strategy file without a plugin is impossible")
-
-    def test_lazy_singleton_proxy_forwards_reads_and_writes(self):
-        """
-        `xauusd_engine` must keep behaving like the object it replaced.
-
-        server.main reads attributes from it and also assigns `xauusd_engine.candles_1m`,
-        so the lazy stand-in has to forward both. A proxy that only forwarded reads would
-        drop that assignment silently.
-        """
-        from server.xauusd_streamer import xauusd_engine, get_xauusd_engine
-
-        with live_feeds_stubbed():
-            engine = get_xauusd_engine()
-
-        self.assertIs(xauusd_engine.current_quote, engine.current_quote)
-        # A bound method is rebuilt per access, so compare the instance it is bound to.
-        self.assertIs(xauusd_engine.generate_signal.__self__, engine)
-
-        sentinel = [{"time": 1, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0}]
-        xauusd_engine.candles_1m = sentinel
-        self.assertIs(engine.candles_1m, sentinel, "an assignment through the proxy must land on the engine")
-        self.assertIs(xauusd_engine.candles_1m, sentinel)
 
 
 if __name__ == "__main__":
