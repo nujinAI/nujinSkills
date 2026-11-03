@@ -17,7 +17,7 @@ _LEGACY_MODULE_MAP = {
     "server.risk_governor": "server.services.risk_governor",
     "server.drift_monitor": "server.services.drift_monitor",
     "server.cynic_gates": "core.cynic_gates",
-    "server.indicators": "server.services.indicators",
+    "server.indicators": "core.indicators",
     "server.market_structure": "server.services.market_structure",
     "server.chart_primitives": "server.services.chart_primitives",
     "server.alpha_models": "server.services.alpha_models",

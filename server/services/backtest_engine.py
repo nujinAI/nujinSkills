@@ -531,7 +531,7 @@ def run_real_backtest(
         trail_offset = 0.0070
 
         # Check session best_rule.json or data/final_rules.json
-        from server.indicators import compute_all_standard_features
+        from core.indicators import compute_all_standard_features
         from server.session_store import get_session_paths
         df_c = compute_all_standard_features(df_c, window=20)
         session_rule_path = get_session_paths(create_if_missing=False).get("best_rule", "")

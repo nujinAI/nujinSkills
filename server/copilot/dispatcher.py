@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 
 from server import data_manager
-from server.indicators import ensure_dynamic_indicators
+from core.indicators import ensure_dynamic_indicators
 from server.copilot.models import (
     CopilotResponse,
     CopilotPrimitives,
