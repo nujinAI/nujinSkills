@@ -118,14 +118,14 @@
                   class="badge badge-xs font-bold font-mono"
                   :class="getTierClass(strat.tier)"
                 >
-                  {{ strat.tier || 'A-Tier' }}
+                  {{ strat.tier || 'Unranked' }}
                 </span>
               </td>
               <td>
                 <StatusBadge :status="strat.status" size="xs" />
               </td>
               <td class="text-base-content/70 text-[11px]">
-                {{ strat.symbol || 'XAU/USD' }} <span class="opacity-60 text-[10px]">({{ strat.timeframe || '15m' }})</span>
+                {{ strat.symbol || '—' }} <span v-if="strat.timeframe" class="opacity-60 text-[10px]">({{ strat.timeframe }})</span>
               </td>
               <td class="font-bold text-[11px]" :class="(strat.latest_backtest?.sharpe || 0) >= 1.5 ? 'text-success' : 'text-base-content'">
                 {{ formatMetric(strat.latest_backtest?.sharpe) }}

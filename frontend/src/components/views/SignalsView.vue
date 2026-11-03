@@ -56,7 +56,7 @@
                 >
                   {{ pos.action || pos.side }}
                 </span>
-                <span class="font-bold text-xs text-base-content">{{ pos.pair || 'XAU/USD' }}</span>
+                <span class="font-bold text-xs text-base-content">{{ pos.pair || '—' }}</span>
               </div>
               <div class="text-[11px] text-base-content/60 font-mono mt-0.5 truncate max-w-[200px]">
                 {{ (pos.strategy || '').replace('Strategy', '') }}
@@ -92,7 +92,7 @@
           <!-- Actions & Close Button -->
           <div class="flex items-center justify-between gap-2 pt-1">
             <span class="text-[10px] text-base-content/50 font-mono">
-              Lot: {{ (pos as any).lots || (pos as any).lot_size || '0.01' }}
+              Lot: {{ (pos as any).lots || (pos as any).lot_size || '—' }}
             </span>
             <button
               @click="handleClose(pos)"
@@ -199,7 +199,7 @@
                 <span v-else class="text-base-content/40">—</span>
               </td>
               <td class="text-[10px] text-base-content/60 truncate max-w-[120px]">
-                {{ (sig as any).broker_order?.order_id || (sig as any).broker_order?.status || 'DIRECT' }}
+                {{ (sig as any).broker_order?.order_id || (sig as any).broker_order?.status || '—' }}
               </td>
               <td class="text-right">
                 <button

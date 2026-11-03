@@ -1,5 +1,15 @@
 <template>
   <div class="w-full h-full overflow-y-auto px-3 md:px-6 py-4 space-y-4 font-mono select-none bg-base-100 text-base-content">
+    <!-- Clean Empty State if 0 strategies exist in system -->
+    <div v-if="deduplicatedStrategies.length === 0" class="h-[80vh] flex items-center justify-center">
+      <EmptyState
+        title="No Strategies Registered"
+        description="Zero active strategies in the system. Add or symlink an alpha strategy in strategies/ to run real-time backtests."
+        :icon="Cpu"
+      />
+    </div>
+
+    <div v-else class="space-y-4">
     <!-- Top Strategy Header & Controls -->
     <div class="card bg-base-200/80 border border-base-content/10 p-3 md:p-4 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-xs">
       <div class="flex items-center gap-3 flex-wrap">
@@ -27,8 +37,8 @@
         <StatusBadge :status="currentStrategyRecord?.status" />
 
         <!-- Strategy Native Asset & Fixed Timeframe Badge -->
-        <span class="badge badge-sm badge-neutral border-base-content/20 text-[10px] text-base-content/80 font-mono font-bold">
-          {{ currentStrategyRecord?.symbol || 'XAU/USD' }} · {{ currentStrategyRecord?.timeframe || '5m' }}
+        <span v-if="currentStrategyRecord?.symbol" class="badge badge-sm badge-neutral border-base-content/20 text-[10px] text-base-content/80 font-mono font-bold">
+          {{ currentStrategyRecord.symbol }} · {{ currentStrategyRecord.timeframe || '—' }}
         </span>
 
         <span v-if="timePeriodLabel" class="badge badge-sm badge-neutral border-base-content/20 text-[10px] text-base-content/70 hidden sm:inline-flex">
@@ -197,7 +207,7 @@
           </span>
           <span 
             class="badge badge-xs font-bold font-mono"
-            :class="cynicVerdict === 'VERIFIED' ? 'badge-success bg-success/15 text-success' : 'badge-error bg-error/15 text-error'"
+            :class="cynicVerdict === 'VERIFIED' || cynicVerdict === 'APPROVED' ? 'badge-success bg-success/15 text-success' : (cynicVerdict === 'REJECTED' || cynicVerdict === 'FAIL' ? 'badge-error bg-error/15 text-error' : 'badge-neutral bg-base-300 text-base-content/50')"
           >
             {{ cynicVerdict }}
           </span>
@@ -215,7 +225,7 @@
             </div>
             <span
               class="badge badge-xs font-bold font-mono shrink-0"
-              :class="g.status === 'PASS' ? 'badge-success bg-success/15 text-success border-success/30' : 'badge-error bg-error/15 text-error border-error/30'"
+              :class="g.status === 'PASS' ? 'badge-success bg-success/15 text-success border-success/30' : (g.status === 'FAIL' ? 'badge-error bg-error/15 text-error border-error/30' : 'badge-neutral bg-base-300 text-base-content/50 border-base-content/10')"
             >
               {{ g.status }}
             </span>
@@ -231,26 +241,26 @@
             Execution Architecture & Regimes
           </span>
           <span class="badge badge-xs badge-neutral font-mono">
-            {{ currentStrategyRecord?.tier || 'A-Tier' }}
+            {{ currentStrategyRecord?.tier || 'Unranked' }}
           </span>
         </div>
 
         <div class="grid grid-cols-2 gap-2 text-xs">
           <div class="p-2.5 rounded-lg bg-base-300/50 border border-base-content/5">
             <span class="text-base-content/50 block text-[10px] uppercase">Market Symbol</span>
-            <strong class="text-base-content text-xs">{{ currentStrategyRecord?.symbol || 'XAU/USD' }}</strong>
+            <strong class="text-base-content text-xs">{{ currentStrategyRecord?.symbol || '—' }}</strong>
           </div>
           <div class="p-2.5 rounded-lg bg-base-300/50 border border-base-content/5">
             <span class="text-base-content/50 block text-[10px] uppercase">Candle Timeframe</span>
-            <strong class="text-base-content text-xs">{{ selectedTimeframe }} (native: {{ currentStrategyRecord?.timeframe || '5m' }})</strong>
+            <strong class="text-base-content text-xs">{{ currentStrategyRecord?.timeframe ? `${selectedTimeframe} (native: ${currentStrategyRecord.timeframe})` : '—' }}</strong>
           </div>
           <div class="p-2.5 rounded-lg bg-base-300/50 border border-base-content/5">
             <span class="text-base-content/50 block text-[10px] uppercase">Total Bars Analyzed</span>
-            <strong class="text-base-content text-xs">{{ backtestSummary?.candles_count || 4981 }} bars</strong>
+            <strong class="text-base-content text-xs">{{ backtestSummary?.candles_count ? `${backtestSummary.candles_count} bars` : '—' }}</strong>
           </div>
           <div class="p-2.5 rounded-lg bg-base-300/50 border border-base-content/5">
             <span class="text-base-content/50 block text-[10px] uppercase">Audit Window</span>
-            <strong class="text-primary text-xs">{{ backtestSummary?.duration_days ? `${backtestSummary.duration_days.toFixed(1)} days` : '30.0 days' }}</strong>
+            <strong class="text-primary text-xs">{{ backtestSummary?.duration_days ? `${backtestSummary.duration_days.toFixed(1)} days` : '—' }}</strong>
           </div>
         </div>
 
@@ -343,6 +353,7 @@
         :icon="Layers"
       />
     </div>
+    </div>
   </div>
 </template>
 
@@ -434,67 +445,83 @@ const netPnlDollars = computed(() => {
 
 // Cynic Falsification Gates resolution
 const rawGates = computed(() => {
-  return selectedBacktestData.value?.falsification_gates || currentStrategyRecord.value?.falsification_gates || {};
+  const gates = selectedBacktestData.value?.falsification_gates || currentStrategyRecord.value?.falsification_gates;
+  return gates && Object.keys(gates).length > 0 ? gates : null;
 });
 
 const cynicVerdict = computed(() => {
+  if (!rawGates.value) {
+    return 'UNTESTED';
+  }
   const summary = rawGates.value?.gates_summary;
   if (summary?.verdict) {
-    return summary.verdict === 'PASSED' ? 'VERIFIED' : 'ROBUST';
+    return summary.verdict;
   }
-  return 'ROBUST';
+  return 'UNTESTED';
 });
 
 const renderedGates = computed(() => {
-  const g = rawGates.value || {};
+  const g = rawGates.value;
+  if (!g) {
+    return [
+      { key: 'gate_1_dsr', title: 'Gate 1: Deflated Sharpe (DSR)', status: 'UNTESTED', reason: 'Awaiting backtest execution' },
+      { key: 'gate_2_parameter_stability', title: 'Gate 2: Parameter Stability Matrix', status: 'UNTESTED', reason: 'Awaiting backtest execution' },
+      { key: 'gate_3_monte_carlo', title: 'Gate 3: Monte Carlo MDD99 Stress', status: 'UNTESTED', reason: 'Awaiting backtest execution' },
+      { key: 'gate_4_oos_walkforward', title: 'Gate 4: Out-of-Sample Walk-Forward', status: 'UNTESTED', reason: 'Awaiting backtest execution' },
+      { key: 'gate_5_regime_survival', title: 'Gate 5: Market Regime Survival', status: 'UNTESTED', reason: 'Awaiting backtest execution' },
+      { key: 'gate_6_friction', title: 'Gate 6: Friction & Noise Floor', status: 'UNTESTED', reason: 'Awaiting backtest execution' },
+      { key: 'gate_7_noise_jitter', title: 'Gate 7: Noise Jitter Perturbation', status: 'UNTESTED', reason: 'Awaiting backtest execution' },
+      { key: 'gate_8_equity_linearity', title: 'Gate 8: Equity Curve Linearity', status: 'UNTESTED', reason: 'Awaiting backtest execution' },
+    ];
+  }
   return [
     {
       key: 'gate_1_dsr',
       title: 'Gate 1: Deflated Sharpe (DSR)',
-      status: g.gate_1_dsr?.status || 'PASS',
-      reason: g.gate_1_dsr?.reason || 'DSR score >= 0.95',
+      status: g.gate_1_dsr?.status || 'FAIL',
+      reason: g.gate_1_dsr?.reason || 'DSR threshold not met',
     },
     {
       key: 'gate_2_parameter_stability',
       title: 'Gate 2: Parameter Stability Matrix',
-      status: g.gate_2_parameter_stability?.status || 'PASS',
-      reason: g.gate_2_parameter_stability?.reason || 'Stable performance plateau across perturbations',
+      status: g.gate_2_parameter_stability?.status || 'FAIL',
+      reason: g.gate_2_parameter_stability?.reason || 'Performance stability across perturbations failed',
     },
     {
       key: 'gate_3_monte_carlo',
       title: 'Gate 3: Monte Carlo MDD99 Stress',
-      status: g.gate_3_monte_carlo?.status || 'PASS',
-      reason: g.gate_3_monte_carlo?.reason || '99th percentile drawdown within bounds',
+      status: g.gate_3_monte_carlo?.status || 'FAIL',
+      reason: g.gate_3_monte_carlo?.reason || 'Drawdown stress test failed',
     },
     {
       key: 'gate_4_oos_walkforward',
       title: 'Gate 4: Out-of-Sample Walk-Forward',
-      status: g.gate_4_oos_walkforward?.status || 'PASS',
-      reason: g.gate_4_oos_walkforward?.reason || 'Walk-forward efficiency validated',
+      status: g.gate_4_oos_walkforward?.status || 'FAIL',
+      reason: g.gate_4_oos_walkforward?.reason || 'Walk-forward validation failed',
     },
     {
       key: 'gate_5_regime_survival',
       title: 'Gate 5: Market Regime Survival',
-      status: g.gate_5_regime_survival?.status || 'PASS',
-      reason: g.gate_5_regime_survival?.reason || 'Survival across Bull, Bear, and Ranging market conditions',
+      status: g.gate_5_regime_survival?.status || 'FAIL',
+      reason: g.gate_5_regime_survival?.reason || 'Regime survival threshold not met',
     },
     {
       key: 'gate_6_friction',
       title: 'Gate 6: Friction & Noise Floor',
-      status: g.gate_6_friction?.status || 'PASS',
-      reason: g.gate_6_friction?.reason || 'Net positive expectancy after spread & slippage friction',
+      status: g.gate_6_friction?.status || 'FAIL',
+      reason: g.gate_6_friction?.reason || 'Negative expectancy after transaction friction',
     },
     {
       key: 'gate_7_noise_jitter',
       title: 'Gate 7: Noise Jitter Perturbation',
-      status: g.gate_7_noise_jitter?.status || 'PASS',
-      reason: g.gate_7_noise_jitter?.reason || 'Sharpe retention >= 80% under price noise jitter',
+      status: g.gate_7_noise_jitter?.status || 'FAIL',
+      reason: g.gate_7_noise_jitter?.reason || 'Failed under price noise perturbation',
     },
     {
       key: 'gate_8_equity_linearity',
       title: 'Gate 8: Equity Curve Linearity',
-      status: g.gate_8_equity_linearity?.status || 'PASS',
-      reason: g.gate_8_equity_linearity?.reason || 'Linearity R² >= 0.85 & smooth compounding trajectory',
+      status: g.gate_8_equity_linearity?.status || 'FAIL',
+      reason: g.gate_8_equity_linearity?.reason || 'Equity linearity threshold not met',
     },
   ];
 });
