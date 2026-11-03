@@ -860,6 +860,20 @@ class NativeStrategyRunner:
             elif order_res.get("status") == "FILLED":
                 sig["status"] = "ACTIVE_IN_POSITION"
                 sig["execution_mode"] = "LIVE_BROKER"
+                # If broker returned an authentic fill price, synchronize entry price with broker truth
+                b_price = float(order_res.get("filled_price") or 0.0)
+                if b_price > 0:
+                    sig["price"] = b_price
+                    sig["entry_price"] = b_price
+                b_details = order_res.get("details", [])
+                if b_details and isinstance(b_details, list):
+                    first_det = b_details[0]
+                    if first_det.get("position_id"):
+                        sig["broker_position_id"] = str(first_det.get("position_id"))
+                    det_price = float(first_det.get("filled_price") or 0.0)
+                    if det_price > 0:
+                        sig["price"] = det_price
+                        sig["entry_price"] = det_price
             else:
                 logger.error(f"[NativeStrategyRunner] Unrecognized order status from broker: {order_res.get('status')}")
                 sig["status"] = "REJECTED"
@@ -1066,14 +1080,15 @@ class NativeStrategyRunner:
                                     b_details = broker_order.get("details", [])
                                     first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
                                     b_ord_id = first_det.get("order_id") or broker_order.get("order_id")
+                                    b_pos_id = pos.get("broker_position_id") or first_det.get("position_id") or pos.get("position_id")
                                     
                                     exec_data = None
                                     if hasattr(broker, "get_latest_position_execution"):
-                                        exec_data = broker.get_latest_position_execution(order_id=b_ord_id)
+                                        exec_data = broker.get_latest_position_execution(position_id=b_pos_id, order_id=b_ord_id)
 
                                     if exec_data and exec_data.get("price"):
                                         reconciled_exit_price = float(exec_data["price"])
-                                        logger.info(f"[NativeStrategyRunner] 🎯 Matched broker execution fill price: {reconciled_exit_price} (order: {b_ord_id})")
+                                        logger.info(f"[NativeStrategyRunner] 🎯 Matched broker execution fill price: {reconciled_exit_price} (order: {b_ord_id}, position: {b_pos_id})")
 
                                     eff_exit_price = reconciled_exit_price or eval_exit_price
                                     if is_long:

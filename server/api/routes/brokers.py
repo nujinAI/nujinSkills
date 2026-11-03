@@ -30,6 +30,16 @@ async def list_brokers():
 async def list_broker_accounts(broker_id: Optional[str] = None):
     """Returns all configured broker accounts across all users (with credentials masked)."""
     from server.accounts_store import accounts_store
+    from server.brokers.registry import broker_registry
+
+    # Live refresh active broker info to guarantee real-time balance sync
+    try:
+        broker = broker_registry.get_broker()
+        if broker and getattr(broker, "is_connected", False) and hasattr(broker, "get_account_info"):
+            broker.get_account_info()
+    except Exception as e_info:
+        logger.debug(f"[BrokersAPI] Live get_account_info check note: {e_info}")
+
     active_accounts = accounts_store.get_all_active_accounts(broker_id=broker_id, decrypt=False)
     for a in active_accounts:
         a["login_masked"] = accounts_store.mask_login(a.get("login", ""))
