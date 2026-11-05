@@ -22,10 +22,10 @@ def classify_market_regimes(df: pd.DataFrame, window: int = 50, band_pct: float 
     sma = df['close'].rolling(window).mean()
     regime_map: Dict[int, str] = {}
 
-    for idx, r in df.iterrows():
+    for i, (idx, r) in enumerate(df.iterrows()):
         ts = int(r['timestamp']) if 'timestamp' in r else int(r.get('time', idx))
         c_val = float(r['close'])
-        s_val = float(sma.iloc[idx]) if not np.isnan(sma.iloc[idx]) else c_val
+        s_val = float(sma.iloc[i]) if not np.isnan(sma.iloc[i]) else c_val
 
         if c_val > s_val * (1.0 + band_pct):
             regime = "bull_market"

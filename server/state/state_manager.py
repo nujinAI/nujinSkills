@@ -546,8 +546,8 @@ class StrategyRegistry:
         If no strategies exist on disk, returns ''.
         Never hardcodes any strategy name.
         """
-        curr = state_manager.get().get("active_strategy", "")
-        clean = curr.replace(".py", "").strip()
+        curr = state_manager.get().get("active_strategy") or ""
+        clean = str(curr).replace(".py", "").strip()
         if clean:
             # Check core or plugin paths
             if os.path.exists(os.path.join(self._dir, f"{clean}.py")):
@@ -620,7 +620,8 @@ class StrategyRegistry:
         self.sync_with_filesystem()
 
         # If deleted strategy was the active strategy, auto-switch to top remaining
-        curr_active = state_manager.get().get("active_strategy", "").replace(".py", "")
+        curr_val = state_manager.get().get("active_strategy") or ""
+        curr_active = str(curr_val).replace(".py", "")
         if curr_active == clean:
             new_active = self.get_active_strategy_name()
             state_manager.patch({"active_strategy": new_active})

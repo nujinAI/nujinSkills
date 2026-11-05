@@ -136,6 +136,11 @@ class StrategyEvaluator:
                 sl = round(float(last_sig.get("stop_loss", 0.0)), 2)
                 tp = round(float(last_sig.get("target", 0.0)), 2)
 
+                raw_limit_p = last_sig.get("limit_price", 0.0)
+                limit_p = round(float(raw_limit_p), 2) if (raw_limit_p is not None and not np.isnan(raw_limit_p) and float(raw_limit_p) > 0) else None
+                sig_order_t = str(last_sig.get("order_type", "")).upper()
+                is_limit_order = (sig_order_t == "LIMIT") or (limit_p is not None and limit_p > 0)
+
                 atr_v = curr_p * 0.005
                 if hasattr(strat_inst, "compute_indicators"):
                     try:
@@ -186,22 +191,28 @@ class StrategyEvaluator:
                 else:
                     tp = round(curr_p * (1.0 + stoploss_pct * 1.5) if is_l else curr_p * (1.0 - stoploss_pct * 1.5), 2)
 
+                raw_limit_p = last_row.get("limit_price", 0.0)
+                limit_p = round(float(raw_limit_p), 2) if (raw_limit_p is not None and not np.isnan(raw_limit_p) and float(raw_limit_p) > 0) else None
+                sig_order_t = str(last_row.get("order_type", "")).upper()
+                is_limit_order = (sig_order_t == "LIMIT") or (limit_p is not None and limit_p > 0)
+
             # 3. Strict Quantitative Sanity Bounds (Universal Risk Enforcement)
+            ref_entry = limit_p if (is_limit_order and limit_p is not None and limit_p > 0) else curr_p
             if is_l:
-                if sl >= curr_p or tp <= curr_p:
-                    logger.error(f"[StrategyEvaluator] REJECTED inverted LONG signal for {clean_name}: Price={curr_p}, SL={sl}, TP={tp}")
+                if sl >= ref_entry or tp <= ref_entry:
+                    logger.error(f"[StrategyEvaluator] REJECTED inverted LONG signal for {clean_name}: Entry={ref_entry}, SL={sl}, TP={tp}")
                     return None
             else:
-                if sl <= curr_p or tp >= curr_p:
-                    logger.error(f"[StrategyEvaluator] REJECTED inverted SHORT signal for {clean_name}: Price={curr_p}, SL={sl}, TP={tp}")
+                if sl <= ref_entry or tp >= ref_entry:
+                    logger.error(f"[StrategyEvaluator] REJECTED inverted SHORT signal for {clean_name}: Entry={ref_entry}, SL={sl}, TP={tp}")
                     return None
 
             is_sp = any(k in symbol.upper() for k in ["SP", "ES", "S&P", "US500"])
-            if is_sp and abs(sl - curr_p) > 50.0:
-                logger.error(f"[StrategyEvaluator] REJECTED excessive S&P stop loss ({abs(sl - curr_p):.2f} pts > 50 pts) for {clean_name}")
+            if is_sp and abs(sl - ref_entry) > 50.0:
+                logger.error(f"[StrategyEvaluator] REJECTED excessive S&P stop loss ({abs(sl - ref_entry):.2f} pts > 50 pts) for {clean_name}")
                 return None
-            if is_xau and abs(sl - curr_p) > 25.0:
-                logger.error(f"[StrategyEvaluator] REJECTED excessive Gold stop loss (${abs(sl - curr_p):.2f} > $25) for {clean_name}")
+            if is_xau and abs(sl - ref_entry) > 25.0:
+                logger.error(f"[StrategyEvaluator] REJECTED excessive Gold stop loss (${abs(sl - ref_entry):.2f} > $25) for {clean_name}")
                 return None
 
             # Dynamic bar duration resolution (Single Source of Truth)
@@ -299,7 +310,7 @@ class StrategyEvaluator:
             if lots is None or lots <= 0:
                 # Dynamic 1R risk sizing arithmetic (Zero hardcoded lots)
                 dollar_risk_1r = target_equity * float(getattr(strat_inst, "risk_pct_1r", 0.0035))
-                stop_dist = abs(curr_p - sl) if sl > 0 else (atr_v * 1.5 if atr_v > 0 else curr_p * 0.005)
+                stop_dist = abs(ref_entry - sl) if sl > 0 else (atr_v * 1.5 if atr_v > 0 else ref_entry * 0.005)
                 if stop_dist > 0:
                     multiplier = 100.0 if is_xau else 1.0
                     lots = dollar_risk_1r / (stop_dist * multiplier)
@@ -317,11 +328,18 @@ class StrategyEvaluator:
             trail_offset = float(getattr(strat_inst, "trailing_stop_positive_offset", 0.0003))
             atr_trail_m = float(getattr(strat_inst, "atr_trail_mult", 1.0))
 
+            order_action_type = "LIMIT" if is_limit_order else "MARKET"
+            dispatch_price = limit_p if (is_limit_order and limit_p is not None and limit_p > 0) else curr_p
+
             return {
                 "strategy": clean_name,
                 "pair": symbol,
                 "action": side,
-                "price": curr_p,
+                "order_type": order_action_type,
+                "type": order_action_type.lower(),
+                "price": dispatch_price,
+                "entry_price": dispatch_price,
+                "market_price": curr_p,
                 "time": bar_ts if bar_ts > 0 else int(time.time()),
                 "stop_loss": sl,
                 "take_profit": tp,
@@ -334,8 +352,8 @@ class StrategyEvaluator:
                 "trailing_stop": use_trailing,
                 "trailing_offset": trail_offset,
                 "trailing_buffer": trail_pos,
-                "annotation": f"{clean_name} Signal ({lots:.2f} lots)",
-                "reasoning_md": f"Systematic signal generated by {clean_name} ({side} {lots:.2f} lots @ ${curr_p:,.2f}) with SL: ${sl:,.2f}, TP: ${tp:,.2f}."
+                "annotation": f"{clean_name} {order_action_type} Signal ({lots:.2f} lots)",
+                "reasoning_md": f"Systematic {order_action_type} signal generated by {clean_name} ({side} {lots:.2f} lots @ ${dispatch_price:,.2f}) with SL: ${sl:,.2f}, TP: ${tp:,.2f}."
             }
         except Exception as e_dyn:
             logger.warning(f"[StrategyEvaluator] Error evaluating dynamic strategy {clean_name}: {e_dyn}")
