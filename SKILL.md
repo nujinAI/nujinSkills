@@ -26,8 +26,9 @@ description: >-
 2. **Asset Scope (Cash Spot Only, Zero Commodity Futures):**
    We trade and model **Spot Cash** (`OANDA:XAUUSD`, Forex Spot, Crypto Spot). **Never** trade, model, or backtest Commodity Futures (`GC=F`, `GC=1`, CME/COMEX) for gold because pricing, spreads, contract rollovers, and volume profiles differ fundamentally from spot CFDs.
 
-3. **Single Market Data Authority (TradingView):**
-   TradingView (`tradingview-ta`, TradingView WebSocket, or `core.data`) is the single source of truth for all historical market data and technical indicators. Do NOT use `yfinance` for strategy generation, backtesting, or execution feeds. Use `core.data.fetch_ohlcv(symbol, timeframe, count)` to pull authentic data.
+3. **Primary Data Authority & The CFD Volume Reality:**
+   - **Price & Execution Authority:** Authentic broker spot data (TradeLocker API or direct broker CFD feed) is the primary source of truth for historical execution candles, real spreads, and fill simulation. It provides full multi-month depth (minimum 90 days / 17,000+ bars on 5m).
+   - **The CFD Volume Reality (Zero Real Volume on CFDs):** On OTC/CFD spot instruments (such as `XAUUSD`), broker-reported volume is **synthetic tick volume** (a simple counter of quote updates from the broker's liquidity feed) — it does **NOT** represent real interbank traded lots or institutional order book depth. Strategies built for CFD brokers must never rely on broker tick volume for core alpha (e.g. Volume Profile, VWAP, raw volume sweeps). Alpha must be derived from **pure price geometry, structural highs/lows, session boundaries, and volatility expansion**. TradingView (`core.data.fetch_ohlcv`) provides aggregated institutional volume, but is subject to ~6,000 bar limits on lower timeframes. Do NOT use `yfinance` or commodity futures tickers for strategy design or evaluation.
 
 4. **Zero Silent Fallbacks:**
    Every tool, script, and strategy call requires an explicit, unambiguous symbol parameter (e.g. `OANDA:XAUUSD`, `BINANCE:BTCUSDT`). No hardcoded fallback symbols or silent fallback feeds are permitted.
@@ -37,33 +38,34 @@ description: >-
 
 ---
 
-## 2. The 4-Step Scientific Pipeline
+## 2. The 5-Phase Institutional Alpha Pipeline (Domain-Constrained)
 
-Follow this autonomous loop for every user request:
+Follow this rigorous, non-curve-fitting autonomous loop for every user request:
 
 ```
-[ STEP 1: COMPILE USER INTENT & RISK BUDGET ]
-  Use: core.risk.parse_prompt_to_risk("<user prompt>")
-  -> Derives: Account size, 1R dollar risk, daily circuit breakers, profit caps dynamically from user parameters or active broker accounts.
+[ PHASE 1: USER DOMAIN ANCHOR & DYNAMIC RISK BUDGET ]
+  - Parse the user's trading objective, anchor domain, and style:
+    (e.g., Price Action, Session Sweeps, VWAP Reversion, Key Levels, Trend Continuation).
+  - Use: core.risk.parse_prompt_to_risk("<user prompt>")
+  -> Derives: Account size, 1R dollar risk, daily circuit breakers, profit caps dynamically from active broker accounts or user limits.
 
-[ STEP 2: DYNAMIC DATA FETCH & FRICTION CHECK ]
-  Use: core.data.fetch_ohlcv(symbol, timeframe, period)
-  Use: core.friction.check_friction_hurdle(...)
-  -> Ensures: (Round-Trip Friction / Stop Distance) <= 10.0%.
+[ PHASE 2: 90-DAY DATA INGESTION & BLIND OUT-OF-SAMPLE ISOLATION ]
+  - Ingest at least 90 days of authentic broker spot candles (e.g., data/market/XAUUSD_5m.csv, ~17,600 bars).
+  - Strictly partition the dataset into two chronological blocks:
+    1. In-Sample (First 60 Days — 2/3 of data): Dedicated to thesis calibration and strategy assembly.
+    2. Blind Out-of-Sample (Last 30 Days — 1/3 of data): Locked and hidden from the strategy creation step.
 
-[ STEP 3: FORMULATE THESIS & GENERATE SIGNALS ]
-  The AI reasons about an anchor (session transition, price compression, structural bounds).
-  Constructs a signals DataFrame:
-  - 'entry_signal': 1 (Long), -1 (Short), 0 (Flat)
-  - 'stop_loss': exact price
-  - 'target': exact price
+[ PHASE 3: DOMAIN-CONSTRAINED PREDICTIVE VERIFICATION ]
+  - Respect the user's chosen anchor: extract features exclusively within that domain (e.g., VWAP standard deviation bands, session high/low bounds, rejection candle geometry).
+  - Mathematically verify if the specific domain features possess forward predictive power (Information Coefficient / IC >= 0.02) and that expected move size >= 5x roundtrip broker friction on the 60-day In-Sample dataset before writing execution triggers.
 
-[ STEP 4: EXECUTE & AUDIT (SINGLE SOURCE OF TRUTH) ]
-  Canonical Execution Tool: python3 tools/run_backtest_audit.py --strategy <StrategyName.py> [--days 30]
-  Backend Python API: server.backtest_engine.run_real_backtest(strategy_name, days=30)
-  * NEVER write ad-hoc backtest loops or hardcode capital assumptions.
-  * Sizing is strictly dynamic based on the active account context or user-provided equity.
-  -> Tests the 8 Canonical Cynic Falsification Gates (core/cynic_gates.py):
+[ PHASE 4: STRUCTURAL STRATEGY CONSTRUCTION ]
+  - Implement entry_signal, stop_loss, and target with objective structural invalidation and asymmetric payoff (target >= 2.0R).
+  - Invalidation must reflect the strategy's specific logic (e.g. key level breach, swing high/low break, channel exit, volatility bound, or pattern failure) — DO NOT bias or default to ATR-only stops. The geometry must naturally match the user's requested domain.
+  - Sizing is pure percentage (risk_pct_1r) — ZERO hardcoded dollar amounts or static lots.
+
+[ PHASE 5: ADVERSARIAL 8-GATE FALSIFICATION & PERSISTENT REFINEMENT ]
+  - Evaluate the candidate across the 8 Canonical Cynic Falsification Gates (core/cynic_gates.py) against both In-Sample and the Unseen 30-Day Blind Out-of-Sample:
      1. Gate 1: Deflated Sharpe Ratio (DSR >= 0.95, penalized for trial multiplicity).
      2. Gate 2: Parameter Stability Surface (checks against performance cliff).
      3. Gate 3: Monte Carlo Sequence Stress (MDD99 <= 3.0%, tail ratio <= 2.5).
@@ -73,15 +75,30 @@ Follow this autonomous loop for every user request:
      7. Gate 7: Noise Jitter Resilience (>= 80% Sharpe retention under price jitter).
      8. Gate 8: Equity Linearity Standard (R² >= 0.85, positive slope, K-ratio >= 1.5).
 
-  * If any of the 8 gates fails: Analyze WHY -> Adjust thesis/timeframe -> Re-test.
-  * Only when ALL 8 GATES PASS: Deploy the strategy class into strategies/<StrategyName>.py.
+  * THE "PERSISTENT REFINEMENT" DIRECTIVE (DO NOT STOP):
+    - If any gate fails, the AI MUST NOT STOP and MUST NOT abandon the user's requested domain.
+    - FORBIDDEN: Brute-force parameter optimization or grid-searching decimal numbers to game the gates (guaranteed curve-fit).
+    - REQUIRED: Diagnose the structural failure mode (e.g. "Strategy bleeds during high-volatility trend expansions" or "Stops are too tight relative to Asian session spread").
+    - Refine the structural logic within the domain to account for the failure mode, re-test against the 60d/30d pipeline, and iterate until a genuine S-Tier (8/8 Gates Passed) candidate emerges.
 ```
 
 ---
-
 ## 3. Strategy Implementation Interface & Deployment Standard
 
-Every strategy in NujinAI implements a clean, standard Python class interface. **NEVER inspect, read, or copy legacy strategy files from `strategies/` or plugins.** Old strategy files contain context-specific parameters, outdated conventions, and irrelevant indicators that pollute new strategy design. Implement exclusively against the formal contract below.
+### Strict Isolation Firewall (Context Protection)
+When building or modifying trading strategies:
+- **FORBIDDEN:** Do not inspect `server/`, `frontend/`, `tests/`, or API code.
+- **FORBIDDEN:** Do not read or search `~/.nujin/archive/` or old strategy files.
+- **FORBIDDEN:** Do not run recursive `find .` or broad repository greps.
+All rules, signal definitions, and math contracts needed to create any strategy are 100% defined right here in this skill file.
+
+### Fast-Path Deployment & Verification Workflow:
+1. **Draft & Save:** Write the Python strategy class directly into `../zillionsAlpha/strategies/<StrategyName>.py` (or `../nujinPro/strategies/` for commercial).
+2. **Symlink:** Create the symlink in `strategies/`:
+   `ln -s ../../zillionsAlpha/strategies/<StrategyName>.py strategies/<StrategyName>.py`
+3. **Audit SSOT:** Run the canonical backtest audit directly:
+   `python3 tools/run_backtest_audit.py --strategy <StrategyName>.py --days 30`
+   (Do NOT invent custom test scripts or ad-hoc backtest loops.)
 
 ### The Standard Strategy Interface Contract
 
@@ -130,18 +147,17 @@ class NewStrategyName:
     def __init__(
         self,
         risk_pct_1r: float = 0.0035,        # Risk appetite: e.g. 0.0035 = 0.35% (or 0.01 = 1.0%)
-        sl_atr_mult: float = 1.0,           # Dynamic ATR Stop Loss multiplier
-        tp_atr_mult: float = 2.0,           # Dynamic ATR Take Profit multiplier (>= 2.0R asymmetric)
-        max_hold_bars: int = 12             # Time invalidation cutoff in bars
+        **kwargs: Any
     ):
         self.risk_pct_1r = risk_pct_1r
-        self.sl_atr_mult = sl_atr_mult
-        self.tp_atr_mult = tp_atr_mult
-        self.max_hold_bars = max_hold_bars
+        # Dynamic strategy parameters as needed (e.g. lookback, threshold, swing level depth)
+        # ZERO hardcoded capital amounts or static lot sizes.
 
     def compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculates required mathematical indicators on normalized UTC candle data.
+        Calculates mathematical indicators / geometry required by the strategy.
+        Completely universal: free to compute any domain math (Price action swing points,
+        moving averages, bands, session highs/lows, momentum, etc.).
         """
         data = df.copy()
         if not isinstance(data.index, pd.DatetimeIndex):
@@ -151,14 +167,7 @@ class NewStrategyName:
         else:
             data.index = data.index.tz_convert("UTC")
 
-        # Standard True Range & Wilder's 14 ATR
-        tr1 = data["high"] - data["low"]
-        tr2 = (data["high"] - data["close"].shift(1)).abs()
-        tr3 = (data["low"] - data["close"].shift(1)).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        data["atr"] = tr.ewm(alpha=1/14).mean()
-
-        # Strategy-specific indicators / time anchors here...
+        # Compute whatever indicators the user request / strategy domain requires:
         return data
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
