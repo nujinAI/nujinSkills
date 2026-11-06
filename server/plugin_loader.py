@@ -142,5 +142,41 @@ class PluginManager:
 
         return None
 
+    @classmethod
+    def load_plugin_modules(cls) -> None:
+        """
+        Automatically discovers and imports all Python indicator and utility modules
+        from all active plugins (e.g. nujinPro/indicators, zillionsAlpha), ensuring
+        their custom indicators, brokers, and alphas are registered globally into
+        CUSTOM_INDICATOR_REGISTRY and system runners without manual imports.
+        """
+        import importlib
+        import sys
+
+        for p in cls.get_all_plugins():
+            plugin_path = p.get("path")
+            if not plugin_path or not os.path.exists(plugin_path):
+                continue
+
+            # Ensure parent workspace directory is on sys.path
+            parent_dir = os.path.abspath(os.path.join(plugin_path, ".."))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+
+            # Auto-import indicators/ directory if present
+            indicators_dir = os.path.join(plugin_path, "indicators")
+            if os.path.exists(indicators_dir) and os.path.isdir(indicators_dir):
+                plugin_pkg = os.path.basename(os.path.realpath(plugin_path))
+                for fname in sorted(os.listdir(indicators_dir)):
+                    if fname.endswith(".py") and not fname.startswith("__"):
+                        mod_name = f"{plugin_pkg}.indicators.{fname.replace('.py', '')}"
+                        try:
+                            importlib.import_module(mod_name)
+                            logger.info(f"[PluginManager] Auto-loaded indicator module: {mod_name}")
+                        except Exception as e:
+                            logger.warning(f"[PluginManager] Failed loading indicator {mod_name}: {e}")
+
 
 plugin_manager = PluginManager()
+plugin_manager.load_plugin_modules()
+

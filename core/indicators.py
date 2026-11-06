@@ -34,6 +34,20 @@ TALIB_FUNCTIONS: Dict[str, str] = {name.lower(): name for name in talib.get_func
 CUSTOM_INDICATOR_REGISTRY: Dict[str, Callable[[pd.DataFrame], Any]] = {}
 
 
+def get_custom_indicator(name: str) -> Optional[Callable[[pd.DataFrame], Any]]:
+    """
+    Retrieves a registered custom indicator. If not yet loaded, lazily discovers
+    and mounts extensions from installed plugins (e.g. nujinPro).
+    """
+    if name not in CUSTOM_INDICATOR_REGISTRY:
+        try:
+            from server.plugin_loader import plugin_manager
+            plugin_manager.load_plugin_modules()
+        except Exception:
+            pass
+    return CUSTOM_INDICATOR_REGISTRY.get(name)
+
+
 def register_custom_indicator(name: str, func: Callable[[pd.DataFrame], Any]) -> None:
     """Register a custom Python function that enriches a DataFrame or returns a Series."""
     CUSTOM_INDICATOR_REGISTRY[name] = func
@@ -735,3 +749,4 @@ def add_pandas_ta_suite(df: pd.DataFrame) -> pd.DataFrame:
     return pandas_ta_lib.add_all_ta_features(
         d, open="open", high="high", low="low", close="close", volume="volume", fillna=True
     )
+
