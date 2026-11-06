@@ -857,7 +857,7 @@ class StrategyRegistry:
         seen_filenames = set()
         strategy_candidates = []
         for f in sorted(os.listdir(self._dir)):
-            if f.endswith(".py"):
+            if f.endswith(".py") and not f.startswith("__"):
                 seen_filenames.add(f)
                 strategy_candidates.append({
                     "filename": f,

@@ -59,7 +59,7 @@ async def strategy_auto_discovery_watcher():
         snap = {}
         if os.path.exists(strategies_dir):
             for fname in os.listdir(strategies_dir):
-                if fname.endswith(".py"):
+                if fname.endswith(".py") and not fname.startswith("__"):
                     fpath = os.path.join(strategies_dir, fname)
                     try:
                         st = os.stat(fpath)
