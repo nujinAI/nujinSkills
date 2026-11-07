@@ -245,41 +245,39 @@ class StrategyEvaluator:
             max_bars = getattr(strat_inst, "max_bars", None)
 
             # 4. Strategy-Designed Smart Lot Sizer
+            target_equity = None
+            try:
+                broker = broker_registry.get_broker()
+                is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
+                if broker and getattr(broker, "is_connected", False) and not is_paper_broker:
+                    acc_info = broker.get_account_info()
+                    eq = float(acc_info.get("equity") or acc_info.get("balance") or 0.0)
+                    if eq > 0:
+                        target_equity = eq
+            except Exception:
+                pass
+
+            if target_equity is None:
+                try:
+                    if accounts_store:
+                        all_accs = accounts_store.get_all_active_accounts(decrypt=False) if hasattr(accounts_store, "get_all_active_accounts") else []
+                        if not all_accs and hasattr(accounts_store, "get_all_accounts"):
+                            all_accs = accounts_store.get_all_accounts(decrypt=False)
+                        if not all_accs and hasattr(accounts_store, "_read_raw"):
+                            all_accs = accounts_store._read_raw().get("accounts", [])
+                        if all_accs:
+                            target_equity = float(all_accs[0].get("initial_balance") or all_accs[0].get("balance") or 0.0)
+                except Exception:
+                    pass
+
+            if not target_equity or target_equity <= 0:
+                target_equity = float(getattr(strat_inst, "benchmark_equity", 5000.0))
+
             lots = None
             if "lot_size" in last_row and not np.isnan(last_row["lot_size"]) and float(last_row["lot_size"]) > 0:
                 lots = float(last_row["lot_size"])
             elif hasattr(strat_inst, "calculate_lot_size") and callable(getattr(strat_inst, "calculate_lot_size")):
                 try:
-                    # Resolve Target Account Scale:
-                    # Prioritize live connected broker ONLY IF it is an active real/demo broker account (e.g. TradeLocker).
-                    # When running in paper preview or before an account is activated, scale to the configured account
-                    # in accounts_store or the strategy's target benchmark equity (e.g. $5,000 Prop Firm base).
-                    broker = broker_registry.get_broker()
-                    is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
-                    
-                    target_equity = None
-                    if broker and getattr(broker, "is_connected", False) and not is_paper_broker:
-                        acc_info = broker.get_account_info()
-                        eq = float(acc_info.get("equity") or acc_info.get("balance") or 0.0)
-                        if eq > 0:
-                            target_equity = eq
-
-                    if target_equity is None:
-                        try:
-                            if accounts_store:
-                                all_accs = accounts_store.get_all_active_accounts(decrypt=False) if hasattr(accounts_store, "get_all_active_accounts") else []
-                                if not all_accs and hasattr(accounts_store, "get_all_accounts"):
-                                    all_accs = accounts_store.get_all_accounts(decrypt=False)
-                                if not all_accs and hasattr(accounts_store, "_read_raw"):
-                                    all_accs = accounts_store._read_raw().get("accounts", [])
-                                if all_accs:
-                                    target_equity = float(all_accs[0].get("initial_balance") or all_accs[0].get("balance") or 0.0)
-                        except Exception:
-                            pass
-
-                    if not target_equity or target_equity <= 0:
-                        target_equity = float(getattr(strat_inst, "benchmark_equity", 5000.0))
-
                     import inspect
                     sig = inspect.signature(strat_inst.calculate_lot_size)
                     sig_params = sig.parameters
