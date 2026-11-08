@@ -29,7 +29,7 @@ class TradeRecord:
 def run_discrete_simulation(
     df: pd.DataFrame,
     signals: pd.DataFrame,
-    symbol: str = "OANDA:XAUUSD",
+    symbol: Optional[str] = None,
     account_size: float = 5_000.0,
     dollar_risk_1r: Optional[float] = None,
     max_daily_losses: int = 2,

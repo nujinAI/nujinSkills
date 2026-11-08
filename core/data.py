@@ -25,7 +25,12 @@ except ImportError:
 
 def resolve_market_symbol(symbol: str) -> str:
     """Maps user symbol to institutional exchange symbol."""
-    upper = (symbol or "").replace("/", "").replace("-", "").replace(":", "").replace(" ", "").replace("&", "").upper()
+    raw = (symbol or "").strip()
+    if ":" in raw:
+        # User explicitly passed exchange:ticker (e.g. COINBASE:BTCUSD or OANDA:XAUUSD)
+        return raw.upper()
+
+    upper = raw.replace("/", "").replace("-", "").replace(":", "").replace(" ", "").replace("&", "").upper()
     if upper in ("XAUUSD", "GOLD", "XAU", "OANDA", "XAU_USD", "OANDAXAUUSD"):
         return "OANDA:XAUUSD"
     if any(k in upper for k in ["SP500", "SPX", "ES", "US500", "SPY", "ES1"]):
@@ -171,28 +176,34 @@ def get_oanda_spot_quote() -> Dict[str, Any]:
                 "source": "oanda_spot"
             }
     except Exception as e:
-        logger.warning(f"[DataManager] Error fetching live OANDA quote: {e}")
-        fallback_p = 4335.00
-        csv_path = get_market_dataset_path("XAU/USD", "1m")
+        logger.error(f"[DataManager] Failed to fetch live quote for {clean_sym}: {e}")
+        # Check if authentic historical cache exists to get the latest real recorded bar
+        csv_path = get_market_dataset_path(clean_sym, "1m")
         if os.path.exists(csv_path):
             try:
                 with open(csv_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
+                    lines = [ln.strip() for ln in f.readlines() if ln.strip()]
                     if len(lines) >= 2:
-                        last_row = lines[-1].strip().split(",")
-                        fallback_p = round(float(last_row[4]), 2)
-            except Exception:
-                pass
-        return {
-            "symbol": "XAU/USD (OANDA Spot)",
-            "price": fallback_p,
-            "bid": round(fallback_p - 0.15, 2),
-            "ask": round(fallback_p + 0.15, 2),
-            "change_pct": 0.0,
-            "volume": 50.0,
-            "timestamp": int(time.time()),
-            "source": "oanda_spot_fallback"
-        }
+                        last_row = lines[-1].split(",")
+                        cached_p = round(float(last_row[4]), 4)
+                        return {
+                            "symbol": clean_sym,
+                            "price": cached_p,
+                            "bid": cached_p,
+                            "ask": cached_p,
+                            "change_pct": 0.0,
+                            "volume": float(last_row[5]) if len(last_row) > 5 else 0.0,
+                            "timestamp": int(time.time()),
+                            "source": "cache_fallback"
+                        }
+            except Exception as read_err:
+                logger.error(f"[DataManager] Cache read error for {clean_sym}: {read_err}")
+
+        raise RuntimeError(
+            f"[DataManager] Cannot obtain quote for '{clean_sym}'. "
+            "Live TradingView feed failed and no authentic local cache exists. "
+            "Refusing to generate fictitious prices."
+        )
 
 
 def _tf_to_tv_resolution(timeframe: str) -> str:

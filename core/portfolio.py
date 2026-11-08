@@ -82,7 +82,7 @@ def simulate_strategy_bar_returns(strategy_name: str, df: pd.DataFrame) -> Tuple
             sim_res = run_discrete_simulation(
                 df=df_eval,
                 signals=sig_df,
-                symbol=symbol or "OANDA:XAUUSD",
+                symbol=symbol or getattr(strat_inst, "symbol", "UNKNOWN"),
                 account_size=5000.0,
                 dollar_risk_1r=17.5,
                 max_daily_losses=2,
