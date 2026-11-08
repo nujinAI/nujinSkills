@@ -1,290 +1,191 @@
-# ⚡ NujinAI / nujinSkills — Autonomous Quant Trading Agent Skill
+# ⚡ NujinAI / nujinSkills — Universal Quantitative Trading Engine & Agent Skill
 
 [![System: NujinAI](https://img.shields.io/badge/System-NujinAI-blue.svg)](SKILL.md)
-[![Quant Protocol](https://img.shields.io/badge/Methodology-Universal%20Quant-emerald.svg)](references/quant_protocol.md)
-[![Audit: 8--Gate Cynic](https://img.shields.io/badge/Audit-8--Gate%20Cynic%20%7C%20R%C2%B2%20%E2%89%A5%200.85-amber.svg)](references/cynic_audit.md)
+[![Quant Protocol](https://img.shields.io/badge/Methodology-Universal%20Quant-emerald.svg)](references/alpha_pipeline.md)
+[![Edge Discovery](https://img.shields.io/badge/Discovery-Empirical%20Rank%20IC-cyan.svg)](references/edge_discovery.md)
+[![Audit: 8--Gate Cynic](https://img.shields.io/badge/Audit-8--Gate%20Cynic%20%7C%20R%C2%B2%20%E2%89%A5%200.85-amber.svg)](references/cynic_gates_protocol.md)
 [![Chart Copilot](https://img.shields.io/badge/Visual-AI%20Chart%20Copilot-indigo.svg)](references/chart_copilot_protocol.md)
-[![Market Invariants](https://img.shields.io/badge/Invariants-Auction%20%26%20Wyckoff-teal.svg)](references/microstructure_protocol.md)
-[![Tools Reference](https://img.shields.io/badge/Tools-CLI%20Reference-purple.svg)](references/tools_reference.md)
 [![Bot Operations](https://img.shields.io/badge/Bot-Live%20Supervision-cyan.svg)](references/bot_operations.md)
 [![Telemetry API](https://img.shields.io/badge/Telemetry-JSON%20API-sky.svg)](references/telemetry_api.md)
 
-> **Unlock quantitative trading with full autonomy.** You bring the creative hypothesis and define your targets; your AI agent handles the mathematical modeling, multi-timeframe feature extraction, adversarial statistical falsification (8-Gate Cynic Audit), 24/7 live signaling, and safe bot hot-deployment.
+> **Empower autonomous AI agents to discover authentic edges, build battle-tested strategies, and deploy reliable trading bots.**  
+> Completely universal, paradigm-neutral, and free of hardcoded indicator dogmas. Evaluated through the strict lens of institutional mathematical invariants.
 
 ---
 
-## 🎯 What is NujinAI?
+## 🎯 What is nujinSkills?
 
-**NujinAI (nujinSkills)** is an autonomous quantitative research engine, interactive visual copilot, and systematic trading platform packaged as an open-source, agent-agnostic **AI Skill**.
+**nujinSkills** is an open-source, agent-agnostic **AI Quant Skill and Systematic Execution Framework**. It transforms an AI coding agent (in Antigravity, Claude Code, Cursor, or Windsurf) into an autonomous quantitative researcher and systematic trading engineer.
 
-It unifies two complementary pillars of modern trading: **Fully Autonomous Algorithmic Execution** and **Interactive Visual Chart Control**. Instead of getting bogged down in boilerplate code, manual data joining, or curve-fitted indicator traps:
-1. **Interactive Visual AI Chart Copilot:** Directly prompt your AI to analyze the live visual trading canvas (`http://localhost:3000`). The copilot algorithmically maps Supply & Demand zones, Order Blocks, and Liquidity Sweeps (BSL/SSL), renders dynamic Limit & Market trade setups with strict risk-reward ratios, and overlays universal indicator stacks (VWAP, Moving Average ribbons, Bollinger Bands, RSI) in real-time via WebSockets with persistent state hydration across browser reloads.
-2. **Universal Hypothesis Modeling:** Formulate algorithmic strategies for any concept or market (Price Action, Market Structure, Order Flow, Statistical Arbitrage, Volatility Breakouts, Macro/Funding Spreads, or Machine Learning classifiers).
-3. **Institutional Multi-Timeframe (MTF) Confluence:** Seamlessly link Higher-Timeframe (HTF) market regime and context, Mid-Timeframe (MTF) structural zones, and Lower-Timeframe (LTF) precision execution triggers with **strict zero lookahead bias**.
-4. **8-Gate Adversarial Falsification:** Stress-test candidates against the Deflated Sharpe Ratio ($\text{DSR} \ge 0.95$), a genuine parameter-stability plateau, 1,000-run Monte Carlo trade order permutations ($\text{MDD}_{99} \le 3.0\%$), out-of-sample walk-forward, multi-regime survival, real friction plus the microstructure noise floor, synthetic noise jitter ($\ge 80\%$ Sharpe retention), and the Equity Linearity Standard ($R^2 \ge 0.85$). All gate mathematics lives in one place — `server/cynic_gates.py` — so the auditor and the deployment path cannot disagree, and a gate that cannot be evaluated reports `INCONCLUSIVE` rather than passing.
-5. **Unified Single-Folder Data Isolation (`.nujin/`):** All research features, briefings, returns, and states live strictly inside `.nujin/`, namespaced via `--id <experiment_name>` so new strategies never contaminate or overwrite prior research.
-6. **Live Bot Hot-Deployment:** Emits production Python strategies and hot-deploys them into the live running trading engine without dropping active WebSocket connections or restarting server processes.
-
----
-
-## 💎 Core Strengths & Institutional Edge
-
-1. **Dual-Pillar Autonomy: Algorithmic Rigor + Visual Discretionary Copilot**
-   * **Automated Quant Strategies:** Fully autonomous hypothesis generation, feature mining, 8-Gate Cynic stress-testing, and 24/7 hot-deployed bot execution.
-   * **Real-Time Visual Chart Copilot:** Instant AI-driven chart markup on the interactive canvas. Paint algorithmic supply/demand zones, liquidity sweeps, trade setups with dynamic entry/SL/TP calculations, and custom indicator stacks simply by asking in natural language.
-
-2. **Zero Overfitting & No Curve-Fitting Illusions**
-   * **Physical Microstructure Noise Floor:** Stop losses, trailing stops, and targets are mathematically required to clear broker spread and tick noise ($\ge \max(3\times \text{Spread}, 1.5\times \text{ATR})$), eliminating sub-pip backtest fantasies.
-   * **Adversarial Falsification:** Actively attempts to break every strategy candidate before deployment using Deflated Sharpe Ratio (discounting for multiple search trials and non-normal returns), price noise perturbation, and parameter plateau stability.
-
-3. **Smooth, Linear Capital Growth ($R^2 \ge 0.85$, $K$-Ratio $\ge 1.5$)**
-   * Rejects erratic, high-variance strategies driven by lucky outlier windfalls.
-   * Specifically optimizes for a steady, straight-line upward equity curve with strict tail-risk drawdown containment ($\text{MDD}_{99} \le 3.0\%$)—tailored for consistency and passing prop firm evaluations.
-
-4. **Universal Market Invariants (Auction Market Theory & Wyckoff Mechanics)**
-   * Anchors alpha to physical price formation laws: Value Area acceptance ($H < 0.45$) vs. price discovery ($H > 0.55$), Wyckoff volatility compression (`vol_compression < 0.70`), and passive limit absorption of trapped inventory (`absorption_bullish`/`bearish`).
-
-5. **Active Alpha Protection & Volatility Risk Management**
-   * **Invalidation-Based Position Sizing:** Automatically scales position size inversely with structural invalidation distance to enforce strict dollar-risk uniformity.
-   * **Alpha Half-Life (Time Invalidation):** Automatically scratches stale trades after $N$ bars (`TIME_EXPIRATION`), cutting dead-money drag and chop risk.
-   * **Live CUSUM Drift Circuit Breaker:** Continuously monitors live forward returns; automatically halts new entries and dispatches Telegram alerts if performance degrades beyond $2.5\sigma$.
-
-6. **Institutional Multi-Timeframe (MTF) Confluence**
-   * Solves single-timeframe myopia through a rigorous 3-tier hierarchy: **HTF** (Macro Regime & Bias) $\rightarrow$ **MTF** (Structural Zone / Setup) $\rightarrow$ **LTF** (Execution Trigger & Precise Invalidation).
-
-7. **Unified Closed-Loop AI Quantitative Compiler**
-   * The AI directly authors native Python strategies inheriting `IStrategy`, verifies all 8 Cynic Gates in closed-loop iteration, and hot-deploys them to the live running engine and dual-screen telemetry dashboard.
+Instead of hardcoding indicator recipes or producing curve-fitted backtests, `nujinSkills` enforces a **universal, scientific discovery and validation pipeline**:
+1. **Unbiased Edge & Anomaly Discovery:** Empirically measures whether *any* candidate hypothesis, feature, or structural market property has forward predictive power (Rank Information Coefficient) and comfortably clears broker friction.
+2. **Dynamic 1R Execution Geometry:** Normalizes position sizing strictly to the structural invalidation distance ($Unit = \frac{\text{DollarRisk}}{|Entry - StopLoss|}$), making catastrophic sequence ruin mathematically impossible.
+3. **Pessimistic Microstructure Simulation:** Simulates bar-by-bar execution with worst-case intrabar resolution (stops hit first if both TP and SL are touched in the same bar) and authentic venue friction (spread, commission, slippage, and funding rates).
+4. **Adversarial 8-Gate Cynic Falsification:** Actively attempts to break candidate strategies across In-Sample and unseen Blind Out-of-Sample datasets before approving them for deployment.
+5. **Production Hot-Deployment & Supervision:** Emits standardized Python strategy classes, hot-deploys them to live running bots, and supervises performance with real-time edge-decay circuit breakers.
 
 ---
 
-## ⚡ Quick Start
+## 💎 Core Architectural Focus & Capabilities
 
-### 1. Installation & Environment Setup
-Clone the repository and initialize the Python virtual environment:
+### 1. Universal & Paradigm-Agnostic
+`nujinSkills` does not dictate *what* to trade or *which* indicators to use. The framework is equally powerful across:
+- **Momentum & Trend Continuation** (Structural breakouts, volatility expansion, trend following).
+- **Mean Reversion & Fair Value Envelopes** (VWAP deviations, Bollinger bands, channel boundaries).
+- **Structural Liquidity & Session Dynamics** (Opening range breakouts, session high/low rejections).
+- **Statistical Arbitrage & Cross-Asset Spreads** (Cointegration, ratio divergence).
+- **Macro & Funding Arbitrage** (Yield differentials, perpetual funding rate carry).
+
+Any trading horizon—from **LTF scalping (1m–5m)** and **intraday (15m–1h)** to **swing (4h–1D)** and **multi-day investing**—is natively supported.
+
+### 2. The 4 Inviolable Quantitative Invariants
+Regardless of user requirements or strategy style, the engine strictly enforces 4 mathematical laws:
+1. **Positive Net Expectancy ($\mathbb{E}[R] > 0$):**
+   $$\mathbb{E}[R] = (W \times R_{\text{win}}) - ((1 - W) \times 1.0) - \text{Friction} > 0$$
+   Payout multiples and win rates are calibrated to the strategy thesis—never constrained by arbitrary R-ratio dogmas.
+2. **Authentic Instrument Modeling:**
+   Models the genuine execution realities of the traded instrument (Forex Spot, CFD, Equities, Futures, or Crypto Spot/Perp) including tick sizes, spreads, swap, and synthetic volume limitations.
+3. **Strict 2/3 In-Sample vs. 1/3 Blind Out-of-Sample Isolation:**
+   Hypothesis discovery and feature calibration occur exclusively on the In-Sample segment. The Out-of-Sample segment remains cryptographically untouched until final evaluation.
+4. **Zero Hardcoded Capital & Zero Silent Fallbacks:**
+   No static dollar bets or hardcoded prices. Position sizing scales dynamically with equity risk percentage (`risk_pct_1r`). Data failures raise explicit errors rather than injecting synthetic prices.
+
+---
+
+## 🔄 The 5-Phase Systematic Alpha Pipeline
+
+```
+[ Phase 1: User Goal Ingestion & Dynamic Risk Budget ]
+  → Deduces horizon, risk tolerance, and account constraints without imposing arbitrary limits.
+
+[ Phase 2: Authentic Ingestion & Blind Out-of-Sample Isolation ]
+  → Pulls authentic market history; chronologically locks the final 33.3% as unseen Blind OOS.
+
+[ Phase 3: Empirical Edge & Anomaly Discovery (`tools/scan_edge.py`) ]
+  → Tests hypothesis series against forward returns (Rank IC >= 0.02, t-stat >= 2.0, move >= 3x friction).
+
+[ Phase 4: Structural Strategy Construction ]
+  → Formulates entry signal, structural invalidation (SL), thesis-aligned exit, and 1R dynamic sizing.
+
+[ Phase 5: Adversarial 8-Gate Cynic Falsification & Deployment ]
+  → Evaluates strategy across In-Sample and Blind OOS against the 8 institutional stress gates.
+```
+
+---
+
+## 🛡️ The 8 Institutional Cynic Stress Gates
+
+Before any strategy is approved for deployment, it must survive the full adversarial falsification suite (`core/cynic_gates.py`):
+
+| Gate | Name | Pass Condition | Institutional Purpose |
+| :--- | :--- | :--- | :--- |
+| **Gate 1** | **Deflated Sharpe Ratio (DSR)** | $\text{DSR} \ge 0.95$ | Penalizes Sharpe for selection bias and trial multiplicity (López de Prado). |
+| **Gate 2** | **Parameter Stability Surface** | $< 30\%$ drop across $\pm 10\%$ params | Rejects overfitted "needle-in-a-haystack" parameter cliffs. |
+| **Gate 3** | **Monte Carlo Stress** | $\text{MDD}_{99} \le 3.0\%$ across 1,000 runs | Falsifies sequence risk and fat-tail ruin probability. |
+| **Gate 4** | **Walk-Forward CPCV** | OOS Sharpe retention $\ge 50\%$ | Prevents regime overfitting across non-contiguous market blocks. |
+| **Gate 5** | **Regime Survival** | Profitable/neutral across all market phases | Tests robustness in Bull, Bear, and Sideways/High-Vol conditions. |
+| **Gate 6** | **Microstructure Friction** | Roundtrip cost $\le 10\%$ of stop distance | Ensures the edge is not eaten alive by real-world spread and slippage. |
+| **Gate 7** | **Noise Jitter Resilience** | $\ge 80\%$ Sharpe retention under price jitter | Rejects strategies dependent on micro-tick sequence luck. |
+| **Gate 8** | **Equity Linearity** | Curve $R^2 \ge 0.85$, $K\text{-Ratio} \ge 1.5$ | Demands consistent, steady growth over erratic outlier spikes. |
+
+---
+
+## 🚀 How to Use nujinSkills
+
+### 1. Installation
+Clone the repository and set up the shared Python environment:
 
 ```bash
-git clone https://github.com/autonomousEnterprises/nujinSkills.git
-cd nujinSkills
+git clone https://github.com/autonomousEnterprises/NujinAI.git
+cd NujinAI/nujinSkills
 
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Start the System Engines
+### 2. Universal CLI Tools
+
+#### Empirical Edge & Anomaly Scanner
+Test any market property or hypothesis series across forward bar horizons:
 ```bash
-# 1. Start FastAPI Telemetry & Execution Server (Port 8000)
+# Scan default features on Gold spot 15m
+python tools/scan_edge.py --symbol OANDA:XAUUSD --tf 15m --days 60
+
+# Scan features on BTCUSDT 1h
+python tools/scan_edge.py --symbol BINANCE:BTCUSDT --tf 1h --days 30
+```
+
+#### Run 8-Gate Backtest Audit
+Execute the complete institutional audit on any candidate strategy:
+```bash
+python tools/run_backtest_audit.py --strategy strategies/<StrategyName>.py --days 60
+```
+
+#### Dual-Screen Visual Cockpit & Server Control
+```bash
+# Start FastAPI Telemetry Engine (Port 8000)
 python tools/server_control.py start --port 8000 --daemon
 
-# 2. Start Dual-Screen Visual Cockpit (Port 3000)
+# Start Interactive TradingView Visual Canvas (Port 3000)
 python tools/frontend_control.py start --port 3000 --daemon
 ```
 
-### 3. Prompt Your AI Agent
-Open this workspace in your agentic coding environment (**Google Antigravity**, **Claude Code**, **Cursor**, **Windsurf**, or **Hermes**) and issue a request:
+---
 
-> *"Research a gold (XAU/USD) 1m scalping strategy targeting max 3% drawdown and Sharpe >= 1.8 with 5m MTF trend confluence. Mine the features, run the 8-Gate Cynic audit, and deploy it to paper mode."*
+## 🤖 Directing Your AI Agent
 
-The agent reads [`SKILL.md`](SKILL.md), invokes the specialized CLI tools, and executes the entire institutional pipeline.
+Because `nujinSkills` is designed for autonomous agent pairing, you can prompt your AI directly with goals at any level of abstraction:
+
+### Example A: Greenfield Discovery (Autonomous Edge Hunter)
+> *"I want a high-Sharpe intraday strategy for BTCUSDT on the 15m timeframe. I have no predefined indicators. Formulate candidate hypotheses, run the empirical edge scanner to verify forward Rank IC, construct a strategy with objective structural invalidation, run the 8-Gate Cynic audit, and show me the surviving system."*
+
+### Example B: User-Guided Concept (Specific Hypothesis)
+> *"Build an Asian session liquidity sweep strategy on XAUUSD (5m). Enter when price sweeps the Asian high or low during London open and prints structural rejection. Target the opposite session boundary, size with 0.5% 1R dollar risk, and stress-test it against Monte Carlo and noise jitter."*
+
+### Example C: Prop-Firm Capital Preservation
+> *"Create a conservative swing strategy on EURUSD targeting a smooth equity curve ($R^2 \ge 0.90$) with strict drawdown containment ($\text{MDD} \le 2.5\%$). Audit it against deflated Sharpe and regime survival."*
+
+The AI will follow [`SKILL.md`](SKILL.md), execute the tools, inspect data mathematically, and build a verified, production-grade strategy.
 
 ---
 
-## 🔄 The 4-Stage Quant Methodology
-
-```
-[ STAGE 1: Empirical Anomaly & Statistical Discovery ]
-  Calculate Variance Ratios, Hurst Exponent, and Alpha Half-Life Decay without indicator bias.
-                    │
-                    ▼
-[ STAGE 2: Multi-Timeframe Feature Mining & Iterative Search ]
-  Join HTF context -> Extract scale-invariant features -> Vectorized screen -> Mutate rules.
-                    │
-                    ▼
-[ STAGE 3: 8-Gate Adversarial Cynic Audit (Falsification) ]
-  DSR (>= 0.95) + Param Stability + MC MDD99 (<= 3.0%) + OOS Walk-Forward + Regime Survival
-  + Friction/Noise Floor + Noise Jitter (>= 80%) + Linearity (R² >= 0.85). All in server/cynic_gates.py.
-                    │
-                    ▼
-[ STAGE 4: Native Strategy Synthesis, Closed-Loop Audit & Live Hot-Deployment ]
-  Directly code native Python class, enforce all 8 Cynic Gates, verify correlation (< 0.50), & hot-deploy.
-```
-
----
-
-## 📁 Unified Data Catalog & Per-Session Isolation Architecture
-
-Market data is persisted as a single source of truth in `data/`, while all research artifacts are isolated per session inside `.nujin/sessions/<session_id>/` so a new user request is never limited or biased by prior sessions:
+## 📁 Repository Structure
 
 ```
 nujinSkills/
-├── data/                               <- PERSISTENT MARKET DATA & LIVE RUNTIME STATE
-│   ├── market/                         <- Persistent Historical Market Data Catalog
-│   │   ├── catalog.json                (Dataset registry: bar counts, date ranges, hashes)
-│   │   ├── BTCUSDT_15m.csv
-│   │   └── XAUUSD_1m.csv
-│   ├── state.json                      (Cockpit live state — Single Source of Truth)
-│   ├── strategies.json                 (Strategy registry, rankings, and drift history)
-│   └── signals.json                    (Live/paper execution signal store)
-│
-├── .nujin/                             <- DEDICATED PER-SESSION RESEARCH WORKSPACES
-│   ├── active_session.json             (Pointer to current active research session)
-│   └── sessions/                       <- ISOLATED SESSION SCOPES (--new-session or --id <id>)
-│       ├── 20261024_btcusdt_15m/       (Completely isolated research & trial ledger)
-│       │   ├── session_meta.json
-│       │   ├── empirical_briefing.json
-│       │   ├── features.csv
-│       │   ├── best_rule.json
-│       │   ├── candidate_returns.json
-│       │   ├── results.jsonl
-│       │   └── trial_ledger.jsonl      (Session-scoped DSR trial accounting)
-│       │
-│       └── 20261024_xauusd_1m/         (Zero collision or DSR penalty spillover)
-│
-└── strategies/                         <- STANDALONE PYTHON STRATEGY CODE ONLY
-    ├── XauLiquidityWallsDisplacementScalper.py
-    └── MyNewAlphaStrategy.py
+├── SKILL.md                     # High-density agent skill meta-kernel (~80 lines)
+├── README.md                    # Framework architecture, focus & quickstart
+├── core/                        # Pure mathematical calculation primitives (Zero Trading Bias)
+│   ├── discovery.py             # Universal Rank IC & Friction clearance engine
+│   ├── cynic_gates.py           # The 8 Institutional Cynic Falsification Gates
+│   ├── simulation.py            # Pessimistic intrabar discrete backtest simulator
+│   ├── risk.py                  # Dynamic 1R risk normalization & drawdown governors
+│   ├── friction.py              # Single source of truth for venue costs & hurdles
+│   ├── data.py                  # Multi-venue candle fetcher & caching engine
+│   ├── indicators.py            # Vectorized technical & statistical indicators
+│   ├── market_structure.py      # Structural swing, liquidity & fair value detectors
+│   ├── portfolio.py             # Cross-strategy correlation & ensemble management
+│   └── regimes.py               # Market regime classifier (Bull, Bear, Range, High-Vol)
+├── tools/                       # Reusable CLI utility executables
+│   ├── scan_edge.py             # Empirical edge & anomaly scanner CLI
+│   ├── run_backtest_audit.py    # 8-Gate Cynic audit runner (Single Source of Truth)
+│   ├── strategy_manager.py      # Strategy lifecycle compiler & symlinker
+│   ├── bot_control.py           # Live bot supervisor & runner
+│   ├── server_control.py        # FastAPI telemetry daemon controller
+│   └── chart_copilot.py         # TradingView visual canvas bridge
+├── references/                  # Specialized deep-dive documentation modules
+│   ├── edge_discovery.md        # Scientific hypothesis formulation & IC verification
+│   ├── execution_geometry.md    # Invalidation math, 1R sizing & expectancy laws
+│   ├── alpha_pipeline.md        # 5-Phase Institutional Discovery Pipeline
+│   ├── cynic_gates_protocol.md  # 8-Gate specification & failure remediation
+│   ├── strategy_interface.md    # Standard Python strategy contract & class skeleton
+│   └── bot_operations.md        # Bot lifecycle, state control & Telegram commands
+└── tests/                       # Complete automated unit & framework integrity test suite
 ```
 
 ---
 
-## 🛠️ Complete CLI Tool Matrix
+## 📜 License & Philosophy
 
-Invoke all tools using the project virtualenv (`.venv/bin/python3 tools/<tool>.py`):
-
-### 0. Preflight (Run This First)
-* **Full production-readiness gate (compile + hermetic suite + audit CLI agreement):**
-  ```bash
-  python tools/preflight.py
-  ```
-
-### 1. Empirical Discovery & Feature Extraction
-* **Market Anomaly & Statistical Profiling:**
-  ```bash
-  python tools/anomaly_scanner.py --data data/candles_15m.csv --id my_alpha
-  ```
-* **Multi-Feature Extraction with Multi-Timeframe (MTF) Confluence:**
-  ```bash
-  python tools/feature_miner.py --input data/xauusd_candles_1m.csv --id my_alpha --htf-data data/xauusd_candles_5m.csv --window 20
-  ```
-
-### 2. Strategy Synthesis & Fast Vectorized Screening
-* **Fast Vectorized Screener (Risk-Normalized Sizing & Pessimistic Intrabar Fill):**
-  ```bash
-  python tools/vectorized_screener.py --id my_alpha --rules '{"entry_long": "ema_9 > ema_21 and adx_14 > 20", "entry_short": "ema_9 < ema_21 and adx_14 > 20", "stoploss_pct": 0.015, "takeprofit_pct": 0.035}'
-  ```
-* **Full-History Backtesting Simulation:**
-  ```bash
-  python server/backtest_engine.py --strategy MyStrategy --timeframe 15m
-  ```
-
-### 3. Adversarial Cynic Audit (Falsification)
-* **8-Gate Adversarial Cynic Auditor (DSR + Param Stability + MC MDD + OOS + Regimes + Friction/Noise Floor + Noise Jitter + Linearity):**
-  ```bash
-  python tools/cynic_auditor.py --id my_alpha --trials 50 --strict
-  ```
-* **Portfolio Correlation & Regime Orthogonality:**
-  ```bash
-  python tools/portfolio_cynic.py --data data/candles_15m.csv --threshold 0.50
-  ```
-
-### 4. Native Strategy Synthesis & Closed-Loop Cynic Verification
-* **Native Production Python Class Generation & Self-Correction:**
-  ```bash
-  # Directly authored by the AI Agent with full state machines and risk guards, verified via:
-  python tools/cynic_auditor.py --strategy MyCustomStrategy --strict
-  ```
-* **Strategy Registry & Dynamic Plugins Inspection:**
-  ```bash
-  python tools/strategy_manager.py list
-  python tools/strategy_manager.py plugins
-  python tools/strategy_manager.py rank
-  ```
-
-### 5. Live Bot Supervision & Telemetry (Non-Disruptive)
-* **Query Live Bot Status & Hot-Deploy Strategy:**
-  ```bash
-  python tools/bot_control.py status
-  python tools/bot_control.py deploy --strategy MyCustomStrategy --mode paper
-  ```
-* **Inspect Live Performance & Signals:**
-  ```bash
-  python tools/state_control.py signal-stats
-  python tools/state_control.py signals
-  ```
-* **Cockpit UI & Telegram Dispatches:**
-  ```bash
-  python tools/ui_dispatcher.py --event UPSERT_WIDGET --payload '{"widget_id": "alpha_card", "payload": {}}'
-  python tools/telegram_broadcast.py broadcast --type update -m "New alpha strategy hot-deployed to paper mode."
-  ```
-
-### 6. Real-Time AI Chart Copilot (Canvas Control & Technical Analysis)
-* **Interactive Discretionary & Structural Analysis:**
-  The AI Copilot directly pilots the live Chart Canvas (`http://localhost:3000`), painting visual primitives, structural setups, and technical indicator stacks on demand without hardcoding or code mutations.
-* **Supply & Demand / Order Blocks & Structural Setups (Dynamic R:R & Limit/Market Orders):**
-  ```bash
-  python tools/chart_copilot.py --symbol BTCUSDT --timeframe 4h --thesis "Identify major supply/demand zones and key structural trade setup"
-  ```
-* **Liquidity Sweeps & Smart Money Concepts (Buy-Side / Sell-Side Liquidity):**
-  ```bash
-  python tools/chart_copilot.py --symbol BTCUSDT --timeframe 15m --thesis "Analyze buy-side (BSL) and sell-side (SSL) liquidity sweeps with trade setup"
-  ```
-* **Indicator Stacks Only (Selective Drawing — VWAP, Moving Averages, Bollinger Bands):**
-  ```bash
-  python tools/chart_copilot.py --symbol BTCUSDT --timeframe 1h --indicators vwap,ema_20,sma_50 --no-zones --thesis "Microstructure trend with VWAP and 20/50 MAs"
-  ```
-* **Clear Canvas Visual Primitives:**
-  ```bash
-  python tools/chart_copilot.py --clear
-  ```
-
----
-
-## 🖥️ The Dual-Screen Cockpit
-
-Access the interactive trading cockpit at **`http://localhost:3000`**:
-
-| Screen / Deck | Hotkey | Purpose & Telemetry |
-|---|---|---|
-| **Chart Canvas & AI Copilot** | **`F1`** | High-performance interactive candlestick chart with direct AI Copilot visual control. Paints visual primitives (multi-box supply & demand zones, liquidity sweep markers, dynamic Limit/Market trade setups with risk-reward ratios) and indicator overlays (multi-scale EMAs, Bollinger Bands, VWAP, RSI) via live WebSockets with persistent state hydration across browser reloads. |
-| **Signal Deck** | **`F2`** | Live execution telemetry: win rate, profit factor, annualized Sharpe, active open position card with real-time unrealized PnL, and manual override controls. |
-| **Backtest Deck** | **`F3`** | Backtest audit: equity trajectory curves, return distribution, regime breakdown (Bull, Bear, Range), and the 8-Gate Cynic matrix ($R^2 \ge 0.85$). |
-| **Strategy Manager** | **`F4`** | Strategy leaderboard, global Live vs. Paper toggle, equity trajectory curves, correlation matrices, and direct action navigation. |
-| **Cycle Screens** | **`Ctrl + Space`** | Seamlessly toggle focus between open decks. |
-
----
-
-## 🧩 Dynamic Plugin Architecture
-
-Nujin supports external modular extensions via the `plugins/` directory. Any installed plugin containing a `plugin.json` or `strategies/` directory is automatically discovered by `server/plugin_loader.py` and `tools/strategy_manager.py plugins` without modifying the core codebase.
-
----
-
-## 📚 Deep Reference Manuals
-
-For in-depth mathematical derivations and operational specifications:
-- [`SKILL.md`](SKILL.md) — Master Autonomous Quant Engine Protocol & Instructions
-- [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md) — AI Chart Copilot architecture, primitives, dynamic Limit/Market order engine, and WebSocket protocol
-- [`references/quant_protocol.md`](references/quant_protocol.md) — Universal quant research methodology, MTF architecture, volatility sizing & risk-reward math
-- [`references/cynic_audit.md`](references/cynic_audit.md) — 8-Gate Adversarial Falsification formulas (DSR, parameter stability, Monte Carlo MDD, OOS walk-forward, regime survival, friction/noise floor, noise jitter, linearity)
-
-**Testing:** run `python -m pytest` inside `nujinSkills/` (config in `pytest.ini`; dependencies in `requirements-dev.txt`). Shared thresholds and the annualisation policy live in `server/constants.py` — import them rather than restating literals.
-
-**Preflight — "is this checkout safe to run?"** One command runs the whole gate and exits non-zero on the first problem:
-```bash
-python -m tools.preflight          # add --json for a machine-readable result
-```
-It byte-compiles `server/`, `tools/` and `tests/`, runs the full suite, and then checks that `tools/validation_cynic.py` and `tools/cynic_auditor.py` still reach the *same* verdict on the same deterministic return series (they are two entry points onto one body of gate mathematics, so a disagreement means the contract broke). This repository deliberately has no CI pipeline, so run it before deploying a change — it is the only gate there is.
-
-The suite is hermetic by contract. `tests/conftest.py` redirects every persisted store into a throwaway directory and blocks outbound sockets *and* name resolution, so a test run never touches live broker accounts, live signal history or live market prices — and never places an order through a connected broker. A test that needs a real feed must opt in explicitly with `NUJIN_ALLOW_NETWORK_TESTS=1`, and `NUJIN_TRACE_NETWORK=1` prints the call site of any blocked attempt. Tests covering the proprietary `nujinPro` extension skip when that plugin (or a given strategy within it) is not installed.
-
-Five invariants are enforced mechanically rather than by convention: every module in `server/` and `tools/` must import with the network blocked (`tests/test_import_safety.py`); live fetches must be reached through the `server.data_manager` module so one seam intercepts them, never via a module-level `from server.data_manager import fetch_x`; no function may read a global the module never defines (`test_framework_consistency.py` resolves scopes with `symtable`); **discovering** broker adapters must not **authenticate** against one — `list_available_brokers()` is read-only by default *and* every call site has to name `connect=` explicitly, so no status surface can inherit a login from a silent default; `get_broker(..., connect=False)` is the read-only form of resolution, an unconnected adapter is never cached (a cached instance whose `connect()` never ran looks healthy to the executor about to place an order), and the reported `connected`/`balance` describe the session that actually exists instead of presenting a configured account as a live one; and the on-disk secret format must not depend on optional packages, so `SecretCipher` always writes the standard-library `sl:` payload (legacy `fn:` Fernet blobs are still read where `cryptography` is installed). None of these are theoretical — they caught an exception handler logging another method's variable, a Telegram listener whose daily-report state was silently never persisted, and a broker listing call that logged in to a live account.
-- [`references/microstructure_protocol.md`](references/microstructure_protocol.md) — Market microstructure, trapped inventory, passive absorption, and auction failure dynamics
-- [`references/tools_reference.md`](references/tools_reference.md) — Complete CLI manual with all tool flags, parameters, and invocation examples
-- [`references/bot_operations.md`](references/bot_operations.md) — Non-disruptive live bot supervision, state inspection, and hot-deployment guide
-- [`references/telemetry_api.md`](references/telemetry_api.md) — Cockpit UI WebSocket/IPC payload specifications and Telegram alert schemas
-
----
-
-## 📄 License
-
-MIT License — Autonomous Enterprises. Built for systematic quantitative researchers and autonomous trading agents.
+`nujinSkills` is engineered on the philosophy that **financial markets are non-deterministic, but mathematical and risk geometry are exact**. Edge is not finding a magic indicator; edge is finding a persistent statistical inefficiency, trading it with positive net expectancy, and managing risk with uncompromising rigor.
