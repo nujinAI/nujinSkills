@@ -61,7 +61,9 @@ This pipeline is 100% style-agnostic and paradigm-neutral. Whether the user requ
 
 ---
 
-## 3. Fast-Path Strategy Deployment
+## 3. Fast-Path Strategy Deployment (Black-Box Execution)
+
+Do NOT inspect internal engine mechanics (`server/`, `core/simulation.py`, `tests/`) or historical archives. Treat the engine as a black box:
 
 1. **Write Strategy:** Implement standard class in `../zillionsAlpha/strategies/<StrategyName>.py` (or `../nujinPro/strategies/`). See [`references/strategy_interface.md`](references/strategy_interface.md) for skeleton.
 2. **Symlink to Engine:**
@@ -72,6 +74,7 @@ This pipeline is 100% style-agnostic and paradigm-neutral. Whether the user requ
    ```bash
    python tools/run_backtest_audit.py --strategy <StrategyName>.py --days 30
    ```
+4. **Inspect Audit Output & Refine:** Base all iterations on the printed Cynic gate verdicts and risk metrics.
 
 ---
 
