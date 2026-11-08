@@ -76,6 +76,10 @@ async def lifespan(app: FastAPI):
     # Launch Strategy Runner Auto-Healer Watchdog Loop
     asyncio.create_task(strategy_runner_auto_healer())
 
+    # Dynamically initialize any background services exposed by active plugins (zero hardcoding)
+    from server.plugin_loader import plugin_manager
+    asyncio.create_task(plugin_manager.start_plugin_services())
+
     yield
 
     # ── Shutdown Phase ─────────────────────────────────────────────────────────

@@ -145,10 +145,10 @@ class PluginManager:
     @classmethod
     def load_plugin_modules(cls) -> None:
         """
-        Automatically discovers and imports all Python indicator and utility modules
-        from all active plugins (e.g. nujinPro/indicators, zillionsAlpha), ensuring
-        their custom indicators, brokers, and alphas are registered globally into
-        CUSTOM_INDICATOR_REGISTRY and system runners without manual imports.
+        Automatically discovers and imports all Python indicator, broker, and engine modules
+        from all active plugins (e.g. nujinPro/indicators, nujinPro/engine, zillionsAlpha),
+        ensuring their custom indicators, brokers, and alphas are registered globally into
+        CUSTOM_INDICATOR_REGISTRY and system runners without manual hardcoding in open-source core.
         """
         import importlib
         import sys
@@ -163,10 +163,11 @@ class PluginManager:
             if parent_dir not in sys.path:
                 sys.path.insert(0, parent_dir)
 
+            plugin_pkg = os.path.basename(os.path.realpath(plugin_path))
+
             # Auto-import indicators/ directory if present
             indicators_dir = os.path.join(plugin_path, "indicators")
             if os.path.exists(indicators_dir) and os.path.isdir(indicators_dir):
-                plugin_pkg = os.path.basename(os.path.realpath(plugin_path))
                 for fname in sorted(os.listdir(indicators_dir)):
                     if fname.endswith(".py") and not fname.startswith("__"):
                         mod_name = f"{plugin_pkg}.indicators.{fname.replace('.py', '')}"
@@ -175,6 +176,50 @@ class PluginManager:
                             logger.info(f"[PluginManager] Auto-loaded indicator module: {mod_name}")
                         except Exception as e:
                             logger.warning(f"[PluginManager] Failed loading indicator {mod_name}: {e}")
+
+            # Auto-import engine/ directory if present (e.g. proprietary orderflow, execution extensions)
+            engine_dir = os.path.join(plugin_path, "engine")
+            if os.path.exists(engine_dir) and os.path.isdir(engine_dir):
+                for fname in sorted(os.listdir(engine_dir)):
+                    if fname.endswith(".py") and not fname.startswith("__"):
+                        mod_name = f"{plugin_pkg}.engine.{fname.replace('.py', '')}"
+                        try:
+                            importlib.import_module(mod_name)
+                            logger.info(f"[PluginManager] Auto-loaded plugin engine module: {mod_name}")
+                        except Exception as e:
+                            logger.warning(f"[PluginManager] Failed loading engine {mod_name}: {e}")
+
+    @classmethod
+    async def start_plugin_services(cls) -> None:
+        """
+        Lifecycle Hook: Starts any registered background tasks or engines exposed by plugins
+        (e.g. start() on singleton engines in plugin modules) dynamically with zero hardcoded references.
+        """
+        import sys
+        for p in cls.get_all_plugins():
+            plugin_path = p.get("path")
+            if not plugin_path or not os.path.exists(plugin_path):
+                continue
+
+            plugin_pkg = os.path.basename(os.path.realpath(plugin_path))
+            engine_dir = os.path.join(plugin_path, "engine")
+            if os.path.exists(engine_dir) and os.path.isdir(engine_dir):
+                for fname in sorted(os.listdir(engine_dir)):
+                    if fname.endswith(".py") and not fname.startswith("__"):
+                        mod_name = f"{plugin_pkg}.engine.{fname.replace('.py', '')}"
+                        mod = sys.modules.get(mod_name)
+                        if mod:
+                            for attr_name in dir(mod):
+                                obj = getattr(mod, attr_name)
+                                if hasattr(obj, "start") and callable(getattr(obj, "start")) and not isinstance(obj, type):
+                                    try:
+                                        import asyncio
+                                        res = obj.start()
+                                        if asyncio.iscoroutine(res):
+                                            asyncio.create_task(res)
+                                        logger.info(f"[PluginManager] Started plugin service: {mod_name}.{attr_name}")
+                                    except Exception as e_start:
+                                        logger.warning(f"[PluginManager] Error starting {mod_name}.{attr_name}: {e_start}")
 
 
 plugin_manager = PluginManager()
