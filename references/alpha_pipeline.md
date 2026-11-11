@@ -62,4 +62,4 @@ It is entirely **paradigm-agnostic** (applicable to Trend Continuation, Mean Rev
 - **Persistent Refinement Protocol:**
   - If any gate fails, do not abandon the domain or stop.
   - **Forbidden:** Brute-force parameter optimization or decimal grid search (guaranteed curve-fitting).
-  - **Required:** Diagnose the structural failure mode (e.g., bleeding in high-volatility expansions, stops too tight relative to Asian session spread, regime mismatch). Refine the structural logic and iterate until an S-Tier candidate emerges.
+  - **Required:** Diagnose the structural failure mode (e.g., bleeding in high-volatility expansions, stops too tight relative to spread floor, regime mismatch). Refine the structural logic and iterate until an S-Tier candidate emerges.

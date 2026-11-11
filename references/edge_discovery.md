@@ -14,37 +14,38 @@ If this condition is not met, no amount of risk management, fancy order types, o
 
 ---
 
-## 2. Hypothesis Formulation (Paradigm Neutral)
+## 2. The Structural Inefficiency Contract (Mandatory Before Strategy Assembly)
 
-The AI must treat all trading ideas—whether suggested by the user or discovered autonomously—as testable mathematical hypotheses:
+To prevent the AI from overfitting noise or assuming random indicator thresholds, every trading hypothesis must declare a causal counterparty:
 
-| Paradigm Family | Example Hypothesis Formulation | Mathematical Form |
-| :--- | :--- | :--- |
-| **Momentum / Trend** | Directional persistence over lookback $L$ continues over horizon $H$. | $\text{ROC}_L(t) = \frac{P_t - P_{t-L}}{P_{t-L}}$ |
-| **Mean Reversion** | Price deviations from a baseline expand elasticity and snap back. | $Z(t) = \frac{P_t - \mu_{L}(t)}{\sigma_L(t)}$ |
-| **Structural Breakout** | Compression in range or volatility precedes directional impulse. | $\text{Ratio}(t) = \frac{\text{Range}_t}{\text{ATR}_L(t)}$ |
-| **Liquidity / Session** | Extreme price action outside session bounds is rejected when liquidity returns. | $\text{Dist}(t) = P_t - \text{SessionExtreme}$ |
-| **Cross-Asset / Spread** | Cointegrated asset deviations revert to fair ratio. | $\Delta(t) = P_{A,t} - \beta P_{B,t}$ |
+```markdown
+### Structural Hypothesis Contract
+1. Target Counterparty: [Forced Actor (liquidation, index rebalance) / Inventory-Constrained MM / Predictable Herd]
+2. Inelastic Catalyst:  [Clock Handover / Liquidity Zone Breach / Volatility Expansion / Rebalance Window]
+3. 3-Part Causal Chain: When [Market State], [Target Counterparty] executes [Constrained Action], causing [Measurable Inefficiency] net of friction.
+4. Pre-Mortem:          [The exact empirical condition under which this mechanism is completely falsified]
+```
 
 ---
 
-## 3. The 3-Step Verification Protocol
+## 3. The 4-Step Verification Hurdle (Empirical Scan)
 
-Before constructing entry and exit rules, run the candidate hypothesis through `tools/scan_edge.py`:
+Before writing any execution rules or strategy classes, test the candidate feature through `tools/scan_edge.py`:
 
 ```bash
 python tools/scan_edge.py --symbol <TICKER> --tf <TIMEFRAME> --days 60
 ```
 
-### The Three Hurdle Gates:
+### The 4 Institutional Hurdle Gates:
 1. **Directional Information Coefficient (Rank IC):**
    - $|\text{Rank IC}| \ge 0.02$ between candidate feature and forward return $R_{t+h}$.
 2. **Statistical Significance ($t$-stat):**
-   - $|t\text{-stat}| \ge 2.0$ ($p < 0.05$), ensuring the correlation is not an artifact of small sample noise.
-3. **Friction Clearance Multiple:**
-   - The gross expected move must satisfy:
-     $$\text{Gross Expected Move} \ge 3.0 \times \text{Roundtrip Friction Cost}$$
-   - If a feature has a statistically significant Rank IC on 1m bars, but the expected move is only 0.5 bps while the spread is 1.5 bps, **it is rejected as friction-dead**.
+   - $|t\text{-stat}| \ge 2.0$ ($p < 0.05$), ensuring the correlation is not small-sample noise.
+3. **Permutation Noise Test (White's Reality Check):**
+   - Noise probability $p_{\text{perm}} \le 0.05$ across 200 return shuffles. Kills overfitted patterns.
+4. **Friction Clearance Multiple:**
+   - $\text{Gross Expected Move} \ge 3.0 \times \text{Roundtrip Friction Cost}$.
+   - If expected move is less than 3x the spread + slippage floor, **the edge is rejected as friction-dead**.
 
 ---
 

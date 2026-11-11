@@ -6,12 +6,15 @@ This document provides the canonical code contract for authoring strategies and 
 
 ## 1. Strategy Interface Contract
 
-A strategy file must define a single class whose name matches its filename (e.g. `class GoldAsiaLiquiditySweep` in `GoldAsiaLiquiditySweep.py`).
+A strategy file must define a single class whose name matches its filename (e.g. `class StructuralAlphaEngine` in `StructuralAlphaEngine.py`).
 
 ### Rules:
 - **Zero Hardcoded Capital:** Never hardcode dollar balances ($) or static lot quantities.
 - **Risk Percentage Only:** Define `risk_pct_1r` as a fraction (e.g., `0.0035` for 0.35%, `0.01` for 1.0%).
 - **Metadata Required:** Must declare `symbol` and `timeframe` as class attributes.
+- **Strict Parameter Ceiling (Anti-Overfitting):** A strategy class is restricted to a maximum of $\le 3$ structural parameters in `__init__`. Stacking 5+ indicators with arbitrary numeric thresholds is strictly forbidden.
+- **Parameter Plateau Mandate:** Strategy performance must be robust on parameter neighborhoods (perturbations of $\pm 10\%$ must not cause Sharpe to collapse by $> 25\%$).
+- **Objective Invalidation:** Stop Loss must be an objective structural boundary (e.g., breakout candle extreme, local high/low, volatility band), not an arbitrary pip distance.
 
 ### Sizing Mechanism:
 $$\text{Dollar Risk} = \text{Balance} \times \text{Strategy Risk\%}$$

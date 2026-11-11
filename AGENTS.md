@@ -35,14 +35,19 @@ Use standard CLI tools instead of inventing one-off scripts:
 
 | Tool | Purpose | Command |
 |---|---|---|
+| `tools.scan_edge` | Empirical edge & permutation noise scanner | `python tools/scan_edge.py --symbol <TICKER> --tf <TF> --days 60` |
+| `tools.run_backtest_audit` | Backtest & 8-Gate Cynic audit | `python tools/run_backtest_audit.py --strategy <path>` |
 | `tools.preflight` | Architecture & test suite verifier | `.venv/bin/python -m tools.preflight` |
 | `tools.strategy_manager` | Strategy discovery, ranking & tiers | `python tools/strategy_manager.py rank` |
-| `tools.run_backtest_audit` | Backtest & 8-Gate Cynic audit | `python tools/run_backtest_audit.py --strategy <path>` |
 | `tools.state_control` | Telemetry state inspection & sync | `python tools/state_control.py get` |
 | `tools.bot_control` | Live / dry-run bot control | `python tools/bot_control.py deploy --strategy <path> --mode dry-run` |
 | `tools.chart_copilot` | Multi-timeframe chart visualizer | `python tools/chart_copilot.py --symbol OANDA:XAUUSD` |
 | `tools.server_control` | Telemetry server lifecycle daemon | `python tools/server_control.py start --port 8000 --daemon` |
 | `tools.frontend_control` | Cockpit UI lifecycle daemon | `python tools/frontend_control.py start --port 3000 --daemon` |
+
+## 3. Autonomous Strategy Protocol Mandate
+- When requested to build or research a trading strategy, agents MUST follow the 5-Phase Protocol in [`SKILL.md`](SKILL.md).
+- NEVER audit, retrofit, or recycle existing strategies. Always scan fresh market data with `tools/scan_edge.py` to confirm statistical significance and friction clearance before authoring a new strategy.
 
 ---
 

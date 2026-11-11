@@ -28,3 +28,14 @@ python tools/run_backtest_audit.py --strategy <StrategyName.py> --days 90
 ```
 
 Gate evaluations evaluate strictly to `PASS`, `FAIL`, or `INCONCLUSIVE`.
+
+---
+
+## 3. Strict Verdict Enforcement (Anti-Hallucination Law)
+
+1. **Zero Cherry-Picking:** An agent is **strictly forbidden** from presenting a strategy as "COMPLIANT", "READY", or "DEPLOYABLE" if the Cynic Audit overall verdict is `REJECTED`.
+2. **Mandatory Failure Remediation:** If the strategy fails any gate:
+   - **Gate 4 Failure (OOS Walk-Forward collapse):** The strategy overfit in-sample trends. Widen holding time or add regime filtering via `core.regimes`.
+   - **Gate 5 Failure (Regime bleed):** The strategy loses in ranging/choppy markets. Must require trend persistence filter before entering.
+   - **Gate 6 Failure (Friction drag):** Stop distance is too tight relative to spread. Widen structural invalidation level to higher timeframe swing extreme.
+3. **Forbidden Escape Hatch:** Agents are strictly forbidden from abandoning a user's objective to audit or report an unrelated pre-existing strategy. You must iterate on the requested thesis until it survives all 8 gates or report the exact empirical limitation of the asset/timeframe.

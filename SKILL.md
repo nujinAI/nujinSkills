@@ -36,16 +36,17 @@ These 4 mathematical principles are inviolable regardless of the strategy style,
 This pipeline is 100% style-agnostic and paradigm-neutral. Whether the user requests trend following, session sweeps, statistical arbitrage, order flow scalping, or volatility breakout, the AI guides the process through these 5 scientific stages:
 
 ```
-[ Phase 1: User Domain Anchor & Dynamic Risk Budget ]
-  └─ Derive account limits & 1R % via core.risk.parse_prompt_to_risk() without imposing arbitrary caps.
-[ Phase 2: Authentic Ingestion & Blind Out-of-Sample Isolation ]
-  └─ Inviolable partition: 2/3 In-Sample (hypothesis calibration) / 1/3 Blind Out-of-Sample (locked).
-[ Phase 3: Domain-Constrained Predictive Verification ]
-  └─ Information Coefficient (IC) >= 0.02, move >= 5x friction floor within the chosen thesis domain.
-[ Phase 4: Structural Strategy Construction ]
-  └─ Objective invalidation (SL), thesis-aligned payout/exit, pure percentage 1R sizing.
-[ Phase 5: Adversarial 8-Gate Falsification & Refinement ]
-  └─ Survive the 8 Institutional Cynic Stress Gates across both In-Sample and unseen Blind OOS.
+[ Phase 1: User Mandate & Risk Geometry ]
+  └─ Ingest user constraints (drawdown, holding horizon, style). Sizing parameterized via pure percentage 1R.
+[ Phase 2: Inelastic Counterparty & Causal Contract ]
+  └─ Formulate 3-part causal statement (Event -> Constrained Action -> Measurable Inefficiency). Zero indicators allowed.
+[ Phase 3: Empirical Hurdle & Permutation Scan (tools/scan_edge.py) ]
+  └─ In-Sample isolation: Verify Rank IC >= 0.02, t >= 2.0, permutation p <= 0.05, move >= 3x friction. Discard if failed.
+[ Phase 4: Structural Strategy Construction (<= 3 Parameters) ]
+  └─ Implement in zillionsAlpha/strategies/<Name>.py. Objective structural invalidation (SL), expectancy target, <= 3 params.
+[ Phase 5: Adversarial 8-Gate Cynic Falsification (tools/run_backtest_audit.py) ]
+  └─ Test on In-Sample and unseen Blind OOS. Must survive walk-forward retention, parameter plateau, and Monte Carlo.
+     ZERO ESCAPE HATCH: Never report a REJECTED strategy as compliant or switch to pre-existing files. Iterate structural logic.
 ```
 
 | Lifecycle Phase / Domain | Reference Guide |
@@ -65,16 +66,23 @@ This pipeline is 100% style-agnostic and paradigm-neutral. Whether the user requ
 
 Do NOT inspect internal engine mechanics (`server/`, `core/simulation.py`, `tests/`) or historical archives. Treat the engine as a black box:
 
-1. **Write Strategy:** Implement standard class in `../zillionsAlpha/strategies/<StrategyName>.py` (or `../nujinPro/strategies/`). See [`references/strategy_interface.md`](references/strategy_interface.md) for skeleton.
-2. **Symlink to Engine:**
+1. **Synthesize Strategy:** Use the deterministic generator to scaffold a new strategy from verified edge features:
    ```bash
-   ln -s ../../zillionsAlpha/strategies/<StrategyName>.py strategies/<StrategyName>.py
+   python tools/build_strategy.py \
+       --name <StrategyName> \
+       --symbol <SYMBOL> \
+       --tf <TIMEFRAME> \
+       --archetype [momentum|mean_reversion|range_breakout] \
+       --lookback <INT> \
+       --sl-mult <FLOAT> \
+       --tp-mult <FLOAT> \
+       --risk-pct <FLOAT>
    ```
-3. **Run Backtest Audit (SSOT):**
+2. **Audit Strategy (SSOT):**
    ```bash
    python tools/run_backtest_audit.py --strategy <StrategyName>.py --days 30
    ```
-4. **Inspect Audit Output & Refine:** Base all iterations on the printed Cynic gate verdicts and risk metrics.
+3. **Inspect Audit Output & Refine:** Base all iterations on the printed Cynic gate verdicts and risk metrics. Never clone pre-existing strategies.
 
 ---
 
