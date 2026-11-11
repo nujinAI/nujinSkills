@@ -103,6 +103,9 @@ class StrategyEvaluator:
 
         bar_ts = int(curr_bar.get("time", curr_bar.get("timestamp", 0)))
         is_xau = "XAU" in symbol.upper() or "GOLD" in symbol.upper()
+        
+        from core.data import get_market_price_precision
+        price_prec = get_market_price_precision(symbol)
 
         # Dynamic evaluation via strategy class Single Source of Truth
         try:
@@ -133,11 +136,11 @@ class StrategyEvaluator:
                     return None
 
                 side = "BUY" if is_l else "SELL"
-                sl = round(float(last_sig.get("stop_loss", 0.0)), 2)
-                tp = round(float(last_sig.get("target", 0.0)), 2)
+                sl = round(float(last_sig.get("stop_loss", 0.0)), price_prec)
+                tp = round(float(last_sig.get("target", 0.0)), price_prec)
 
                 raw_limit_p = last_sig.get("limit_price", 0.0)
-                limit_p = round(float(raw_limit_p), 2) if (raw_limit_p is not None and not np.isnan(raw_limit_p) and float(raw_limit_p) > 0) else None
+                limit_p = round(float(raw_limit_p), price_prec) if (raw_limit_p is not None and not np.isnan(raw_limit_p) and float(raw_limit_p) > 0) else None
                 sig_order_t = str(last_sig.get("order_type", "")).upper()
                 is_limit_order = (sig_order_t == "LIMIT") or (limit_p is not None and limit_p > 0)
 
@@ -175,24 +178,24 @@ class StrategyEvaluator:
 
                 # 1. Structural or Dynamic Stop Loss
                 if "structural_sl" in last_row and not np.isnan(last_row["structural_sl"]):
-                    sl = round(float(last_row["structural_sl"]), 2)
+                    sl = round(float(last_row["structural_sl"]), price_prec)
                 elif atr_sl is not None and atr_v > 0:
-                    sl = round(curr_p - atr_sl * atr_v if is_l else curr_p + atr_sl * atr_v, 2)
+                    sl = round(curr_p - atr_sl * atr_v if is_l else curr_p + atr_sl * atr_v, price_prec)
                 else:
-                    sl = round(curr_p * (1.0 - stoploss_pct) if is_l else curr_p * (1.0 + stoploss_pct), 2)
+                    sl = round(curr_p * (1.0 - stoploss_pct) if is_l else curr_p * (1.0 + stoploss_pct), price_prec)
 
                 # 2. Structural or Dynamic Take Profit
                 if "structural_tp" in last_row and not np.isnan(last_row["structural_tp"]):
-                    tp = round(float(last_row["structural_tp"]), 2)
+                    tp = round(float(last_row["structural_tp"]), price_prec)
                 elif atr_tp is not None and atr_v > 0:
-                    tp = round(curr_p + atr_tp * atr_v if is_l else curr_p - atr_tp * atr_v, 2)
+                    tp = round(curr_p + atr_tp * atr_v if is_l else curr_p - atr_tp * atr_v, price_prec)
                 elif minimal_roi:
-                    tp = round(curr_p * (1.0 + roi_0) if is_l else curr_p * (1.0 - roi_0), 2)
+                    tp = round(curr_p * (1.0 + roi_0) if is_l else curr_p * (1.0 - roi_0), price_prec)
                 else:
-                    tp = round(curr_p * (1.0 + stoploss_pct * 1.5) if is_l else curr_p * (1.0 - stoploss_pct * 1.5), 2)
+                    tp = round(curr_p * (1.0 + stoploss_pct * 1.5) if is_l else curr_p * (1.0 - stoploss_pct * 1.5), price_prec)
 
                 raw_limit_p = last_row.get("limit_price", 0.0)
-                limit_p = round(float(raw_limit_p), 2) if (raw_limit_p is not None and not np.isnan(raw_limit_p) and float(raw_limit_p) > 0) else None
+                limit_p = round(float(raw_limit_p), price_prec) if (raw_limit_p is not None and not np.isnan(raw_limit_p) and float(raw_limit_p) > 0) else None
                 sig_order_t = str(last_row.get("order_type", "")).upper()
                 is_limit_order = (sig_order_t == "LIMIT") or (limit_p is not None and limit_p > 0)
 
@@ -727,6 +730,10 @@ class NativeStrategyRunner:
                 completed_candles = candles
 
             sig = StrategyEvaluator.evaluate(self.strategy_name, self.symbol, completed_candles)
+            if sig:
+                logger.info(f"[NativeStrategyRunner] 🔥 SIGNAL TRIGGERED on finalized bar {bar_time}: {sig.get('action')} @ {sig.get('price')}")
+            else:
+                logger.info(f"[NativeStrategyRunner] ⏱️ Evaluated finalized bar {bar_time} for '{self.strategy_name}' (Close: {completed_candles[-1].get('close')}) — No setup conditions met.")
             if sig:
                 # Enforce Signal Cannibalization Guard: Prevent opposing wash trades across active strategies on same asset
                 from server.bot_runner import check_signal_cannibalization

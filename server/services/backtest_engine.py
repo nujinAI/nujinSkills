@@ -419,10 +419,6 @@ def run_real_backtest(
     # 8. Update Single Source of Truth
     if save_as_active:
         state_manager.set_full(state)
-        try:
-            strategy_registry.update_status(clean_name, "ACTIVE_LIVE")
-        except Exception as e_stat:
-            logger.warning(f"[BacktestEngine] Could not update strategy status in registry: {e_stat}")
 
     try:
         strat_record = strategy_registry.record_backtest(clean_name, result, is_cron=False)

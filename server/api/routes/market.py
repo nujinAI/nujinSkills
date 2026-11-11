@@ -104,7 +104,7 @@ async def get_candles(
             asyncio.create_task(provider.start())
 
         c_list = provider.get_candles(count=count)
-        if c_list and len(c_list) >= 10:
+        if c_list and len(c_list) > 0:
             raw_data = c_list[-count:] if (count and count < len(c_list)) else c_list
             data = _sanitize_candles(raw_data)
             prims = _extract_primitives_for_response(strategy, data)

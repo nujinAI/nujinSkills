@@ -33,6 +33,8 @@ def resolve_market_symbol(symbol: str) -> str:
     upper = raw.replace("/", "").replace("-", "").replace(":", "").replace(" ", "").replace("&", "").upper()
     if upper in ("XAUUSD", "GOLD", "XAU", "OANDA", "XAU_USD", "OANDAXAUUSD"):
         return "OANDA:XAUUSD"
+    if upper in ("EURUSD", "EUR_USD", "OANDAEURUSD"):
+        return "OANDA:EURUSD"
     if any(k in upper for k in ["SP500", "SPX", "ES", "US500", "SPY", "ES1"]):
         return "CME_MINI:ES1!"
     if "BTC" in upper:
@@ -42,6 +44,17 @@ def resolve_market_symbol(symbol: str) -> str:
     if "SOL" in upper:
         return "BINANCE:SOLUSDT"
     return upper
+
+
+def get_market_price_precision(symbol: str) -> int:
+    """Returns price decimal precision for asset class (FX: 5 decimals, JPY: 3, Crypto/Indices/Metals: 2)."""
+    s = (symbol or "").upper()
+    if any(k in s for k in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "USD"]):
+        if "JPY" in s:
+            return 3
+        if not any(m in s for m in ["XAU", "GOLD", "BTC", "ETH", "SOL", "SP", "ES", "US500"]):
+            return 5
+    return 2
 
 
 def canonical_market_slug(symbol: str) -> str:
@@ -317,16 +330,17 @@ def fetch_candles_via_tv(symbol: str, timeframe: str = "1m", count: int = 2000) 
             return []
 
         candles = []
+        prec = get_market_price_precision(tv_sym)
         for b in raw_bars:
             v = b.get("v", [])
             if len(v) >= 5:
                 candles.append({
                     "time": int(v[0]),
                     "timestamp": int(v[0]),
-                    "open": round(float(v[1]), 2),
-                    "high": round(float(v[2]), 2),
-                    "low": round(float(v[3]), 2),
-                    "close": round(float(v[4]), 2),
+                    "open": round(float(v[1]), prec),
+                    "high": round(float(v[2]), prec),
+                    "low": round(float(v[3]), prec),
+                    "close": round(float(v[4]), prec),
                     "volume": round(float(v[5] or 10.0), 2)
                 })
 

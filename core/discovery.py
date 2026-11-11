@@ -68,7 +68,26 @@ def evaluate_feature_predictive_power(
     # t-statistic for Rank IC
     denom = np.sqrt(max(1e-12, (1.0 - rank_ic ** 2) / (n - 2)))
     t_stat = float(rank_ic / denom) if denom > 1e-12 else 0.0
-    is_sig = abs(t_stat) >= 2.0 and abs(rank_ic) >= 0.02
+
+    # Permutation Test (White's Reality Check proxy for noise falsification)
+    # Shuffles forward returns to test if rank_ic is achievable on pure noise
+    num_permutations = 200
+    noise_count = 0
+    abs_rank_ic = abs(rank_ic)
+    if n >= 50 and abs_rank_ic >= 0.01:
+        rng = np.random.default_rng(seed=42)
+        ry_shuffled = ry.copy()
+        for _ in range(num_permutations):
+            rng.shuffle(ry_shuffled)
+            cov_perm = np.cov(rx, ry_shuffled)[0, 1]
+            perm_ic = abs(cov_perm / (std_rx * std_ry)) if (std_rx > 1e-12 and std_ry > 1e-12) else 0.0
+            if perm_ic >= abs_rank_ic:
+                noise_count += 1
+        noise_p_val = noise_count / num_permutations
+    else:
+        noise_p_val = 1.0
+
+    is_sig = abs(t_stat) >= 2.0 and abs(rank_ic) >= 0.02 and noise_p_val <= 0.05
 
     # Quantile Monotonicity
     q_means = {}
@@ -89,6 +108,7 @@ def evaluate_feature_predictive_power(
         "rank_ic": round(rank_ic, 4),
         "pearson_ic": round(pearson_ic, 4),
         "t_stat": round(t_stat, 2),
+        "noise_p_val": round(noise_p_val, 3),
         "is_statistically_significant": is_sig,
         "quantile_returns_mean": q_means,
         "monotonic_spread": round(monotonic_spread, 6)

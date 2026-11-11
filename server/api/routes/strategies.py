@@ -229,12 +229,9 @@ async def update_managed_strategy_status(req: UpdateStrategyStatusRequest):
 @router.post("/api/strategies/manage/run-backtest")
 async def run_managed_strategy_backtest(req: RunStrategyBacktestRequest):
     """Execute on-demand quantitative backtest for a strategy and update registry."""
-    clean_name = req.strategy.replace(".py", "")
-    curr_active = state_manager.get().get("active_strategy", "").replace(".py", "")
-    is_active = (clean_name == curr_active)
     result = run_real_backtest(
         req.strategy,
-        save_as_active=is_active,
+        save_as_active=False,
         days=req.days or 30,
         timeframe_override=req.timeframe,
         account_size=req.account_size,

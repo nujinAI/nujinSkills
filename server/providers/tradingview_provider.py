@@ -29,6 +29,7 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
         self.bar_step = data_manager._timeframe_to_seconds(timeframe)
         self._last_bar_time = 0
         self._last_bar_vol = 0.0
+        self._last_full_sync_time = 0.0
         self._task: Optional[asyncio.Task] = None
         self._load_initial_candles()
 
@@ -43,14 +44,18 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
 
             if candles:
                 self._candles = candles
+                self._last_full_sync_time = time.time()
                 last_c = self._candles[-1]
                 self._last_bar_time = int(last_c.get("timestamp") or last_c.get("time", 0))
                 self._last_bar_vol = float(last_c.get("volume", 0.0))
+                from core.data import get_market_price_precision
+                prec = get_market_price_precision(self.tv_symbol)
+                spread_val = 0.00015 if prec > 2 else 0.15
                 self._latest_quote = {
                     "symbol": self.symbol,
                     "price": last_c["close"],
-                    "bid": round(last_c["close"] - 0.15, 2),
-                    "ask": round(last_c["close"] + 0.15, 2),
+                    "bid": round(last_c["close"] - spread_val, prec),
+                    "ask": round(last_c["close"] + spread_val, prec),
                     "open": last_c["open"],
                     "high": last_c["high"],
                     "low": last_c["low"],
@@ -58,9 +63,11 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                     "delta_volume": 0.0,
                     "timestamp": self._last_bar_time,
                     "source": "tradingview_ws",
-                    "candle": last_c
+                    "candle": last_c,
                 }
-                logger.info(f"[TradingViewProvider] Ready with {len(self._candles)} authentic {self.timeframe} candles for {self.tv_symbol} (Latest: {last_c['close']} @ {self._last_bar_time})")
+                logger.info(
+                    f"[TradingViewProvider] Ready with {len(self._candles)} authentic {self.timeframe} candles for {self.tv_symbol} (Latest: {last_c['close']} @ {self._last_bar_time})"
+                )
         except Exception as e:
             logger.warning(f"[TradingViewProvider] Error loading initial candles for {self.tv_symbol}: {e}")
 
@@ -68,8 +75,29 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
         return self._latest_quote
 
     def get_candles(self, count: Optional[int] = None) -> List[Dict[str, Any]]:
+        now = time.time()
+        # If candles are not yet loaded, load them
         if not self._candles:
             self._load_initial_candles()
+        else:
+            # Self-healing freshness check: if the last cached bar is older than 2 bar intervals
+            # and we haven't synced within the last 60 seconds, refresh from TradingView
+            last_ts = int(self._candles[-1].get("timestamp") or self._candles[-1].get("time", 0))
+            if (now - last_ts) > max(900, self.bar_step * 2) and (now - self._last_full_sync_time) > 60:
+                self._last_full_sync_time = now
+                try:
+                    fresh = data_manager.fetch_candles_via_tv(self.tv_symbol, self.timeframe, count=count or 2000)
+                    if fresh and int(fresh[-1].get("timestamp", 0)) > last_ts:
+                        self._candles = fresh
+                        last_c = fresh[-1]
+                        self._last_bar_time = int(last_c.get("timestamp") or last_c.get("time", 0))
+                        self._last_bar_vol = float(last_c.get("volume", 0.0))
+                        logger.info(
+                            f"[TradingViewProvider] Refreshed {len(self._candles)} candles for {self.tv_symbol} up to {self._last_bar_time}"
+                        )
+                except Exception as e_refresh:
+                    logger.debug(f"[TradingViewProvider] Background refresh note for {self.tv_symbol}: {e_refresh}")
+
         if count and len(self._candles) > count:
             return self._candles[-count:]
         return self._candles
@@ -105,6 +133,9 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
         import websocket
 
         tv_tf = data_manager._tf_to_tv_resolution(self.timeframe)
+        from core.data import get_market_price_precision
+        prec = get_market_price_precision(self.tv_symbol)
+        spread_val = 0.00015 if prec > 2 else 0.15
         loop = asyncio.get_event_loop()
 
         while self.is_running:
@@ -126,11 +157,12 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                 chart_s = "cs_" + "".join(random.choice(string.ascii_lowercase) for _ in range(12))
                 sym_str = '={\"symbol\":\"' + self.tv_symbol + '\",\"adjustment\":\"splits\"}'
 
+                # Request recent 300 bars on connect/reconnect to guarantee no gaps
                 init_msgs = [
                     self._create_ws_msg("set_auth_token", ["unauthorized_user_token"]),
                     self._create_ws_msg("chart_create_session", [chart_s, ""]),
                     self._create_ws_msg("resolve_symbol", [chart_s, "symbol_1", sym_str]),
-                    self._create_ws_msg("create_series", [chart_s, "s1", "s1", "symbol_1", str(tv_tf), 10]),
+                    self._create_ws_msg("create_series", [chart_s, "s1", "s1", "symbol_1", str(tv_tf), 300]),
                 ]
                 for m in init_msgs:
                     await loop.run_in_executor(None, ws.send, m)
@@ -146,7 +178,9 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                         if not part:
                             continue
                         if "~h~" in part:
-                            await loop.run_in_executor(None, ws.send, part)
+                            # Frame heartbeat properly according to TradingView socket.io protocol
+                            hb_msg = f"~m~{len(part)}~m~{part}"
+                            await loop.run_in_executor(None, ws.send, hb_msg)
                             continue
 
                         try:
@@ -162,19 +196,27 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                                 if len(v) >= 5:
                                     b_ts = int(v[0])
                                     o, h, l, c = float(v[1]), float(v[2]), float(v[3]), float(v[4])
-                                    vol = float(v[5]) if len(v) > 5 else 0.0
+                                    vol = float(v[5]) if len(v) > 5 and v[5] is not None else 0.0
 
-                                    delta_vol = max(0.0, round(vol - self._last_bar_vol, 4)) if b_ts == self._last_bar_time else vol
+                                    delta_vol = (
+                                        max(0.0, round(vol - self._last_bar_vol, 4))
+                                        if b_ts == self._last_bar_time
+                                        else vol
+                                    )
                                     self._last_bar_vol = vol
+
+                                    from core.data import get_market_price_precision
+                                    prec = get_market_price_precision(self.tv_symbol)
+                                    spread_val = 0.00015 if prec > 2 else 0.15
 
                                     quote = {
                                         "symbol": self.symbol,
-                                        "price": c,
-                                        "bid": round(c - 0.15, 2),
-                                        "ask": round(c + 0.15, 2),
-                                        "open": o,
-                                        "high": h,
-                                        "low": l,
+                                        "price": round(c, prec),
+                                        "bid": round(c - spread_val, prec),
+                                        "ask": round(c + spread_val, prec),
+                                        "open": round(o, prec),
+                                        "high": round(h, prec),
+                                        "low": round(l, prec),
                                         "volume": vol,
                                         "delta_volume": delta_vol,
                                         "timestamp": b_ts,
@@ -182,35 +224,86 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                                         "candle": {
                                             "time": b_ts,
                                             "timestamp": b_ts,
-                                            "open": o,
-                                            "high": h,
-                                            "low": l,
-                                            "close": c,
+                                            "open": round(o, prec),
+                                            "high": round(h, prec),
+                                            "low": round(l, prec),
+                                            "close": round(c, prec),
                                             "volume": vol,
                                         },
                                     }
                                     self._latest_quote = quote
                                     await self._notify_tick(quote)
 
-                                    if b_ts > self._last_bar_time:
+                                    if not self._candles:
+                                        self._candles = [quote["candle"]]
                                         self._last_bar_time = b_ts
-                                        candle_dict = quote["candle"]
-                                        if not self._candles:
-                                            self._candles = [candle_dict]
-                                        else:
-                                            self._candles = [bar for bar in self._candles if int(bar.get("timestamp", bar.get("time", 0))) < b_ts]
-                                            self._candles.append(candle_dict)
+                                    else:
+                                        last_candle_ts = int(
+                                            self._candles[-1].get("timestamp") or self._candles[-1].get("time", 0)
+                                        )
+                                        if b_ts > last_candle_ts:
+                                            # Previous candle has finalized!
+                                            finalized_bar = dict(self._candles[-1])
+                                            self._last_bar_time = b_ts
+                                            # Append newly opened candle
+                                            self._candles.append(quote["candle"])
+                                            # Keep memory bounded to latest 2500 bars
+                                            if len(self._candles) > 2500:
+                                                self._candles = self._candles[-2500:]
 
-                                        logger.info(f"[TradingViewProvider] 🔔 New {self.timeframe} bar finalized for {self.tv_symbol}: {c} @ {b_ts}")
-                                        await self._notify_bar(candle_dict)
+                                            logger.info(
+                                                f"[TradingViewProvider] 🔔 New {self.timeframe} bar finalized for {self.tv_symbol}: {finalized_bar.get('close')} @ {last_candle_ts}"
+                                            )
+                                            await self._notify_bar(finalized_bar)
+                                        else:
+                                            # In-progress update for the current forming candle
+                                            self._candles[-1]["high"] = max(self._candles[-1].get("high", h), h)
+                                            self._candles[-1]["low"] = min(self._candles[-1].get("low", l), l)
+                                            self._candles[-1]["close"] = c
+                                            self._candles[-1]["volume"] = vol
 
                         elif m == "timescale_update":
                             s_list = parsed.get("p", [None, {}])[1].get("s1", {}).get("s", [])
                             if s_list:
-                                latest_item = s_list[-1].get("v", [])
-                                if len(latest_item) >= 5:
+                                new_bars = []
+                                for item in s_list:
+                                    iv = item.get("v", [])
+                                    if len(iv) >= 5:
+                                        ts = int(iv[0])
+                                        new_bars.append(
+                                            {
+                                                "time": ts,
+                                                "timestamp": ts,
+                                                "open": round(float(iv[1]), prec),
+                                                "high": round(float(iv[2]), prec),
+                                                "low": round(float(iv[3]), prec),
+                                                "close": round(float(iv[4]), prec),
+                                                "volume": round(
+                                                    float(iv[5] if len(iv) > 5 and iv[5] is not None else 10.0), 2
+                                                ),
+                                            }
+                                        )
+                                if new_bars:
+                                    # Merge into self._candles to ensure unbroken historical sequence
+                                    by_time = {
+                                        int(c.get("timestamp") or c.get("time", 0)): c for c in (self._candles or [])
+                                    }
+                                    for nb in new_bars:
+                                        by_time[nb["timestamp"]] = nb
+                                    self._candles = sorted(
+                                        by_time.values(),
+                                        key=lambda x: int(x.get("timestamp") or x.get("time", 0)),
+                                    )
+                                    if len(self._candles) > 2500:
+                                        self._candles = self._candles[-2500:]
+
+                                    latest_item = s_list[-1].get("v", [])
                                     self._last_bar_time = int(latest_item[0])
-                                    self._last_bar_vol = float(latest_item[5]) if len(latest_item) > 5 else 0.0
+                                    self._last_bar_vol = (
+                                        float(latest_item[5])
+                                        if len(latest_item) > 5 and latest_item[5] is not None
+                                        else 0.0
+                                    )
 
             except asyncio.CancelledError:
                 break
