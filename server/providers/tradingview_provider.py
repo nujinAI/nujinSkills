@@ -284,6 +284,33 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                                             }
                                         )
                                 if new_bars:
+                                    # Detect new finalized bar(s) if timescale_update advances the sequence
+                                    if self._candles:
+                                        curr_last_ts = int(
+                                            self._candles[-1].get("timestamp") or self._candles[-1].get("time", 0)
+                                        )
+                                        latest_nb_ts = new_bars[-1]["timestamp"]
+                                        if latest_nb_ts > curr_last_ts:
+                                            finalized_bar = dict(self._candles[-1])
+                                            logger.info(
+                                                f"[TradingViewProvider] 🔔 New {self.timeframe} bar finalized (via timescale_update) for {self.tv_symbol}: {finalized_bar.get('close')} @ {curr_last_ts}"
+                                            )
+                                            # Merge before notifying so latest history is present
+                                            by_time = {
+                                                int(c.get("timestamp") or c.get("time", 0)): c for c in (self._candles or [])
+                                            }
+                                            for nb in new_bars:
+                                                by_time[nb["timestamp"]] = nb
+                                            self._candles = sorted(
+                                                by_time.values(),
+                                                key=lambda x: int(x.get("timestamp") or x.get("time", 0)),
+                                            )
+                                            if len(self._candles) > 2500:
+                                                self._candles = self._candles[-2500:]
+                                            self._last_bar_time = latest_nb_ts
+                                            await self._notify_bar(finalized_bar)
+                                            continue
+
                                     # Merge into self._candles to ensure unbroken historical sequence
                                     by_time = {
                                         int(c.get("timestamp") or c.get("time", 0)): c for c in (self._candles or [])
