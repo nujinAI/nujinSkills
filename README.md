@@ -121,6 +121,11 @@ Simply describe your objective in plain language—the AI handles the research, 
 - **Investment Plan:**
   > *"Create a long-horizon systematic investment strategy with strict downside protection across bull and bear regimes."*
 
+### 4. Optional: Run in the Background & on System Startup
+> [!TIP]
+> If you want to let the engine run continuously in the background—and even automatically start up whenever your device reboots—simply tell your AI agent:
+> *"Set up nujinSkills to run in the background and start automatically on system reboot."*
+
 ---
 
 ## 📜 License & Philosophy
