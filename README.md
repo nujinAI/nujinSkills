@@ -1,4 +1,4 @@
-# ⚡ NujinAI / nujinSkills — Universal Quantitative Trading Engine & Agent Skill
+# ⚡ NujinSkill — Universal Quantitative Trading Engine as a Agent Skill
 
 [![System: NujinAI](https://img.shields.io/badge/System-NujinAI-blue.svg)](SKILL.md)
 [![Quant Protocol](https://img.shields.io/badge/Methodology-Pure%20Mathematical%20Basis-emerald.svg)](references/alpha_pipeline.md)
@@ -8,8 +8,10 @@
 [![Bot Operations](https://img.shields.io/badge/Bot-Live%20Supervision-cyan.svg)](references/bot_operations.md)
 [![Telemetry API](https://img.shields.io/badge/Telemetry-JSON%20API-sky.svg)](references/telemetry_api.md)
 
-> **Empower autonomous AI agents to discover authentic mathematical anomalies, engineer battle-tested strategies, and deploy reliable trading bots—100% on CPU.**  
-> Completely universal, paradigm-neutral, and free of textbook indicator pre-bias.
+> **Empower autonomous AI agents to discover market anomalies, engineer battle-tested strategies, and deploy reliable trading bots—100% on CPU.**
+
+> [!CAUTION]
+> This project is in an early stage and is provided for **educational and research purposes only**. Nothing herein constitutes financial or investment advice. Participating in financial markets carries substantial risk of loss—never trade or risk more capital than you are willing to lose.
 
 ---
 
@@ -89,7 +91,8 @@ Before any strategy is approved for deployment, it must survive the full adversa
 
 You do not need to run any scripts or know any quantitative commands yourself. The AI agent knows the entire framework through [`SKILL.md`](SKILL.md) and executes every step autonomously from A to Z.
 
-### 1. Get the Repository
+### 1. Start Here
+Download the repository or use the following command in your terminal:
 ```bash
 git clone https://github.com/autonomousEnterprises/NujinAI.git
 ```
@@ -113,4 +116,8 @@ Simply describe your objective in plain language—the AI handles the research, 
 
 ## 📜 License & Philosophy
 
-`nujinSkills` is engineered on the philosophy that **financial markets are non-deterministic, but mathematical and risk geometry are exact**. Edge is not guessing a textbook indicator; edge is isolating a persistent, cross-era mathematical anomaly, placing barriers on a verified stability plateau, and managing risk with uncompromising rigor.
+`nujinSkills` is **free and open source**.
+
+Wealth should be a right, not a privilege. In an AI era where traditional labor is disappearing and a K-shaped economy widens the divide, financial markets should not remain gated behind institutional walls.
+
+This is a project for the people—built to make the markets accessible to everyone through a complete, standardized framework. Retail participants do not lose money because markets are unnavigable; they lose because they lack access to a disciplined, standardized process. `nujinSkills` exists to put that process in everyone's hands.

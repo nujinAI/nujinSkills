@@ -30,6 +30,9 @@ These 5 mathematical principles are inviolable regardless of the user's requeste
    $$\mathbb{E}[R] = (W \times R_{\text{win}}) - ((1 - W) \times 1.0) - \text{Friction} > 0$$
 5. **Zero Hardcoded Capital & Zero Silent Fallbacks:** 
    Never hardcode static account sizes or fixed lot sizes. Always parameterize risk as equity percentage (`risk_pct_1r`, calibrated to keep Monte Carlo $\text{MDD}_{99}$ within the user's drawdown ceiling).
+   **Anti-Fallback & Verbatim Audit Law (STRICTLY ENFORCED):**
+   - The AI is strictly forbidden from searching through pre-existing strategy folders or reusing old files to fulfill a user prompt. If a mathematical scan yields 0 survivors for an asset or timeframe, report that empirical fact honestly and adjust constraints or test another asset/timeframe.
+   - **Absolute Audit Transparency:** The agent MUST print the raw, verbatim output block of `tools/run_backtest_audit.py` (including the exact 8-Gate Cynic matrix and overall VERDICT). The agent is strictly prohibited from selectively cherry-picking passing gates, redacting failed gates, or presenting a custom sanitized table. If any gate fails, the verdict is `REJECTED`, and the agent must diagnose the failure with `tools/autopsy_strategy.py` rather than claiming success.
 
 ---
 
