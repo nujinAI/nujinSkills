@@ -103,7 +103,7 @@ You do not need to run any scripts or know any quantitative commands yourself. T
 ### 1. Start Here
 Download the repository or use the following command in your terminal:
 ```bash
-git clone https://github.com/autonomousEnterprises/nujinSkills.git
+git clone https://github.com/nujinAI/nujinSkills.git
 ```
 
 ### 2. Open Your AI Agent in the Folder
