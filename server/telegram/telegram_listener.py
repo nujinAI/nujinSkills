@@ -57,6 +57,8 @@ class TelegramListener:
                 pass
 
     def is_configured(self) -> bool:
+        if not telegram_gateway.enabled:
+            return False
         self.bot_token = telegram_gateway.bot_token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
         return bool(self.bot_token)
 

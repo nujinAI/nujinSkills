@@ -21,10 +21,12 @@ class TelegramGateway:
     def __init__(self):
         self.bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self.chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        # Allow globally disabling Telegram gateway via TELEGRAM_ENABLED environment variable
+        self.enabled = os.environ.get("TELEGRAM_ENABLED", "false").lower() in ("true", "1", "yes")
         
     @property
     def is_configured(self) -> bool:
-        return bool(self.bot_token and (self.chat_id or os.environ.get("TELEGRAM_CHAT_ID")))
+        return bool(self.enabled and self.bot_token and (self.chat_id or os.environ.get("TELEGRAM_CHAT_ID")))
 
     def get_chat_ids(self) -> list[str]:
         raw = self.chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -59,6 +61,10 @@ class TelegramGateway:
         return users
 
     def send_message(self, text: str, parse_mode: Optional[str] = "HTML", target_chat_id: Optional[str] = None, disable_notification: bool = False) -> bool:
+        if not self.enabled:
+            logger.info(f"[Telegram Disabled / Log Only]\n{text}")
+            return False
+
         if not self.bot_token:
             logger.info(f"[Telegram Off-line / Log Only]\n{text}")
             return False
