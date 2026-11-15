@@ -21,11 +21,12 @@
 
 Instead of relying on an LLM to guess crowded retail indicators or brute-force backtest parameters, `nujinSkills` equips the agent with a **CPU-Native Machine Learning & Mathematical Discovery Microscope**:
 
-1. **130-Coordinate Pure Mathematical Basis Grid:** Decomposes raw OHLCV into its 6 lossless physical vectors (normalized log-return velocity, span energy, intrabar displacement, boundary asymmetry, close coordinate, and relative log-volume impulse) and applies statistical operators (Moments 1–3, non-parametric IQR coordinates, cross-scale dispersion ratios, serial autocorrelation, variance ratios, path efficiency, and vector inner products) across the Fibonacci scale grid $W \in \{2, 3, 5, 8, 13, 21, 34, 55\}$.
-2. **CPU ML Conditional Anomaly & 5-Slice Sub-Era Invariance Miner:** Uses tree-ensemble importance and shallow surrogate decision trees trained directly on discrete barrier outcomes to uncover non-linear 2D conditional anomalies. Enforces **5-Slice Chronological Sub-Era Invariance** ($\ge 75\text{--}80\%$ positive sub-eras) inside the In-Sample window to prevent 70/30 Out-of-Sample regime collapse.
-3. **2D MFE/MAE Stability Plateau Optimizer:** Simulates candidate triggers under exact Pessimistic Intrabar Resolution and Opposite-Signal Reversals across the Stop-Loss / Take-Profit surface, applying neighborhood plateau smoothing and Monte Carlo bootstrap sizing ($1R$) so strategies sit on wide parameter plateaus.
-4. **Formula-Driven Strategy Synthesis:** Compiles discovered mathematical anomalies directly into clean, $\le 3$-parameter strategy classes without human or LLM boilerplate bias.
-5. **Adversarial 8-Gate Cynic Falsification & ML Trade Autopsy:** Actively stress-tests strategies across In-Sample and unseen Blind Out-of-Sample datasets. When any gate fails, an automated In-Sample shallow-tree trade autopsy diagnoses the exact mathematical regime state causing the failure—eliminating blind parameter brute-forcing.
+1. **Mathematical Market Anomaly Discovery:** Analyzes raw market data across multiple timeframes to spot real statistical patterns without relying on lagging retail indicators.
+2. **Multi-Era Consistency Check:** Validates that patterns hold across different market cycles and time periods rather than just working by chance in one specific slice.
+3. **Robust Risk & Target Optimization:** Automatically scans stop-loss and take-profit levels to ensure strategies sit on stable, wide performance zones rather than fragile peak settings.
+4. **Clean Strategy Generation:** Translates discovered market edges into compact, transparent code without bloated parameters or curve-fitting.
+5. **Adversarial Stress Testing:** Subjecting every strategy to strict institutional stress tests (Monte Carlo simulations, fee stress, noise testing, and unseen out-of-sample data) to reject overfitted models before they ever see real capital.
+6. **Live Paper Trading:** Deploys verified strategies in real-time market conditions via paper trading, allowing you to validate live execution, telemetry, and performance without risking any capital.
 
 ---
 
@@ -38,7 +39,15 @@ You never need to know which indicators or mathematical formulas to ask for. You
 - **Swing Trading (1h–4h):** Multi-day holding horizons and structural volatility stops.
 - **Investment / Position Plans (4h–1D):** Macro drift and dispersion-regime allocation.
 
-### 2. The 5 Inviolable Quantitative Invariants
+### 2. The Deep Quantitative Discovery Microscope (Under the Hood)
+Beneath the conversational interface, the engine executes institutional-grade quantitative mechanics on every research run:
+1. **130-Coordinate Pure Mathematical Basis Grid:** Decomposes raw OHLCV into its 6 lossless physical vectors (normalized log-return velocity, span energy, intrabar displacement, boundary asymmetry, close coordinate, and relative log-volume impulse) and applies statistical operators (Moments 1–3, non-parametric IQR coordinates, cross-scale dispersion ratios, serial autocorrelation, variance ratios, path efficiency, and vector inner products) across the Fibonacci scale grid $W \in \{2, 3, 5, 8, 13, 21, 34, 55\}$.
+2. **CPU ML Conditional Anomaly & 5-Slice Sub-Era Invariance Miner:** Uses tree-ensemble importance and shallow surrogate decision trees trained directly on discrete barrier outcomes to uncover non-linear 2D conditional anomalies. Enforces **5-Slice Chronological Sub-Era Invariance** ($\ge 75\text{--}80\%$ positive sub-eras) inside the In-Sample window to prevent 70/30 Out-of-Sample regime collapse.
+3. **2D MFE/MAE Stability Plateau Optimizer:** Simulates candidate triggers under exact Pessimistic Intrabar Resolution and Opposite-Signal Reversals across the Stop-Loss / Take-Profit surface, applying neighborhood plateau smoothing and Monte Carlo bootstrap sizing ($1R$) so strategies sit on wide parameter plateaus.
+4. **Formula-Driven Strategy Synthesis:** Compiles discovered mathematical anomalies directly into clean, $\le 3$-parameter strategy classes without human or LLM boilerplate bias.
+5. **Adversarial 8-Gate Cynic Falsification & ML Trade Autopsy:** Actively stress-tests strategies across In-Sample and unseen Blind Out-of-Sample datasets. When any gate fails, an automated In-Sample shallow-tree trade autopsy diagnoses the exact mathematical regime state causing the failure—eliminating blind parameter brute-forcing.
+
+### 3. The 5 Inviolable Quantitative Invariants
 Regardless of user requirements or strategy style, the engine strictly enforces 5 mathematical laws:
 1. **Zero Textbook Pre-Bias:** Entry and regime rules are mined from the 130 dimensionless basis coordinates—never guessed from retail indicator lore.
 2. **5-Slice Sub-Era Invariance & 2/3 vs. 1/3 Blind OOS Isolation:** Discovery occurs exclusively on the first 66.7% In-Sample segment across 5 chronological sub-eras. The final 33.3% Blind Out-of-Sample segment remains untouched until final audit.
@@ -94,7 +103,7 @@ You do not need to run any scripts or know any quantitative commands yourself. T
 ### 1. Start Here
 Download the repository or use the following command in your terminal:
 ```bash
-git clone https://github.com/autonomousEnterprises/NujinAI.git
+git clone https://github.com/autonomousEnterprises/nujinSkills.git
 ```
 
 ### 2. Open Your AI Agent in the Folder
