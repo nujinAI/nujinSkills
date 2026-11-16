@@ -36,7 +36,12 @@ async def list_broker_accounts(broker_id: Optional[str] = None):
     try:
         broker = broker_registry.get_broker()
         if broker and getattr(broker, "is_connected", False) and hasattr(broker, "get_account_info"):
-            broker.get_account_info()
+            info = broker.get_account_info() or {}
+            b_id = getattr(broker, "broker_id", "paper")
+            bal = float(info.get("balance") or 0.0)
+            eq = float(info.get("equity") or bal or 0.0)
+            if b_id != "paper" and bal > 0 and hasattr(accounts_store, "update_account_balance"):
+                accounts_store.update_account_balance(broker_id=b_id, balance=bal, equity=eq)
     except Exception as e_info:
         logger.debug(f"[BrokersAPI] Live get_account_info check note: {e_info}")
 

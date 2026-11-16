@@ -254,9 +254,16 @@ class StrategyEvaluator:
                 is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
                 if broker and getattr(broker, "is_connected", False) and not is_paper_broker:
                     acc_info = broker.get_account_info()
-                    eq = float(acc_info.get("equity") or acc_info.get("balance") or 0.0)
+                    bal = float(acc_info.get("balance") or 0.0)
+                    eq = float(acc_info.get("equity") or bal or 0.0)
                     if eq > 0:
                         target_equity = eq
+                    if bal > 0 and accounts_store and hasattr(accounts_store, "update_account_balance"):
+                        accounts_store.update_account_balance(
+                            broker_id=getattr(broker, "broker_id", "tradelocker"),
+                            balance=bal,
+                            equity=eq,
+                        )
             except Exception:
                 pass
 
@@ -461,6 +468,12 @@ class NativeStrategyRunner:
                     broker_equity = eq
                     broker_balance = bal
                     initial_balance = bal
+                if bal > 0 and accounts_store and hasattr(accounts_store, "update_account_balance"):
+                    accounts_store.update_account_balance(
+                        broker_id=getattr(broker, "broker_id", "tradelocker"),
+                        balance=bal,
+                        equity=eq if eq > 0 else bal,
+                    )
         except Exception as e_b:
             logger.debug(f"[DrawdownGuard] Broker info error: {e_b}")
 

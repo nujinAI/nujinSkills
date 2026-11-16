@@ -352,6 +352,42 @@ class AccountsStore:
                 self._write_raw(data)
             return updated
 
+    def update_account_balance(
+        self,
+        broker_id: str,
+        balance: float,
+        equity: Optional[float] = None,
+        account_id: Optional[str] = None,
+    ) -> bool:
+        """Persist live broker balance/equity for an active account when changed."""
+        new_bal = round(float(balance), 2)
+        new_eq = round(float(equity), 2) if equity is not None else None
+        if new_bal <= 0:
+            return False
+        with self._lock:
+            data = self._read_raw()
+            updated = False
+            for a in data.get("accounts", []):
+                if not a.get("is_active", True):
+                    continue
+                if account_id and a.get("id") != account_id:
+                    continue
+                if not account_id and a.get("broker_id") != broker_id:
+                    continue
+                old_bal = a.get("balance")
+                old_eq = a.get("equity")
+                if old_bal == new_bal and (new_eq is None or old_eq == new_eq):
+                    return False
+                a["balance"] = new_bal
+                if new_eq is not None:
+                    a["equity"] = new_eq
+                a["updated_at"] = datetime.now(timezone.utc).isoformat()
+                updated = True
+                break
+            if updated:
+                self._write_raw(data)
+            return updated
+
     def toggle_account_active(self, account_id: str, telegram_user_id: int | str, is_active: Optional[bool] = None) -> bool:
         with self._lock:
             data = self._read_raw()

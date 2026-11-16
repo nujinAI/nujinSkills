@@ -22,7 +22,9 @@ export function useSignals() {
   };
 
   const activePositions = computed<SignalData[]>(() => {
-    return signals.value.filter((s) => s.status !== 'CLOSED');
+    return signals.value.filter(
+      (s) => s.status !== 'CLOSED' && s.status !== 'FAILED_BROKER_ORDER' && s.status !== 'REJECTED'
+    );
   });
 
   const closedTrades = computed<SignalData[]>(() => {
