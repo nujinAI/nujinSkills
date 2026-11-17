@@ -409,6 +409,46 @@ class NativeStrategyRunner:
         self.provider.unsubscribe_bar(self._on_market_bar)
         logger.info(f"[NativeStrategyRunner] Stopped for '{self.strategy_name}'")
 
+    def _is_pyramiding_blocked(self) -> Tuple[bool, str]:
+        """Return (True, reason) if allow_pyramiding is False and another signal/position is active."""
+        allow_pyramiding = False
+        try:
+            if accounts_store:
+                active_accs = accounts_store.get_all_active_accounts(decrypt=False)
+                if not active_accs and hasattr(accounts_store, "_read_raw"):
+                    active_accs = accounts_store._read_raw().get("accounts", [])
+                if active_accs:
+                    risk_profile = active_accs[0].get("risk_profile") or {}
+                    allow_pyramiding = bool(risk_profile.get("allow_pyramiding", False))
+        except Exception:
+            pass
+
+        if allow_pyramiding:
+            return False, ""
+
+        # 1. Check local active signals across all strategies (includes pending limit orders)
+        try:
+            active_signals = signal_store.get_active_signals() if hasattr(signal_store, "get_active_signals") else []
+            for s in active_signals:
+                other_strat = s.get("strategy") or s.get("strategy_name") or "unknown"
+                if other_strat != self.strategy_name:
+                    return True, f"Pyramiding disabled: active signal already open for '{other_strat}'"
+        except Exception:
+            pass
+
+        # 2. Check live broker open positions (protects against manual or untracked positions)
+        try:
+            broker = broker_registry.get_broker()
+            is_paper = getattr(broker, "broker_id", "paper") == "paper"
+            if broker and getattr(broker, "is_connected", False) and not is_paper and hasattr(broker, "get_open_positions"):
+                positions = broker.get_open_positions()
+                if positions:
+                    return True, f"Pyramiding disabled: {len(positions)} open position(s) already on broker"
+        except Exception:
+            pass
+
+        return False, ""
+
     def check_drawdown_safety(self) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Active Live Risk & Drawdown Circuit Breaker.
@@ -705,6 +745,12 @@ class NativeStrategyRunner:
                 # Already in position — enforce 1 concurrent trade per strategy
                 return
 
+            # Cross-Strategy Pyramiding Guard (default: allow_pyramiding=False)
+            pyr_blocked, pyr_reason = self._is_pyramiding_blocked()
+            if pyr_blocked:
+                logger.info(f"[NativeStrategyRunner] {pyr_reason} — skipping entry for '{self.strategy_name}'")
+                return
+
             # Prop Firm Risk Guard: Daily Drawdown Circuit Breaker
             safe, reason, dd_details = self.check_drawdown_safety()
             if not safe:
@@ -780,6 +826,16 @@ class NativeStrategyRunner:
 
     async def _trigger_new_signal(self, sig: Dict[str, Any]) -> None:
         """Saves signal to store, alerts Telegram, plays sound, and broadcasts to UI."""
+        # Cross-Strategy Pyramiding Guard (double defense before order execution)
+        pyr_blocked, pyr_reason = self._is_pyramiding_blocked()
+        if pyr_blocked:
+            logger.warning(f"[NativeStrategyRunner] ORDER EXECUTION BLOCKED: {pyr_reason}")
+            sig["status"] = "BLOCKED_PYRAMIDING"
+            sig["exit_reason"] = pyr_reason
+            sig["annotation"] = f"Blocked: {pyr_reason}"
+            signal_store.add(sig)
+            return
+
         # Double defense: check drawdown safety before executing order
         safe, reason, dd_details = self.check_drawdown_safety()
         if not safe:
