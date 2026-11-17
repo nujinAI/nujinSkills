@@ -128,6 +128,17 @@ Simply describe your objective in plain language—the AI handles the research, 
 
 ---
 
+## ⚠️ Data Limitations & Single Source of Truth
+
+Out of the box, this engine runs **paper trading only** (no live order execution) and uses **`tradingview_websocket`** (`TradingViewWebSocket`) for **free, API-keyless** market data across Equities, FX, Futures, and Crypto. While this enables zero-config research and paper trading, users must be aware of the following limitations:
+
+- **Shallow Intraday History:** Unauthenticated TradingView WebSocket feeds are capped on historical bar depth (e.g., ~30 days on `5m` timeframes), which limits long-horizon intraday strategy discovery and out-of-sample validation.
+- **Paper Trading Only by Default:** `tradingview_websocket` is a market-data-only feed. Live order routing is not enabled out of the box—you must integrate your own broker/exchange API to execute real trades.
+- **Broker Integration & Single Source of Truth:** Once a broker is integrated (e.g., Alpaca, OANDA, Interactive Brokers, or Binance/Bybit for Crypto), its feed can be used directly by the system for both backtesting and live execution to guarantee 1:1 parity.
+- **Prop-Firm CFD Caveat:** Prop-firm CFD feeds are often synthetic or broker-specific and do not reflect true underlying market structure. When trading prop firms, **always discover and validate your mathematical edge on real exchange/institutional data (e.g., TradingView)**, and use the prop-firm broker strictly for **order execution**.
+
+---
+
 ## 📜 License & Philosophy
 
 `nujinSkills` is **free and open source**.
