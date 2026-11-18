@@ -6,6 +6,11 @@ description: >-
   investing) into mathematically verified systems using a 124-coordinate multi-scale mathematical
   basis grid, 5-slice Sub-Era Invariance, MFE/MAE plateau geometry optimization, pessimistic
   intrabar resolution, and the 8 Institutional Cynic Stress Gates.
+license: MIT
+compatibility: Requires python3 >= 3.10 with pandas, numpy, scipy, yfinance, and requests.
+metadata:
+  author: NujinAI
+  version: "1.0.0"
 ---
 
 # Skill: NujinSkills
