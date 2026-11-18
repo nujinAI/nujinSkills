@@ -100,16 +100,29 @@ Before any strategy is approved for deployment, it must survive the full adversa
 
 You do not need to run any scripts or know any quantitative commands yourself. The AI agent knows the entire framework through [`SKILL.md`](SKILL.md) and executes every step autonomously from A to Z.
 
-### 1. Start Here
-Download the repository or use the following command in your terminal:
+### 1. Install the Skill (Standardized)
+
+**Universal Agent Install (`skills.sh` — Antigravity, Claude Code, Cursor, Codex, OpenCode, Hermes):**
+```bash
+npx skills add nujinAI/nujinSkills
+```
+
+**OpenClaw / ClawHub:**
+```bash
+clawhub install nujinskills
+```
+
+<details>
+<summary>Alternative: Manual Clone (Secondary)</summary>
+
 ```bash
 git clone https://github.com/nujinAI/nujinSkills.git
 ```
+Then open the cloned folder in your AI coding environment (Antigravity, Claude Code, Cursor, or Windsurf).
 
-### 2. Open Your AI Agent in the Folder
-Open the project folder in your AI coding environment (Antigravity, Claude Code, Cursor, or Windsurf).
+</details>
 
-### 3. Tell the AI What You Need
+### 2. Tell the AI What You Need
 Simply describe your objective in plain language—the AI handles the research, mathematical anomaly discovery, strategy construction, 8-Gate stress testing, deployment, and live monitoring automatically:
 
 - **Prop-Firm Day Trading:**
