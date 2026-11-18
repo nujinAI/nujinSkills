@@ -112,6 +112,8 @@ npx skills add nujinAI/nujinSkills
 clawhub install nujinskills
 ```
 
+> **First-Run Setup:** On your first prompt, your AI agent will automatically create `.venv` and install `requirements.txt` (or ask once for permission to run it). No manual Python setup is required.
+
 <details>
 <summary>Alternative: Manual Clone (Secondary)</summary>
 
