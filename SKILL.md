@@ -85,11 +85,12 @@ Do NOT inspect internal engine mechanics (`server/`, `core/simulation.py`, `test
    ```bash
    python tools/run_backtest_audit.py --strategy <StrategyName>.py --days <DAYS>
    ```
-4. **If Rejected — Run ML Trade Autopsy (Zero Brute-Forcing):**
+4. **If Rejected — Run ML Trade Autopsy & Loop Autonomously (Zero Brute-Forcing):**
    ```bash
    python tools/autopsy_strategy.py --audit-json data/audit_report.json
    ```
-   Apply the exact mathematical coordinate gate (`--extra-filter-feature ...`) or synthesize the next verified anomaly rank (`--from-scan-rank 2`). Never manually guess parameter numbers.
+   Apply the exact mathematical coordinate gate (`--extra-filter-feature ...`) or synthesize the next verified anomaly rank (`--from-scan-rank 2`, `3`, ...), then re-run `tools/run_backtest_audit.py`.
+   - **Autonomous Completion Rule:** Do **NOT** stop or ask the user for permission to continue when gates fail. Keep iterating through the Autopsy → Refine/Next-Rank → Audit loop autonomously until **all 8 Cynic Gates PASS** (`APPROVED`) or all viable scan ranks are exhausted. Only present the final result to the user once the goal is achieved (or all candidates are empirically exhausted).
 
 ---
 
