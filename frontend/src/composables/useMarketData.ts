@@ -77,6 +77,17 @@ export function useMarketData() {
   };
 
   // Sync real-time ticks from WebSocket
+function timeframeToSeconds(tf: string): number {
+  const match = /^(\d+)([mhd])$/i.exec(tf.trim());
+  if (!match) return 60;
+  const val = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  if (unit === 'm') return val * 60;
+  if (unit === 'h') return val * 3600;
+  if (unit === 'd') return val * 86400;
+  return 60;
+}
+
   watch(latestMarketTick, (tick) => {
     if (!tick) return;
     const tickSym = (tick.symbol || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
@@ -89,24 +100,26 @@ export function useMarketData() {
       if (tick.candle && candles.value.length > 0) {
         const rawTickTime = Number(tick.candle.time || (tick.candle as any).timestamp);
         const tickTimeSec = rawTickTime > 1e11 ? Math.floor(rawTickTime / 1000) : rawTickTime;
+        const tfSec = timeframeToSeconds(currentTimeframe.value);
+        const bucketTimeSec = Math.floor(tickTimeSec / tfSec) * tfSec;
         const lastCandle = candles.value[candles.value.length - 1];
 
-        if (lastCandle && lastCandle.time === tickTimeSec) {
+        if (lastCandle && lastCandle.time === bucketTimeSec) {
           // Update current active bar
           lastCandle.high = Math.max(lastCandle.high, tick.candle.high);
           lastCandle.low = Math.min(lastCandle.low, tick.candle.low);
           lastCandle.close = tick.candle.close;
-          if (tick.candle.volume != null) {
+          if (tfSec === 60 && tick.candle.volume != null) {
             lastCandle.volume = tick.candle.volume;
           }
           // Trigger shallow/deep reactivity
           candles.value = [...candles.value];
-        } else if (lastCandle && tickTimeSec > lastCandle.time) {
+        } else if (lastCandle && bucketTimeSec > lastCandle.time) {
           // Append new bar
           candles.value = [
             ...candles.value,
             {
-              time: tickTimeSec,
+              time: bucketTimeSec,
               open: tick.candle.open,
               high: tick.candle.high,
               low: tick.candle.low,
