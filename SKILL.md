@@ -54,6 +54,7 @@ metadata:
 
 | Lifecycle Phase / Domain | Reference Guide (Load On Demand) |
 |---|---|
+| **Exact API Signatures, Engine Rules & CLI Flags** | [`references/api_cheatsheet.md`](references/api_cheatsheet.md) |
 | **4-Layer Craft & Pro Indicator Doctrine** | [`references/strategy_craft.md`](references/strategy_craft.md) |
 | **5-Phase Alpha Pipeline** | [`references/alpha_pipeline.md`](references/alpha_pipeline.md) |
 | **Pure Math Basis & Optional ML Scanner** | [`references/edge_discovery.md`](references/edge_discovery.md) |
@@ -65,9 +66,9 @@ metadata:
 
 ---
 
-## 3. Fast-Path CLI Toolkit (Black-Box Execution)
+## 3. Fast-Path CLI Toolkit & Context-Protection Law (STRICT)
 
-Do NOT inspect internal engine mechanics (`server/`, `core/simulation.py`, `tests/`) or archives. Treat the engine as a black box:
+**NEVER read `core/*.py`, `tools/*.py`, `server/`, `tests/`, or raw `data/*.json` files (`audit_report.json`, `latest_edge_scan.json`) during strategy work**—reading engine source blows up context and degrades reasoning focus. Use [`references/api_cheatsheet.md`](references/api_cheatsheet.md) (~80 lines), `<tool> --help`, or a 1-line `python -c "import inspect..."` lookup instead:
 
 1. **Research Market Microstructure (Strictly In-Sample):**
    ```bash

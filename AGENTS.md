@@ -49,6 +49,7 @@ Use standard CLI tools instead of inventing one-off scripts:
 
 ## 3. Autonomous Strategy Protocol Mandate
 - When requested to build or research a trading strategy, agents MUST follow the 5-Phase Protocol in [`SKILL.md`](SKILL.md) and [`references/strategy_craft.md`](references/strategy_craft.md).
+- **Context Protection (Zero Source-File Reading):** During strategy research/authoring, NEVER read `core/*.py`, `tools/*.py`, `server/`, `tests/`, or raw `data/*.json` files. Use [`references/api_cheatsheet.md`](references/api_cheatsheet.md) for all signatures, return schemas, and CLI flags.
 - NEVER audit, retrofit, or recycle existing strategies. Always research fresh In-Sample market data (`tools/validate_hypothesis.py --profile` and optionally `tools/scan_edge.py`) and pre-validate causality & friction clearance before auditing on Blind OOS.
 
 ---

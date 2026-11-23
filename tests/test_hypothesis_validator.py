@@ -129,3 +129,74 @@ def test_validate_strategy_in_sample_runs_cleanly():
     assert rep["causality"]["passed"] is True
     assert rep["verdict"] in ("READY_FOR_CYNIC_AUDIT", "NEEDS_REFINEMENT")
     assert "layer_diagnostics" in rep["in_sample_metrics"]
+
+
+def test_api_cheatsheet_drift_guard():
+    """Verifies every core function documented in references/api_cheatsheet.md exists and matches key args."""
+    import importlib
+    import inspect
+
+    expected = {
+        "core.indicators": {
+            "sma": ["series", "period"],
+            "ema": ["series", "period"],
+            "wma": ["series", "period"],
+            "hma": ["series", "period"],
+            "kama": ["series", "period"],
+            "rsi": ["series", "period"],
+            "macd": ["series", "fast", "slow", "signal"],
+            "stochastic": ["high", "low", "close", "k_period", "d_period"],
+            "roc": ["series", "period"],
+            "cci": ["high", "low", "close", "period"],
+            "williams_r": ["high", "low", "close", "period"],
+            "true_range": ["high", "low", "close"],
+            "atr": ["high", "low", "close", "period"],
+            "adx": ["high", "low", "close", "period"],
+            "bollinger_bands": ["series", "period", "std_dev"],
+            "keltner_channels": ["high", "low", "close", "period", "atr_mult"],
+            "donchian_channels": ["high", "low", "period", "causal"],
+            "supertrend": ["high", "low", "close", "period", "multiplier"],
+            "obv": ["close", "volume"],
+            "cmf": ["high", "low", "close", "volume", "period"],
+            "zscore": ["series", "period"],
+            "rolling_linreg_slope": ["series", "period"],
+            "hurst_proxy": ["close", "window"],
+            "rolling_vwap": ["close", "volume", "period"],
+            "compute_talib_token": ["df", "token"],
+            "ensure_dynamic_indicators": ["df", "expressions"],
+            "add_causal_mtf_features": ["df"],
+            "add_cross_asset_context": ["df", "benchmark_df", "window"],
+            "add_pandas_ta_suite": ["df"],
+        },
+        "core.market_structure": {
+            "detect_swing_points": ["df", "left_bars", "right_bars", "causal"],
+        },
+        "core.feature_factory": {
+            "compute_all_features": ["df"],
+            "compute_selected_features": ["df", "feature_names"],
+        },
+        "core.data": {
+            "fetch_ohlcv": ["symbol", "timeframe", "count", "period", "use_cache"],
+            "resolve_market_symbol": ["symbol"],
+        },
+        "core.friction": {
+            "resolve_asset_friction": ["symbol", "price"],
+            "get_roundtrip_friction": ["symbol", "price", "atr"],
+            "check_friction_hurdle": ["symbol", "entry_price", "stop_distance"],
+        },
+        "core.risk": {
+            "parse_prompt_to_risk": ["prompt", "active_balance"],
+            "calculate_position_units": ["dollar_risk_1r", "entry_price", "stop_loss"],
+        },
+    }
+
+    for mod_name, funcs in expected.items():
+        mod = importlib.import_module(mod_name)
+        for fn_name, expected_params in funcs.items():
+            fn = getattr(mod, fn_name, None)
+            assert fn is not None, f"Missing documented API: {mod_name}.{fn_name}"
+            actual_params = list(inspect.signature(fn).parameters.keys())
+            assert actual_params == expected_params, (
+                f"Signature drift in {mod_name}.{fn_name}: {actual_params} != {expected_params}"
+            )
+
