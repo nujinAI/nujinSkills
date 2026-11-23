@@ -157,12 +157,13 @@ Out of the box, this engine runs **paper trading only** (no live order execution
 
 Contributions of all kinds—quantitative research tools, causal indicators, bug fixes, tests, and documentation—are welcome! Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
 
-Every contributor whose pull request is merged is attributed here:
+Every contributor whose pull request is merged is credited below:
 
-<!-- Contributors are listed alphabetically by GitHub handle -->
-| Contributor | Contributions |
-| :--- | :--- |
-| *Be the first to contribute!* | *See [`CONTRIBUTING.md`](CONTRIBUTING.md) to get started.* |
+<p align="center">
+  <a href="https://github.com/nujinAI/nujinSkills/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=nujinAI/nujinSkills" alt="nujinSkills contributors" />
+  </a>
+</p>
 
 ---
 
