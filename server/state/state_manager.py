@@ -762,10 +762,10 @@ class StrategyRegistry:
                 break
 
         clean_up = clean.upper()
-        if any(k in clean_up for k in ["XAU", "GOLD"]):
-            symbol = "XAU/USD"
-        elif not symbol or symbol.lower() in ["pair", "symbol", "none", "self.symbol"] or symbol.startswith("self."):
-            if any(k in clean_up for k in ["MNQ", "NQ1", "NAS100", "QQQ"]):
+        if not symbol or symbol.lower() in ["pair", "symbol", "none", "self.symbol"] or symbol.startswith("self."):
+            if any(k in clean_up for k in ["XAU", "GOLD"]):
+                symbol = "XAU/USD"
+            elif any(k in clean_up for k in ["MNQ", "NQ1", "NAS100", "QQQ"]):
                 symbol = "CME_MINI:NQ1!"
             elif any(k in clean_up for k in ["SP500", "SPX", "US500", "ES1"]):
                 symbol = "S&P 500 (ES)"

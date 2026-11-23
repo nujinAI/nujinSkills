@@ -180,9 +180,9 @@ def test_api_cheatsheet_drift_guard():
             "resolve_market_symbol": ["symbol"],
         },
         "core.friction": {
-            "resolve_asset_friction": ["symbol", "price"],
-            "get_roundtrip_friction": ["symbol", "price", "atr"],
-            "check_friction_hurdle": ["symbol", "entry_price", "stop_distance"],
+            "resolve_asset_friction": ["symbol", "price", "friction_override"],
+            "get_roundtrip_friction": ["symbol", "price", "atr", "friction_override"],
+            "check_friction_hurdle": ["symbol", "entry_price", "stop_distance", "friction_override"],
         },
         "core.risk": {
             "parse_prompt_to_risk": ["prompt", "active_balance"],

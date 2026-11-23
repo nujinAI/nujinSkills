@@ -245,6 +245,7 @@ def compute_cpcv_and_rolling_wfo(
             "cpcv_median_oos_sharpe": 0.0,
             "pbo_estimate": 1.0,
             "rolling_wfo_positive_windows_pct": 0.0,
+            "cpcv_applied": False,
         }
 
     k = min(max(4, int(n_folds)), n // 6)
@@ -266,9 +267,11 @@ def compute_cpcv_and_rolling_wfo(
     if oos_sharpes:
         median_cpcv_sr = float(np.median(oos_sharpes))
         pbo = float(np.mean([1.0 if s <= 0.0 else 0.0 for s in oos_sharpes]))
+        cpcv_applied = True
     else:
         median_cpcv_sr = 0.0
         pbo = 1.0
+        cpcv_applied = False
 
     # Rolling Walk-Forward OOS sub-windows (4 non-overlapping OOS slices in the second half)
     wfo_slices = np.array_split(clean_r[n // 3 :], 4)
@@ -279,35 +282,52 @@ def compute_cpcv_and_rolling_wfo(
         "cpcv_median_oos_sharpe": round(median_cpcv_sr, 2),
         "pbo_estimate": round(pbo, 3),
         "rolling_wfo_positive_windows_pct": wfo_pos_pct,
+        "cpcv_applied": cpcv_applied,
     }
 
 
 def verify_oos_walkforward(returns, split: float = OOS_SPLIT,
-                           periods_per_year: int = PERIODS_PER_YEAR) -> dict:
+                           periods_per_year: int = PERIODS_PER_YEAR,
+                           min_oos_trades: int = MIN_OOS_TRADES,
+                           max_pbo: float = 0.50) -> dict:
     clean_r = _clean(returns)
-    if len(clean_r) < max(MIN_OOS_TRADES, MIN_TRADES_DSR):
+    if len(clean_r) < max(min_oos_trades, MIN_TRADES_DSR):
         return {"status": FAIL,
                 "reason": (f"Insufficient return samples for OOS walk-forward "
-                           f"(< {max(MIN_OOS_TRADES, MIN_TRADES_DSR)})"),
-                "sharpe_is": 0.0, "sharpe_oos": 0.0, "retention_pct": 0.0}
+                           f"({len(clean_r)} < {max(min_oos_trades, MIN_TRADES_DSR)})"),
+                "sharpe_is": 0.0, "sharpe_oos": 0.0, "retention_pct": 0.0,
+                "oos_trades": 0}
 
     split_idx = int(len(clean_r) * split)
     is_ret, oos_ret = clean_r[:split_idx], clean_r[split_idx:]
+    if len(oos_ret) < min_oos_trades:
+        return {
+            "status": FAIL,
+            "reason": f"Insufficient OOS trades ({len(oos_ret)} < {min_oos_trades} required)",
+            "sharpe_is": 0.0,
+            "sharpe_oos": 0.0,
+            "retention_pct": 0.0,
+            "oos_trades": int(len(oos_ret)),
+        }
+
     is_std, oos_std = np.std(is_ret), np.std(oos_ret)
     sr_is = float((np.mean(is_ret) / max(is_std, 1e-6)) * np.sqrt(periods_per_year))
     sr_oos = float((np.mean(oos_ret) / max(oos_std, 1e-6)) * np.sqrt(periods_per_year))
     retention = round((sr_oos / max(sr_is, 1e-6)) * 100.0, 1) if sr_is > 0 else 0.0
     cpcv_info = compute_cpcv_and_rolling_wfo(clean_r, periods_per_year=periods_per_year)
-    passed = (sr_oos > MIN_OOS_SR) and (retention >= MIN_OOS_RETENTION_PCT)
+    pbo_ok = (not cpcv_info.get("cpcv_applied", True)) or (cpcv_info["pbo_estimate"] < max_pbo)
+    passed = (sr_oos > MIN_OOS_SR) and (retention >= MIN_OOS_RETENTION_PCT) and pbo_ok
 
     return {
         "sharpe_is": round(sr_is, 2),
         "sharpe_oos": round(sr_oos, 2),
         "retention_pct": retention,
+        "oos_trades": int(len(oos_ret)),
         **cpcv_info,
         "status": PASS if passed else FAIL,
-        "reason": (f"IS Sharpe {sr_is:.2f} -> OOS Sharpe {sr_oos:.2f} "
-                   f"(Retention: {retention}%, CPCV SR: {cpcv_info['cpcv_median_oos_sharpe']:.2f}, PBO: {cpcv_info['pbo_estimate']:.2f})"),
+        "reason": (f"IS Sharpe {sr_is:.2f} -> OOS Sharpe {sr_oos:.2f} ({len(oos_ret)} OOS trades, "
+                   f"Retention: {retention}%, CPCV SR: {cpcv_info['cpcv_median_oos_sharpe']:.2f}, "
+                   f"PBO: {cpcv_info['pbo_estimate']:.2f} < {max_pbo:.2f})"),
     }
 
 
@@ -362,19 +382,32 @@ def verify_regime_survival(returns, regime_breakdown: dict | None = None) -> dic
 # ─────────────────────────────────────────────────────────────────────────────
 
 def verify_friction(returns, fee_bps: float = FEE_BPS,
-                    slippage_bps: float = SLIPPAGE_BPS) -> dict:
+                    slippage_bps: float = SLIPPAGE_BPS,
+                    returns_are_net: bool = False,
+                    avg_friction_bps: float | None = None) -> dict:
     clean_r = _clean(returns)
     if len(clean_r) == 0:
         return {"status": FAIL, "reason": "No trades"}
 
     friction_per_trade = (fee_bps + slippage_bps) / 10000.0
     net_mean = float(np.mean(clean_r) - friction_per_trade)
+    reported_bps = float(avg_friction_bps) if (returns_are_net and avg_friction_bps is not None) else (fee_bps + slippage_bps)
+    if net_mean > 0:
+        if returns_are_net:
+            if avg_friction_bps is not None:
+                reason = f"Net expectancy {net_mean:+.6f} (avg {avg_friction_bps:.1f} bps RT friction applied in fills)"
+            else:
+                reason = f"Net expectancy {net_mean:+.6f} (execution friction applied in fills)"
+        else:
+            reason = f"Net expectancy {net_mean:+.6f} after {fee_bps + slippage_bps:.1f} bps"
+    else:
+        reason = "Negative expectancy after friction"
+
     return {
-        "friction_bps": fee_bps + slippage_bps,
+        "friction_bps": round(reported_bps, 2),
         "net_mean_return": round(net_mean, 6),
         "status": PASS if net_mean > 0 else FAIL,
-        "reason": (f"Net expectancy {net_mean:+.6f} after {fee_bps + slippage_bps} bps"
-                   if net_mean > 0 else "Negative expectancy after friction"),
+        "reason": reason,
     }
 
 
@@ -557,7 +590,8 @@ def evaluate_gates(returns, n_trials: int = 40, strategy_name: str | None = None
                    regime_breakdown: dict | None = None,
                    metric_matrix=None, observed_sr: float | None = None,
                    returns_are_net: bool = False,
-                   max_mdd_99: float = MAX_MDD_99) -> dict:
+                   max_mdd_99: float = MAX_MDD_99,
+                   avg_friction_bps: float | None = None) -> dict:
     """
     Compute the complete canonical Cynic matrix from one return series.
 
@@ -582,7 +616,9 @@ def evaluate_gates(returns, n_trials: int = 40, strategy_name: str | None = None
         "gate_5_regime_survival": verify_regime_survival(
             returns, regime_breakdown=regime_breakdown),
         "gate_6_friction": verify_friction(returns, fee_bps=fee_bps,
-                                           slippage_bps=slippage_bps),
+                                           slippage_bps=slippage_bps,
+                                           returns_are_net=returns_are_net,
+                                           avg_friction_bps=avg_friction_bps),
         "gate_7_noise_jitter": verify_noise_jitter(returns),
         "gate_8_equity_linearity": compute_equity_linearity(returns),
     }

@@ -23,7 +23,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.data import fetch_ohlcv, resolve_market_symbol
+from core.data import fetch_ohlcv, resolve_market_symbol, bars_for_days
 from core.discovery import mine_conditional_anomalies
 
 
@@ -43,16 +43,8 @@ def parse_args():
 
 
 def _bars_for_days(tf: str, days: int) -> int:
-    tf_clean = tf.strip().lower()
-    if tf_clean.endswith("m"):
-        mins = max(1, int(tf_clean[:-1] or 15))
-        bars_per_day = 1440 // mins
-    elif tf_clean.endswith("h"):
-        hrs = max(1, int(tf_clean[:-1] or 1))
-        bars_per_day = 24 // hrs
-    else:
-        bars_per_day = 1
-    return max(800, min(6000, int(days * bars_per_day * 1.15)))
+    """Delegates to core.data.bars_for_days (SSOT matching backtest_engine.py)."""
+    return bars_for_days(tf, days, buffer=1.15, min_bars=500, max_bars=15000)
 
 
 def main():
@@ -106,6 +98,7 @@ def main():
     elapsed = round(time.time() - t0, 2)
     report["timeframe"] = args.tf
     report["days"] = args.days
+    report["target_mdd99"] = target_mdd99
     report["blind_oos_bars_locked"] = len(df) - len(df_is)
     report["cpu_elapsed_sec"] = elapsed
 
@@ -116,8 +109,10 @@ def main():
 
     out_path = os.path.join(PROJECT_ROOT, args.output) if not os.path.isabs(args.output) else args.output
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "w") as f:
+    tmp_out = f"{out_path}.{os.getpid()}.tmp"
+    with open(tmp_out, "w") as f:
         json.dump(report, f, indent=2)
+    os.replace(tmp_out, out_path)
 
     if args.json:
         print(json.dumps(report, indent=2))

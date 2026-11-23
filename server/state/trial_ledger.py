@@ -37,16 +37,15 @@ MIN_TRIALS = 2
 def resolve_ledger_path(path: Optional[str] = None, session_id: Optional[str] = None) -> str:
     """
     Resolve the trial ledger path.
-    - If `path` is explicitly provided (and not None), use `path`.
+    - If a custom `path` (different from the global default `LEDGER_PATH`) is explicitly provided, use it.
     - If `session_id` is provided, use that session's isolated `trial_ledger.jsonl`.
+    - Otherwise, if an active session exists, use that session's `trial_ledger.jsonl`.
     - Otherwise default to `LEDGER_PATH`.
     """
     if path is not None and path != LEDGER_PATH:
         return path
     if session_id:
         return get_session_paths(session_id=session_id, create_if_missing=True)["trial_ledger"]
-    if path is not None:
-        return path
     active_sid = get_active_session_id()
     if active_sid:
         return get_session_paths(session_id=active_sid, create_if_missing=True)["trial_ledger"]
@@ -67,7 +66,7 @@ def record_trial(
     path: str = LEDGER_PATH,
     session_id: Optional[str] = None,
 ) -> dict:
-    """Append one evaluated hypothesis. Returns the recorded entry."""
+    """Append one evaluated hypothesis atomically under a file lock. Returns the recorded entry."""
     target_path = resolve_ledger_path(path=path, session_id=session_id)
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -78,8 +77,20 @@ def record_trial(
         "metrics": metrics or {},
     }
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    line = json.dumps(entry, default=str) + "\n"
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
     with open(target_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, default=str) + "\n")
+        if fcntl is not None:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.write(line)
+            f.flush()
+        finally:
+            if fcntl is not None:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     return entry
 
 

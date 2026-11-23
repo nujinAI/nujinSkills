@@ -269,25 +269,34 @@ def main():
         signal_logic="\n".join(base_lines),
     )
 
-    alpha_dir = os.path.join(WORKSPACE_ROOT, "zillionsAlpha", "strategies")
-    os.makedirs(alpha_dir, exist_ok=True)
-    strategy_path = os.path.join(alpha_dir, f"{args.name}.py")
-
-    with open(strategy_path, "w") as f:
-        f.write(content)
-    print(f"[+] Created ML-discovered strategy source: {strategy_path}")
-    print(f"    Rule   : {rule_desc}")
-    print(f"    Geometry: SL={args.sl_mult}x ATR | TP={args.tp_mult}x ATR | 1R Risk={args.risk_pct*100:.2f}%")
-
     skills_strat_dir = os.path.join(PROJECT_ROOT, "strategies")
     os.makedirs(skills_strat_dir, exist_ok=True)
-    symlink_path = os.path.join(skills_strat_dir, f"{args.name}.py")
-    if os.path.exists(symlink_path) or os.path.islink(symlink_path):
-        os.remove(symlink_path)
+    sibling_alpha_root = os.path.join(WORKSPACE_ROOT, "zillionsAlpha")
 
-    rel_source = os.path.relpath(strategy_path, skills_strat_dir)
-    os.symlink(rel_source, symlink_path)
-    print(f"[+] Symlinked to engine: {symlink_path}")
+    if os.path.isdir(sibling_alpha_root):
+        alpha_dir = os.path.join(sibling_alpha_root, "strategies")
+        os.makedirs(alpha_dir, exist_ok=True)
+        strategy_path = os.path.join(alpha_dir, f"{args.name}.py")
+        with open(strategy_path, "w") as f:
+            f.write(content)
+        print(f"[+] Created ML-discovered strategy source: {strategy_path}")
+        print(f"    Rule   : {rule_desc}")
+        print(f"    Geometry: SL={args.sl_mult}x ATR | TP={args.tp_mult}x ATR | 1R Risk={args.risk_pct*100:.2f}%")
+
+        symlink_path = os.path.join(skills_strat_dir, f"{args.name}.py")
+        if os.path.exists(symlink_path) or os.path.islink(symlink_path):
+            os.remove(symlink_path)
+        rel_source = os.path.relpath(strategy_path, skills_strat_dir)
+        os.symlink(rel_source, symlink_path)
+        print(f"[+] Symlinked to engine: {symlink_path}")
+    else:
+        strategy_path = os.path.join(skills_strat_dir, f"{args.name}.py")
+        with open(strategy_path, "w") as f:
+            f.write(content)
+        print(f"[+] Created ML-discovered strategy source: {strategy_path}")
+        print(f"    Rule   : {rule_desc}")
+        print(f"    Geometry: SL={args.sl_mult}x ATR | TP={args.tp_mult}x ATR | 1R Risk={args.risk_pct*100:.2f}%")
+
     print(f"[+] Ready to audit: python tools/run_backtest_audit.py --strategy {args.name}.py --days 30")
 
 

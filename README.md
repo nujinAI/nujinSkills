@@ -153,6 +153,19 @@ Out of the box, this engine runs **paper trading only** (no live order execution
 
 ---
 
+## 🤝 Contributing & Contributors
+
+Contributions of all kinds—quantitative research tools, causal indicators, bug fixes, tests, and documentation—are welcome! Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
+
+Every contributor whose pull request is merged is attributed here:
+
+<!-- Contributors are listed alphabetically by GitHub handle -->
+| Contributor | Contributions |
+| :--- | :--- |
+| *Be the first to contribute!* | *See [`CONTRIBUTING.md`](CONTRIBUTING.md) to get started.* |
+
+---
+
 ## 📜 License & Philosophy
 
 `nujinSkills` is **free and open source**.

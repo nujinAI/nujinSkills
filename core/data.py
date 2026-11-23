@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 
 logger = logging.getLogger("DataManager")
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MARKET_DIR = os.path.join(_ROOT, "data", "market")
 CATALOG_PATH = os.path.join(MARKET_DIR, "catalog.json")
 
@@ -293,6 +293,7 @@ def get_oanda_spot_quote() -> Dict[str, Any]:
                 "source": "oanda_spot"
             }
     except Exception as e:
+        clean_sym = "OANDA:XAUUSD"
         logger.error(f"[DataManager] Failed to fetch live quote for {clean_sym}: {e}")
         # Check if authentic historical cache exists to get the latest real recorded bar
         csv_path = get_market_dataset_path(clean_sym, "1m")
@@ -324,54 +325,116 @@ def get_oanda_spot_quote() -> Dict[str, Any]:
 
 
 def _tf_to_tv_resolution(timeframe: str) -> str:
-    """Converts timeframe string (1m, 5m, 15m, 1h, 1d) to TradingView resolution code."""
-    tf = (timeframe or "1m").lower().strip()
-    if tf in ("1", "1m"):
-        return "1"
-    elif tf in ("3", "3m"):
-        return "3"
-    elif tf in ("5", "5m"):
-        return "5"
-    elif tf in ("15", "15m"):
-        return "15"
-    elif tf in ("30", "30m"):
-        return "30"
-    elif tf in ("60", "1h", "60m"):
-        return "60"
-    elif tf in ("240", "4h"):
-        return "240"
-    elif tf in ("d", "1d", "daily"):
+    """Dynamically converts any timeframe string (1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w) to TradingView resolution code."""
+    tf = (timeframe or "15m").lower().strip()
+    if tf in ("d", "1d", "daily", "d1"):
         return "1D"
+    if tf in ("w", "1w", "weekly", "w1"):
+        return "1W"
+    m = _re.fullmatch(r"(\d+)\s*([mhdw])", tf)
+    if m:
+        val, unit = int(m.group(1)), m.group(2)
+        if unit == "m":
+            return str(max(1, val))
+        if unit == "h":
+            return str(max(1, val) * 60)
+        if unit == "d":
+            return f"{max(1, val)}D"
+        if unit == "w":
+            return f"{max(1, val)}W"
+    # Handle reversed notation like m5, h1, h4, d1
+    m_rev = _re.fullmatch(r"([mhdw])(\d+)", tf)
+    if m_rev:
+        unit, val = m_rev.group(1), int(m_rev.group(2))
+        if unit == "m":
+            return str(max(1, val))
+        if unit == "h":
+            return str(max(1, val) * 60)
+        if unit == "d":
+            return f"{max(1, val)}D"
+        if unit == "w":
+            return f"{max(1, val)}W"
+    if tf.isdigit():
+        return tf
     return "15"
 
 
 def _timeframe_to_seconds(timeframe: str) -> int:
-    tf = (timeframe or "1m").lower().strip()
-    if tf == "1m":
-        return 60
-    elif tf == "3m":
-        return 180
-    elif tf == "5m":
-        return 300
-    elif tf == "15m":
-        return 900
-    elif tf == "30m":
-        return 1800
-    elif tf in ("1h", "60m"):
-        return 3600
-    elif tf == "4h":
-        return 14400
-    elif tf in ("1d", "d"):
+    """Dynamically converts any timeframe string (e.g. 1m, 30m, 2h, 4h, 1d, 1w) into seconds."""
+    tf = (timeframe or "15m").lower().strip()
+    if tf in ("d", "daily"):
         return 86400
+    if tf in ("w", "weekly"):
+        return 604800
+    m = _re.fullmatch(r"(\d+)\s*([mhdw])", tf)
+    if not m:
+        m_rev = _re.fullmatch(r"([mhdw])(\d+)", tf)
+        if m_rev:
+            unit, val = m_rev.group(1), int(m_rev.group(2))
+        elif tf.isdigit():
+            unit, val = "m", int(tf)
+        else:
+            return 900
+    else:
+        val, unit = int(m.group(1)), m.group(2)
+
+    val = max(1, val)
+    if unit == "m":
+        return val * 60
+    if unit == "h":
+        return val * 3600
+    if unit == "d":
+        return val * 86400
+    if unit == "w":
+        return val * 604800
     return 900
+
+
+def parse_period_to_days(period: Optional[str]) -> Optional[int]:
+    """Parses human period strings ('30d', '12w', '6mo', '1y') into calendar days."""
+    if not period:
+        return None
+    p = str(period).strip().lower()
+    m = _re.fullmatch(r"(\d+)\s*(d|day|days|w|wk|week|weeks|mo|mon|month|months|y|yr|year|years)", p)
+    if not m:
+        return None
+    val = int(m.group(1))
+    unit = m.group(2)
+    if unit.startswith("d"):
+        return val
+    if unit.startswith("w"):
+        return val * 7
+    if unit.startswith("mo"):
+        return val * 30
+    if unit.startswith("y"):
+        return val * 365
+    return None
+
+
+def bars_for_days(
+    timeframe: str,
+    days: int,
+    buffer: float = 1.15,
+    min_bars: int = 500,
+    max_bars: int = 15000,
+) -> int:
+    """
+    Single Source of Truth bar-count calculator shared by scan_edge.py and backtest_engine.py.
+    Dynamically derives bar depth from `_timeframe_to_seconds` for ANY timeframe (30m, 2h, 4h, 1d, etc.).
+    """
+    tf_sec = max(60, _timeframe_to_seconds(timeframe))
+    days_req = max(1, int(days or 30))
+    bars_per_day = 86400.0 / float(tf_sec)
+    raw_bars = int(days_req * bars_per_day * float(buffer))
+    return max(int(min_bars), min(int(max_bars), raw_bars))
 
 
 def resample_candles(candles: List[Dict[str, Any]], target_timeframe: str) -> List[Dict[str, Any]]:
     """
     Vectorized, deterministic candlestick resampling from base bars (e.g. 1m)
-    to any higher timeframe (3m, 5m, 15m, 1h, 4h, 1d).
+    to any higher timeframe (3m, 5m, 15m, 1h, 2h, 4h, 1d).
     Strictly aligns candle time boundaries to epoch modulo: (t // step_sec) * step_sec.
-    Zero lookahead bias and zero synthetic noise.
+    Preserves full float price precision (never truncates FX or low-priced assets to 2 decimals).
     """
     if not candles:
         return []
@@ -386,11 +449,11 @@ def resample_candles(candles: List[Dict[str, Any]], target_timeframe: str) -> Li
         if raw_t <= 0:
             continue
         bucket_t = (raw_t // step_sec) * step_sec
-        o = round(float(c["open"]), 2)
-        h = round(float(c["high"]), 2)
-        l = round(float(c["low"]), 2)
-        cl = round(float(c["close"]), 2)
-        v = round(float(c.get("volume", 0.0)), 2)
+        o = float(c["open"])
+        h = float(c["high"])
+        l = float(c["low"])
+        cl = float(c["close"])
+        v = float(c.get("volume", 0.0))
 
         if bucket_t not in buckets:
             buckets[bucket_t] = {
@@ -407,15 +470,14 @@ def resample_candles(candles: List[Dict[str, Any]], target_timeframe: str) -> Li
             b["high"] = max(b["high"], h)
             b["low"] = min(b["low"], l)
             b["close"] = cl
-            b["volume"] = round(b["volume"] + v, 2)
+            b["volume"] = b["volume"] + v
 
     return list(buckets.values())
 
 
 def fetch_candles_via_tv(symbol: str, timeframe: str = "1m", count: int = 2000) -> List[Dict[str, Any]]:
     """
-    Pulls authentic institutional historical bars using TradingViewWebSocket.
-    Supported symbols: 'OANDA:XAUUSD', 'CME_MINI:ES1!', 'BINANCE:BTCUSDT'.
+    Pulls authentic institutional historical bars using TradingViewWebSocket for ANY symbol/timeframe.
     """
     if not HAS_TV_WS:
         return []
@@ -434,18 +496,17 @@ def fetch_candles_via_tv(symbol: str, timeframe: str = "1m", count: int = 2000) 
             return []
 
         candles = []
-        prec = get_market_price_precision(tv_sym)
         for b in raw_bars:
             v = b.get("v", [])
             if len(v) >= 5:
                 candles.append({
                     "time": int(v[0]),
                     "timestamp": int(v[0]),
-                    "open": round(float(v[1]), prec),
-                    "high": round(float(v[2]), prec),
-                    "low": round(float(v[3]), prec),
-                    "close": round(float(v[4]), prec),
-                    "volume": round(float(v[5] or 10.0), 2)
+                    "open": float(v[1]),
+                    "high": float(v[2]),
+                    "low": float(v[3]),
+                    "close": float(v[4]),
+                    "volume": float(v[5] or 0.0)
                 })
 
         logger.info(f"[DataManager] Successfully received {len(candles)} authentic bars for {tv_sym}")
@@ -456,39 +517,49 @@ def fetch_candles_via_tv(symbol: str, timeframe: str = "1m", count: int = 2000) 
 
 
 def _save_canonical_and_legacy(symbol: str, timeframe: str, df: pd.DataFrame, legacy_path: Optional[str] = None, source: str = "live") -> None:
-    """Persists OHLCV DataFrame to the canonical `data/market/<SLUG>_<TF>.csv` store and updates catalog."""
+    """Persists OHLCV DataFrame atomically under a per-dataset file lock and updates catalog."""
+    slug = canonical_market_slug(symbol)
+    tf = (timeframe or "15m").lower().strip()
     canon_path = get_market_dataset_path(symbol, timeframe, check_legacy=False)
     os.makedirs(os.path.dirname(canon_path), exist_ok=True)
 
-    # Protect deep historical datasets from being truncated by short live slices:
-    if os.path.exists(canon_path):
-        try:
-            df_existing = pd.read_csv(canon_path)
-            if not df_existing.empty:
-                df_merged = pd.concat([df_existing, df], ignore_index=True)
-                df_merged.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
-                df_merged.sort_values(by="timestamp", inplace=True)
-                df = df_merged
-        except Exception:
-            pass
+    with _market_lock(f".{slug}_{tf}.lock"):
+        # Protect deep historical datasets from being truncated by short live slices:
+        if os.path.exists(canon_path):
+            try:
+                df_existing = pd.read_csv(canon_path)
+                if not df_existing.empty:
+                    df_merged = pd.concat([df_existing, df], ignore_index=True)
+                    df_merged.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+                    df_merged.sort_values(by="timestamp", inplace=True)
+                    df = df_merged
+            except Exception:
+                pass
 
-    df.to_csv(canon_path, index=False)
+        tmp_canon = f"{canon_path}.{os.getpid()}.tmp"
+        df.to_csv(tmp_canon, index=False)
+        os.replace(tmp_canon, canon_path)
+
+        if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(canon_path):
+            try:
+                os.makedirs(os.path.dirname(legacy_path), exist_ok=True)
+                df_leg = df
+                if os.path.exists(legacy_path):
+                    try:
+                        df_leg_existing = pd.read_csv(legacy_path)
+                        if not df_leg_existing.empty:
+                            df_leg_merged = pd.concat([df_leg_existing, df], ignore_index=True).drop_duplicates(subset=["timestamp"], keep="last")
+                            df_leg_merged.sort_values(by="timestamp", inplace=True)
+                            df_leg = df_leg_merged
+                    except Exception:
+                        pass
+                tmp_leg = f"{legacy_path}.{os.getpid()}.tmp"
+                df_leg.to_csv(tmp_leg, index=False)
+                os.replace(tmp_leg, legacy_path)
+            except Exception:
+                pass
+
     update_market_catalog(symbol, timeframe, canon_path, df, source=source)
-    if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(canon_path):
-        try:
-            os.makedirs(os.path.dirname(legacy_path), exist_ok=True)
-            if os.path.exists(legacy_path):
-                try:
-                    df_leg_existing = pd.read_csv(legacy_path)
-                    if not df_leg_existing.empty:
-                        df_leg_merged = pd.concat([df_leg_existing, df], ignore_index=True).drop_duplicates(subset=["timestamp"], keep="last")
-                        df_leg_merged.sort_values(by="timestamp", inplace=True)
-                        df = df_leg_merged
-                except Exception:
-                    pass
-            df.to_csv(legacy_path, index=False)
-        except Exception:
-            pass
 
 
 def fetch_real_oanda_candles(interval: str = "1m", count: int = 2880, force_refresh: bool = False) -> List[Dict[str, Any]]:
@@ -780,7 +851,11 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
 
     # 1. Check local disk CSV if available
     csv_path = get_market_dataset_path(symbol, interval)
-    legacy_path = os.path.join(_ROOT, "data", "candles_15m.csv") if interval == "15m" else os.path.join(_ROOT, "data", f"btc_candles_{interval}.csv")
+    # Only write legacy BTC filenames when the symbol actually IS BTCUSDT (never clobber BTC with ETH/SOL/etc.)
+    if clean_sym == "BINANCE:BTCUSDT":
+        legacy_path = os.path.join(_ROOT, "data", "candles_15m.csv") if interval == "15m" else os.path.join(_ROOT, "data", f"btc_candles_{interval}.csv")
+    else:
+        legacy_path = None
     if os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path)
@@ -792,11 +867,11 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
                     {
                         "time": int(r.get("timestamp", r.get("time", 0))),
                         "timestamp": int(r.get("timestamp", r.get("time", 0))),
-                        "open": round(float(r["open"]), 2),
-                        "high": round(float(r["high"]), 2),
-                        "low": round(float(r["low"]), 2),
-                        "close": round(float(r["close"]), 2),
-                        "volume": round(float(r.get("volume", 10.0)), 4)
+                        "open": float(r["open"]),
+                        "high": float(r["high"]),
+                        "low": float(r["low"]),
+                        "close": float(r["close"]),
+                        "volume": float(r.get("volume", 0.0))
                     }
                     for r in records
                 ]
@@ -810,20 +885,13 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
             df_fresh = pd.DataFrame(fresh)
             if "time" in df_fresh.columns and "timestamp" not in df_fresh.columns:
                 df_fresh.rename(columns={"time": "timestamp"}, inplace=True)
-            if os.path.exists(csv_path):
-                df_old = pd.read_csv(csv_path)
-                df_merged = pd.concat([df_old, df_fresh], ignore_index=True)
-                df_merged.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
-                df_merged.sort_values(by="timestamp", inplace=True)
-            else:
-                df_merged = df_fresh
-            _save_canonical_and_legacy(symbol, interval, df_merged, legacy_path, source="binance_tv")
+            _save_canonical_and_legacy(symbol, interval, df_fresh, legacy_path, source="binance_tv")
         except Exception:
             pass
         return fresh[-count:] if count else fresh
 
-    # 3. Direct Binance REST API fallback
-    pair = clean_sym.replace("BINANCE:", "").upper()
+    # 3. Direct Binance REST API fallback (full float precision — never truncate to 2 decimals)
+    pair = clean_sym.split(":", 1)[1].upper() if ":" in clean_sym else clean_sym.upper()
     url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={interval}&limit={min(1000, count)}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -833,11 +901,11 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
                 {
                     "time": int(item[0] // 1000),
                     "timestamp": int(item[0] // 1000),
-                    "open": round(float(item[1]), 2),
-                    "high": round(float(item[2]), 2),
-                    "low": round(float(item[3]), 2),
-                    "close": round(float(item[4]), 2),
-                    "volume": round(float(item[5]), 4)
+                    "open": float(item[1]),
+                    "high": float(item[2]),
+                    "low": float(item[3]),
+                    "close": float(item[4]),
+                    "volume": float(item[5])
                 }
                 for item in raw
             ]
@@ -856,11 +924,11 @@ def fetch_real_binance_klines(symbol: str = "BTC/USDT", interval: str = "15m", c
             {
                 "time": int(r.get("timestamp", r.get("time", 0))),
                 "timestamp": int(r.get("timestamp", r.get("time", 0))),
-                "open": round(float(r["open"]), 2),
-                "high": round(float(r["high"]), 2),
-                "low": round(float(r["low"]), 2),
-                "close": round(float(r["close"]), 2),
-                "volume": round(float(r.get("volume", 10.0)), 4)
+                "open": float(r["open"]),
+                "high": float(r["high"]),
+                "low": float(r["low"]),
+                "close": float(r["close"]),
+                "volume": float(r.get("volume", 0.0))
             }
             for r in records
         ]
@@ -878,14 +946,6 @@ def sync_30d_candles(symbol: str = "BTC/USDT", output_path: str = "", timeframe:
         df = pd.DataFrame(candles)
         if "time" in df.columns and "timestamp" not in df.columns:
             df.rename(columns={"time": "timestamp"}, inplace=True)
-        if os.path.exists(output_path):
-            try:
-                old_df = pd.read_csv(output_path)
-                df = pd.concat([old_df, df]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
-            except Exception:
-                pass
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        df.to_csv(output_path, index=False)
         _save_canonical_and_legacy(symbol, timeframe, df, output_path, source="sync_30d")
         logger.info(f"[DataManager] Synchronized {output_path} with {len(df)} authentic candles")
     return output_path
@@ -900,28 +960,46 @@ def sync_xauusd_scalp_candles(output_path: str = "") -> str:
         df = pd.DataFrame(candles)
         if "time" in df.columns and "timestamp" not in df.columns:
             df.rename(columns={"time": "timestamp"}, inplace=True)
-        if os.path.exists(output_path):
-            try:
-                old_df = pd.read_csv(output_path)
-                clean_old = old_df[old_df.get("volume", 10.0) > 1.5]
-                df = pd.concat([clean_old, df]).drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
-            except Exception:
-                pass
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        df.to_csv(output_path, index=False)
         _save_canonical_and_legacy("XAU/USD", "1m", df, output_path, source="sync_xauusd_1m")
         logger.info(f"[DataManager] Synchronized {output_path} with {len(df)} authentic 1m OANDA Gold candles")
     return output_path
 
 
 def fetch_ohlcv(symbol: str, timeframe: str = "15m", count: int = 1500, period: Optional[str] = None, use_cache: bool = True):
-    """Unified SSOT candle fetcher with dynamic period and cache support."""
+    """Unified SSOT candle fetcher with dynamic period, timeframe, and disk-cache support."""
     resolved = resolve_market_symbol(symbol)
-    candles = fetch_candles_via_tv(resolved, timeframe, count=count)
-    if not candles and ("XAU" in resolved.upper() or "GOLD" in resolved.upper()):
-        candles = fetch_real_broker_spot_gold_candles(interval=timeframe, count=min(count, 1000))
-    if not candles and any(k in resolved.upper() for k in ["BTC", "ETH", "SOL", "USDT"]):
-        candles = fetch_real_binance_klines(symbol=symbol, interval=timeframe, count=count)
+    eff_count = int(count) if count else 1500
+    period_days = parse_period_to_days(period)
+    if period_days is not None:
+        period_bars = bars_for_days(timeframe, period_days)
+        eff_count = max(eff_count, period_bars)
+
+    candles = fetch_candles_via_tv(resolved, timeframe, count=eff_count)
+    if not candles and resolved == "OANDA:XAUUSD":
+        candles = fetch_real_oanda_candles(interval=timeframe, count=eff_count)
+    if not candles and (resolved.startswith("BINANCE:") or resolved.endswith(("USDT", "USDC", "BUSD"))):
+        candles = fetch_real_binance_klines(symbol=resolved, interval=timeframe, count=eff_count)
+    if not candles:
+        # Check canonical local cache before giving up
+        csv_path = get_market_dataset_path(resolved, timeframe, check_legacy=True)
+        if os.path.exists(csv_path):
+            try:
+                df_disk = pd.read_csv(csv_path)
+                if not df_disk.empty:
+                    df_disk = df_disk.tail(eff_count).copy()
+                    ts_col = "timestamp" if "timestamp" in df_disk.columns else ("time" if "time" in df_disk.columns else None)
+                    if ts_col and use_cache:
+                        df_disk.index = pd.to_datetime(df_disk[ts_col], unit="s", utc=True)
+                        df_disk.index.name = "dt"
+                    return df_disk if use_cache else df_disk.to_dict(orient="records")
+            except Exception:
+                pass
+        if not HAS_TV_WS:
+            logger.error(
+                f"[DataManager] Cannot fetch '{resolved}' ({timeframe}): `tradingview_websocket` is not installed "
+                "and no local cache exists. Install `tradingview_websocket` (`pip install -r requirements.txt`)."
+            )
+
     if candles and use_cache:
         try:
             df = pd.DataFrame(candles)

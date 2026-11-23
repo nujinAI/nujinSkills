@@ -7,8 +7,23 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 import numpy as np
 import pandas as pd
-from core.friction import get_roundtrip_friction
+from core.friction import get_roundtrip_friction, compute_carry_cost
 from core.analytics import compute_trade_records_summary
+
+
+def resolve_strategy_close_eod(strat_inst: Any = None, symbol: Optional[str] = None, timeframe: Optional[str] = None) -> bool:
+    """
+    Universal, unbiased EOD exit resolver:
+      - If the strategy explicitly declares `close_eod`, honor it verbatim.
+      - Otherwise default to False (never silently force a 21:00 UTC exit on 24/7 crypto,
+        swing strategies, or traders who did not opt into intraday EOD flattening).
+    """
+    if strat_inst is not None and hasattr(strat_inst, "close_eod"):
+        val = getattr(strat_inst, "close_eod")
+        if val is not None:
+            return bool(val)
+    return False
+
 
 @dataclass
 class TradeRecord:
@@ -35,7 +50,10 @@ def run_discrete_simulation(
     max_daily_losses: int = 2,
     daily_profit_cap: Optional[float] = None,
     max_hold_bars: int = 24,
-    close_eod: bool = True
+    close_eod: bool = False,
+    eod_close_hour_utc: int = 21,
+    daily_carry_bps: float = 0.0,
+    friction_override: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """
     Simulates trades bar-by-bar against execution geometry with pessimistic resolution.
@@ -118,15 +136,19 @@ def run_discrete_simulation(
                 exit_triggered = True
                 exit_price = c
                 exit_reason = "TIME_STOP"
-            elif close_eod and hasattr(bar_time, 'hour') and bar_time.hour >= 21:
+            elif close_eod and hasattr(bar_time, 'hour') and bar_time.hour >= eod_close_hour_utc:
                 exit_triggered = True
                 exit_price = c
                 exit_reason = "EOD"
 
             if exit_triggered:
                 gross_diff = (exit_price - pos['entry_price']) * direction
-                friction = get_roundtrip_friction(symbol, exit_price, atr)
-                net_price_diff = gross_diff - friction
+                friction = get_roundtrip_friction(symbol, exit_price, atr, friction_override=friction_override)
+                carry = 0.0
+                if daily_carry_bps > 0.0 and hasattr(bar_time, "timestamp") and hasattr(pos['entry_time'], "timestamp"):
+                    holding_hours = max(0.0, (bar_time.timestamp() - pos['entry_time'].timestamp()) / 3600.0)
+                    carry = compute_carry_cost(exit_price, holding_hours, direction, daily_carry_bps=daily_carry_bps)
+                net_price_diff = gross_diff - friction - carry
 
                 pnl_dollars = net_price_diff * pos['units']
                 pnl_r = pnl_dollars / dollar_risk_1r
@@ -214,7 +236,7 @@ def run_discrete_simulation(
 
                     if exit_triggered:
                         gross_diff = (exit_price - pos['entry_price']) * p_dir
-                        friction = get_roundtrip_friction(symbol, exit_price, atr)
+                        friction = get_roundtrip_friction(symbol, exit_price, atr, friction_override=friction_override)
                         net_price_diff = gross_diff - friction
 
                         pnl_dollars = net_price_diff * pos['units']

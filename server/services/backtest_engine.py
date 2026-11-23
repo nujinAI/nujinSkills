@@ -13,13 +13,15 @@ import pandas as pd
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
+import contextlib
 from server.state_manager import state_manager, strategy_registry
 from server import data_manager
 from server.cynic_gates import compute_dsr, verify_monte_carlo, evaluate_gates
 from server.trial_ledger import record_trial, n_trials_for_dsr
-from server.constants import trade_annualization_factor
-from core.friction import resolve_asset_friction
-from core.simulation import run_discrete_simulation
+from server.constants import trade_annualization_factor, MAX_MDD_99
+from core.friction import get_roundtrip_friction
+from core.simulation import run_discrete_simulation, resolve_strategy_close_eod
+from core.data import bars_for_days, get_market_price_precision
 from core.regimes import classify_market_regimes, compute_regime_breakdown
 from core.analytics import (
     compute_summary_metrics,
@@ -117,18 +119,84 @@ def _derive_dataset_time_period(
     }
 
 
+@contextlib.contextmanager
+def _audit_lock(lock_path: str):
+    """Advisory exclusive lock protecting shared data/ files during concurrent audits."""
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    fh = open(lock_path, "a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            fh.close()
+
+
+def _resolve_effective_mdd(max_mdd: Optional[float], strat_inst: Any = None) -> float:
+    """Resolves MDD99 ceiling dynamically: explicit arg -> strategy attribute -> NUJIN_MAX_MDD_99 env -> default MAX_MDD_99."""
+    if max_mdd is not None and float(max_mdd) > 0:
+        return float(max_mdd)
+    if strat_inst is not None:
+        strat_mdd = getattr(strat_inst, "max_mdd", getattr(strat_inst, "max_mdd_99", None))
+        if strat_mdd is not None and float(strat_mdd) > 0:
+            return float(strat_mdd)
+    env_mdd = os.environ.get("NUJIN_MAX_MDD_99")
+    if env_mdd:
+        try:
+            val = float(env_mdd)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return float(MAX_MDD_99)
+
+
 def run_real_backtest(
     strategy_name: str = "",
     save_as_active: bool = False,
     timeframe_override: Optional[str] = None,
     days: Optional[int] = None,
-    account_size: Optional[float] = None
+    account_size: Optional[float] = None,
+    max_mdd: Optional[float] = None,
+    run_dir: Optional[str] = None,
 ) -> dict:
     """
     Executes real quantitative dual-directional (LONG & SHORT) backtest and DSR cynic audit.
     Zero hardcoded strategy logic: dynamically evaluates strategy definitions and rules
     loaded from strategies/*.py, data/strategies.json, and data/state.json as Single Source of Truth.
+    Thread/process-safe via per-run isolation (`run_dir`) and advisory file locking.
     """
+    data_dir = os.path.join(_ROOT, "data")
+    lock_cm = contextlib.nullcontext() if run_dir else _audit_lock(os.path.join(data_dir, ".audit.lock"))
+    with lock_cm:
+        return _run_real_backtest_impl(
+            strategy_name=strategy_name,
+            save_as_active=save_as_active,
+            timeframe_override=timeframe_override,
+            days=days,
+            account_size=account_size,
+            max_mdd=max_mdd,
+            run_dir=run_dir,
+        )
+
+
+def _run_real_backtest_impl(
+    strategy_name: str = "",
+    save_as_active: bool = False,
+    timeframe_override: Optional[str] = None,
+    days: Optional[int] = None,
+    account_size: Optional[float] = None,
+    max_mdd: Optional[float] = None,
+    run_dir: Optional[str] = None,
+) -> dict:
     curr_sys_state = state_manager.get()
     if not strategy_name:
         strategy_name = strategy_registry.get_active_strategy_name()
@@ -141,32 +209,18 @@ def run_real_backtest(
     timeframe = meta["timeframe"]
     thesis_props = meta["thesis_props"]
 
-    data_dir = os.path.join(_ROOT, "data")
-    features_file = os.path.join(data_dir, "features.csv")
-    returns_file = os.path.join(data_dir, "candidate_returns.json")
+    work_dir = os.path.abspath(run_dir) if run_dir else os.path.join(_ROOT, "data")
+    os.makedirs(work_dir, exist_ok=True)
+    features_file = os.path.join(work_dir, "features.csv")
+    returns_file = os.path.join(work_dir, "candidate_returns.json")
 
     # 1. Resolve Candle Dataset and Sync via Dynamic Single Source of Truth
     from core.data import fetch_ohlcv
     canon_sym = data_manager.resolve_market_symbol(symbol)
     candles_file = data_manager.get_market_dataset_path(canon_sym, timeframe, check_legacy=True)
-    is_gold = ("XAU" in canon_sym.upper()) or ("GOLD" in canon_sym.upper())
 
     days_req = int(days) if (days and days > 0) else 30
-    tf_lower = str(timeframe).lower()
-    if tf_lower in ("1m", "m1"):
-        needed_count = min(15000, max(5000, int(days_req * 1440 * 1.15)))
-    elif tf_lower in ("5m", "m5"):
-        needed_count = min(15000, max(6000, int(days_req * 288 * 1.15)))
-    elif tf_lower in ("15m", "m15"):
-        needed_count = min(15000, max(6000, int(days_req * 96 * 1.15)))
-    elif tf_lower in ("1h", "h1", "60m"):
-        needed_count = min(15000, max(2500, int(days_req * 24 * 1.15)))
-    elif tf_lower in ("4h", "h4", "240m"):
-        needed_count = min(10000, max(1500, int(days_req * 6 * 1.15)))
-    elif tf_lower in ("1d", "d1"):
-        needed_count = min(10000, max(1000, int(days_req * 1.5)))
-    else:
-        needed_count = min(15000, max(5000, int(days_req * 288 * 1.15)))
+    needed_count = bars_for_days(timeframe, days_req, buffer=1.15, min_bars=500, max_bars=15000)
 
     period_str = f"{max(days_req, 30)}d"
     logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}, count={needed_count}, days={days_req}) via core.data...")
@@ -188,19 +242,28 @@ def run_real_backtest(
     if not os.path.exists(candles_file):
         raise FileNotFoundError(f"[BacktestEngine] Candle dataset file not found: {candles_file}")
 
-    # Generate fresh features.csv in-process using canonical core indicator library
+    # Generate fresh features.csv atomically in-process using canonical core indicator library
     try:
         from core.indicators import compute_all_standard_features
         df_raw = pd.read_csv(candles_file)
         if not df_raw.empty:
             df_feat = compute_all_standard_features(df_raw)
-            df_feat.to_csv(features_file, index=False)
+            tmp_feat = f"{features_file}.{os.getpid()}.tmp"
+            df_feat.to_csv(tmp_feat, index=False)
+            os.replace(tmp_feat, features_file)
             logger.info(f"[BacktestEngine] Synchronized fresh feature set ({len(df_feat)} rows) to {features_file}")
     except Exception as e_feat:
         logger.warning(f"[BacktestEngine] Feature generation note: {e_feat}")
 
     # 2. Dynamic Strategy Loading & Indicator Computation
     strat_inst = load_strategy_instance(clean_name)
+    effective_mdd = _resolve_effective_mdd(max_mdd, strat_inst)
+    eff_close_eod = resolve_strategy_close_eod(strat_inst, canon_sym, timeframe)
+    eod_hour = int(getattr(strat_inst, "eod_close_hour_utc", 21)) if strat_inst is not None else 21
+    daily_carry_bps = float(getattr(strat_inst, "daily_carry_bps", 0.0) or 0.0) if strat_inst is not None else 0.0
+    friction_override = getattr(strat_inst, "friction_override", None) if strat_inst is not None else None
+    price_prec = get_market_price_precision(canon_sym)
+
     df_c = pd.read_csv(candles_file)
     df_c = df_c.dropna(subset=['open', 'high', 'low', 'close'])
     if 'timestamp' in df_c.columns:
@@ -232,13 +295,16 @@ def run_real_backtest(
         res_disc = run_discrete_simulation(
             df=df_idx,
             signals=signals,
-            symbol="OANDA:XAUUSD" if is_gold else symbol,
+            symbol=canon_sym,
             account_size=acct_size,
             dollar_risk_1r=dollar_risk,
             max_daily_losses=max_daily_l,
             daily_profit_cap=daily_cap,
             max_hold_bars=max_hold_b,
-            close_eod=True
+            close_eod=eff_close_eod,
+            eod_close_hour_utc=eod_hour,
+            daily_carry_bps=daily_carry_bps,
+            friction_override=friction_override,
         )
 
         for t in res_disc["trades"]:
@@ -249,8 +315,9 @@ def run_real_backtest(
 
             side = "LONG" if t.direction == 1 else "SHORT"
             pnl_pct = round((t.pnl_dollars / acct_size) * 100.0, 4)
-            spread_pts, fee_pct, slippage_pts = resolve_asset_friction(symbol, t.entry_price)
-            friction_bps = round(((spread_pts * 2.0 / t.entry_price) + (fee_pct * 2.0) + (slippage_pts * 2.0 / t.entry_price)) * 10000.0, 1)
+            # Single Source of Truth: match exact round-trip friction charged by simulator (never double-count spread)
+            rt_cost_pts = get_roundtrip_friction(canon_sym, t.entry_price, friction_override=friction_override)
+            friction_bps = round((rt_cost_pts / max(float(t.entry_price), 1e-9)) * 10000.0, 1)
 
             exit_reason_map = {
                 "TP": "TAKE_PROFIT",
@@ -259,7 +326,7 @@ def run_real_backtest(
                 "EOD": "EOD"
             }
             exit_reason = exit_reason_map.get(t.exit_reason, t.exit_reason)
-            price_fmt = f"${t.entry_price:.2f}"
+            price_fmt = f"${t.entry_price:.{price_prec}f}"
 
             trade_markers.append({
                 "time": entry_ts,
@@ -267,10 +334,10 @@ def run_real_backtest(
                 "color": "#26a69a" if side == "LONG" else "#ef5350",
                 "shape": "arrowUp" if side == "LONG" else "arrowDown",
                 "text": f"[BT] {side} {price_fmt}",
-                "entry_price": round(float(t.entry_price), 2),
-                "raw_signal_price": round(float(t.entry_price), 2),
-                "stop_loss": round(float(t.stop_loss), 2),
-                "take_profit": round(float(t.target), 2),
+                "entry_price": round(float(t.entry_price), price_prec),
+                "raw_signal_price": round(float(t.entry_price), price_prec),
+                "stop_loss": round(float(t.stop_loss), price_prec),
+                "take_profit": round(float(t.target), price_prec),
                 "side": side
             })
             trade_markers.append({
@@ -285,13 +352,13 @@ def run_real_backtest(
                 "id": len(trades_detail) + 1,
                 "side": side,
                 "entry_time": entry_ts,
-                "entry_price": round(float(t.entry_price), 2),
-                "raw_signal_price": round(float(t.entry_price), 2),
-                "stop_loss": round(float(t.stop_loss), 2),
-                "take_profit": round(float(t.target), 2),
+                "entry_price": round(float(t.entry_price), price_prec),
+                "raw_signal_price": round(float(t.entry_price), price_prec),
+                "stop_loss": round(float(t.stop_loss), price_prec),
+                "take_profit": round(float(t.target), price_prec),
                 "exit_time": exit_ts,
-                "exit_price": round(float(t.exit_price), 2),
-                "raw_exit_price": round(float(t.exit_price), 2),
+                "exit_price": round(float(t.exit_price), price_prec),
+                "raw_exit_price": round(float(t.exit_price), price_prec),
                 "exit_reason": exit_reason,
                 "friction_bps": friction_bps,
                 "pnl_pct": pnl_pct,
@@ -307,12 +374,14 @@ def run_real_backtest(
             "Verify that candle data exists and that strategy entry conditions can trigger."
         )
 
-    # 4. Save Candidate Returns for Cynic Audit
+    # 4. Save Candidate Returns atomically for Cynic Audit
     returns_arr = np.array([tr["pnl_pct"] / 100.0 for tr in trades_detail], dtype=float)
-    with open(returns_file, "w") as f:
+    tmp_ret = f"{returns_file}.{os.getpid()}.tmp"
+    with open(tmp_ret, "w") as f:
         json.dump(returns_arr.tolist(), f)
         f.flush()
         os.fsync(f.fileno())
+    os.replace(tmp_ret, returns_file)
 
     # 5. Cynic Audit Gate Evaluation
     mean_ret = float(np.mean(returns_arr))
@@ -328,8 +397,9 @@ def run_real_backtest(
     trials_penalized = n_trials_for_dsr()
     dsr_res = compute_dsr(returns_arr, trials_penalized)
     real_dsr = float(dsr_res.get("dsr", 0.0))
-    mc_res = verify_monte_carlo(returns_arr)
+    mc_res = verify_monte_carlo(returns_arr, max_mdd_99=effective_mdd)
     real_mdd_99 = float(mc_res.get("mdd_99", 0.0))
+    avg_friction_bps = float(np.mean([tr["friction_bps"] for tr in trades_detail])) if trades_detail else 0.0
 
     # Derive accurate dataset time period
     time_period_info = _derive_dataset_time_period(df_c, trades_detail, days, timeframe)
@@ -359,7 +429,7 @@ def run_real_backtest(
     state = {
         "active_strategy": clean_name if save_as_active else curr_sys_state.get("active_strategy", clean_name),
         "target_profile": thesis_props["target_profile"],
-        "symbol": symbol,
+        "symbol": canon_sym,
         "timeframe": timeframe,
         "status": "ACTIVE_DEPLOYED" if save_as_active else curr_sys_state.get("status", "PREVIEW"),
         "backtest_summary": backtest_summary,
@@ -382,8 +452,12 @@ def run_real_backtest(
         df_c=df_c,
         strat_inst=strat_inst,
         observed_sr=sharpe,
-        symbol=symbol,
+        symbol=canon_sym,
         account_size=acct_size,
+        close_eod=eff_close_eod,
+        eod_close_hour_utc=eod_hour,
+        daily_carry_bps=daily_carry_bps,
+        friction_override=friction_override,
     )
 
     falsification_gates = evaluate_gates(
@@ -394,6 +468,8 @@ def run_real_backtest(
         observed_sr=sharpe,
         regime_breakdown=regime_breakdown,
         returns_are_net=True,
+        max_mdd_99=effective_mdd,
+        avg_friction_bps=avg_friction_bps,
     )
     state["falsification_gates"] = falsification_gates
 

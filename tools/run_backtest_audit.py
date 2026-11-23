@@ -26,6 +26,8 @@ def audit(strategy: str, save_state: bool, output_path: str, days: int = 30,
         kwargs = dict(save_as_active=save_state, days=days, account_size=account_size)
         if "max_mdd" in sig.parameters:
             kwargs["max_mdd"] = effective_mdd
+        if "run_dir" in sig.parameters:
+            kwargs["run_dir"] = run_dir
         results = run_real_backtest(strategy, **kwargs)
     except Exception as e:
         print(f"[BacktestAudit] ERROR — backtest failed: {e}")
@@ -58,10 +60,10 @@ def audit(strategy: str, save_state: bool, output_path: str, days: int = 30,
     else:
         print(f"  Return Basis:          Normalized (% returns)")
         print(f"  Net Realized PnL:      {pnl_p:+.2f}%")
-    print(f"  Net Sharpe Ratio:      {summary.get('sharpe')} (>= 1.8 required)")
+    print(f"  Net Sharpe Ratio:      {summary.get('sharpe')} (A-Tier floor >= 1.8)")
     print(f"  Win Rate:              {summary.get('win_rate', 0) * 100:.1f}%")
     print(f"  Profit Factor:         {summary.get('profit_factor')}")
-    print(f"  Max Drawdown (IS):     {summary.get('max_drawdown', 0) * 100:.2f}%")
+    print(f"  Max Drawdown (Full):   {summary.get('max_drawdown', 0) * 100:.2f}%")
     print(f"  Monte Carlo MDD99:     {summary.get('mdd_99', 0) * 100:.2f}% (gate: <= {effective_mdd * 100:.1f}%)")
     print(f"  Deflated Sharpe (DSR): {summary.get('dsr')} (>= 0.95) -> {gates.get('gate_1_dsr', {}).get('status')}")
     print(f"  Expectancy:            {summary.get('expectancy_bps')} bps")

@@ -49,7 +49,7 @@ from core.indicators import (
 - **`core.market_structure`:** `detect_swing_points(df, left_bars=5, right_bars=5, causal=True)` → adds `is_swing_high`, `is_swing_low`, `last_swing_high`, `last_swing_low` (zero lookahead when `causal=True`).
 - **`core.feature_factory`:** `compute_all_features(df)` / `compute_selected_features(df, feature_names)` → ~103 stationary coordinates across $W \in \{3,5,8,13,21,34,55\}$ (`v1_drift_w{W}`, `v3_body_mean_w{W}`, `v4_asym_mean_w{W}`, `v5_loc_ema_w{W}`, `coord_{iqr,ema,chan,ext}_w{W}`, `path_eff_w{W}`, `abs_eff_w{W}`, `overlap_density_w{W}`, `{disp,hl_vol,span}_ratio_{wf}_{ws}`, `{autocorr_lag1,var_ratio,rs_exp,skew,semidev_bal,disp_cv}_w{8,13,21,34}`, `coupling_{v3_v6,v6_v2}_w{1,3,5,13,21}`, `v6_vol_z_w21`, `v2_span_ratio_w1`, `phase_diurnal_{sin,cos}`).
 - **`core.data`:** `fetch_ohlcv(symbol, timeframe='15m', count=1500, period=None, use_cache=True)` · `resolve_market_symbol(symbol) -> str`.
-- **`core.friction`:** `resolve_asset_friction(symbol, price) -> (spread, fee_pct, slip)` · `get_roundtrip_friction(symbol, price) -> float` · `check_friction_hurdle(symbol, entry, stop_dist) -> (ok, pct)`.
+- **`core.friction`:** `resolve_asset_friction(symbol, price, friction_override=None) -> (spread, fee_pct, slip)` · `get_roundtrip_friction(symbol, price, atr=0.0, friction_override=None) -> float` · `check_friction_hurdle(symbol, entry_price, stop_distance, friction_override=None) -> (ok, pct)` · `compute_carry_cost(price, holding_hours, direction=1, daily_carry_bps=0.0) -> float`.
 - **`core.risk`:** `parse_prompt_to_risk(prompt, active_balance=None)` → dict `{account_size, risk_pct_1r, dollar_risk_1r, max_daily_drawdown_pct, max_total_drawdown_pct, max_daily_losses, daily_profit_cap}` · `calculate_position_units(dollar_risk_1r, entry, sl) -> float`.
 
 ---
@@ -61,5 +61,5 @@ from core.indicators import (
 | `tools/validate_hypothesis.py` | `--profile --symbol SYM --tf TF --days D` \| `--strategy FILE --days D [--json]` | 10-line IS market profile OR IS zero-lookahead + Sub-Era + 4-layer pre-check |
 | `tools/scan_edge.py` | `--symbol SYM --tf TF --days D [--style auto\|scalp\|day\|swing\|invest] [--max-mdd F] [--top-k N]` | Optional ML anomaly & plateau scanner (writes `data/latest_edge_scan.json`) |
 | `tools/build_strategy.py` | `--name NAME --from-scan-rank K` *(or explicit `--primary-feature`, `--polarity`, `--q-low/high`, `--regime-*`, `--extra-filter-*`, `--sl-mult`, `--tp-mult`, `--risk-pct`)* | Synthesize strategy from `scan_edge.py` rank into `zillionsAlpha/strategies/` |
-| `tools/run_backtest_audit.py` | `--strategy FILE --days D [--account-size N] [--save-state]` | Authoritative IS + Blind OOS 8-Gate Cynic Audit (writes `data/audit_report.json`) |
+| `tools/run_backtest_audit.py` | `--strategy FILE --days D [--max-mdd F] [--run-dir DIR] [--account-size N] [--save-state]` | Authoritative IS + Blind OOS 8-Gate Cynic Audit (writes `data/audit_report.json` or `<run-dir>/audit_report.json`) |
 | `tools/autopsy_strategy.py` | `--audit-json data/audit_report.json [--json]` | Strictly IS 4-layer failure + shallow-tree remediation report |
