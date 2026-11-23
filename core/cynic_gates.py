@@ -556,7 +556,8 @@ def summarize_gates(gates: dict) -> dict:
 def evaluate_gates(returns, n_trials: int = 40, strategy_name: str | None = None,
                    regime_breakdown: dict | None = None,
                    metric_matrix=None, observed_sr: float | None = None,
-                   returns_are_net: bool = False) -> dict:
+                   returns_are_net: bool = False,
+                   max_mdd_99: float = MAX_MDD_99) -> dict:
     """
     Compute the complete canonical Cynic matrix from one return series.
 
@@ -576,7 +577,7 @@ def evaluate_gates(returns, n_trials: int = 40, strategy_name: str | None = None
         "gate_1_dsr": compute_dsr(returns, n_trials=n_trials),
         "gate_2_parameter_stability": verify_parameter_stability(
             metric_matrix=metric_matrix, observed_sr=observed_sr),
-        "gate_3_monte_carlo": verify_monte_carlo(returns),
+        "gate_3_monte_carlo": verify_monte_carlo(returns, max_mdd_99=max_mdd_99),
         "gate_4_oos_walkforward": verify_oos_walkforward(returns),
         "gate_5_regime_survival": verify_regime_survival(
             returns, regime_breakdown=regime_breakdown),

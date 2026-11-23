@@ -23,47 +23,122 @@ except ImportError:
     logger.warning("[DataManager] tradingview_websocket library not installed. Falling back to REST.")
 
 
+import re as _re
+
+_EXACT_SYMBOL_MAP: Dict[str, str] = {
+    # Spot Gold
+    "XAUUSD": "OANDA:XAUUSD",
+    "GOLD": "OANDA:XAUUSD",
+    "XAU": "OANDA:XAUUSD",
+    "OANDA": "OANDA:XAUUSD",
+    "OANDAXAUUSD": "OANDA:XAUUSD",
+    # Gold Futures
+    "GC": "COMEX:GC1!",
+    "GC1": "COMEX:GC1!",
+    "GC1!": "COMEX:GC1!",
+    "MGC": "COMEX:GC1!",
+    "MGC1": "COMEX:GC1!",
+    "MGC1!": "COMEX:GC1!",
+    # S&P 500 Futures / Index
+    "SP500": "CME_MINI:ES1!",
+    "SPX": "CME_MINI:ES1!",
+    "ES": "CME_MINI:ES1!",
+    "ES1": "CME_MINI:ES1!",
+    "ES1!": "CME_MINI:ES1!",
+    "MES": "CME_MINI:ES1!",
+    "MES1": "CME_MINI:ES1!",
+    "MES1!": "CME_MINI:ES1!",
+    "US500": "CME_MINI:ES1!",
+    "SP500ES": "CME_MINI:ES1!",
+    # S&P 500 ETF
+    "SPY": "AMEX:SPY",
+    # Nasdaq 100 Futures / Index
+    "NQ": "CME_MINI:NQ1!",
+    "NQ1": "CME_MINI:NQ1!",
+    "NQ1!": "CME_MINI:NQ1!",
+    "MNQ": "CME_MINI:NQ1!",
+    "MNQ1": "CME_MINI:NQ1!",
+    "MNQ1!": "CME_MINI:NQ1!",
+    "NDX": "CME_MINI:NQ1!",
+    "NAS100": "CME_MINI:NQ1!",
+    "US100": "CME_MINI:NQ1!",
+    "NASDAQ100": "CME_MINI:NQ1!",
+    # Nasdaq 100 ETF
+    "QQQ": "NASDAQ:QQQ",
+    # Crude Oil
+    "CL": "TVC:USOIL",
+    "CL1": "TVC:USOIL",
+    "CL1!": "TVC:USOIL",
+    "USOIL": "TVC:USOIL",
+    "WTI": "TVC:USOIL",
+    "CRUDEOIL": "TVC:USOIL",
+    # Major FX
+    "EURUSD": "OANDA:EURUSD",
+    "OANDAEURUSD": "OANDA:EURUSD",
+    "GBPUSD": "OANDA:GBPUSD",
+    "OANDAGBPUSD": "OANDA:GBPUSD",
+    "USDJPY": "OANDA:USDJPY",
+    "OANDAUSDJPY": "OANDA:USDJPY",
+    # Major Crypto
+    "BTC": "BINANCE:BTCUSDT",
+    "BTCUSD": "BINANCE:BTCUSDT",
+    "BTCUSDT": "BINANCE:BTCUSDT",
+    "BINANCEBTCUSDT": "BINANCE:BTCUSDT",
+    "ETH": "BINANCE:ETHUSDT",
+    "ETHUSD": "BINANCE:ETHUSDT",
+    "ETHUSDT": "BINANCE:ETHUSDT",
+    "BINANCEETHUSDT": "BINANCE:ETHUSDT",
+    "SOL": "BINANCE:SOLUSDT",
+    "SOLUSD": "BINANCE:SOLUSDT",
+    "SOLUSDT": "BINANCE:SOLUSDT",
+    "BINANCESOLUSDT": "BINANCE:SOLUSDT",
+}
+
+
+def _normalize_ticker_key(raw: str) -> str:
+    """Strips parenthetical display suffixes (e.g. 'MNQ (Futures)' -> 'MNQ') and punctuation."""
+    s = (raw or "").strip()
+    s = _re.sub(r"\([^)]*\)", "", s)
+    return s.replace("/", "").replace("-", "").replace(":", "").replace("_", "").replace(" ", "").replace("&", "").upper()
+
+
 def resolve_market_symbol(symbol: str) -> str:
-    """Maps user symbol to institutional exchange symbol."""
+    """Maps user symbol to institutional exchange symbol using exact normalized lookup (never loose substrings)."""
     raw = (symbol or "").strip()
     if ":" in raw:
-        # User explicitly passed exchange:ticker (e.g. COINBASE:BTCUSD or OANDA:XAUUSD)
+        # User explicitly passed exchange:ticker (e.g. COINBASE:BTCUSD, NASDAQ:QQQ, AMEX:SPY, OANDA:XAUUSD)
         return raw.upper()
 
-    upper = raw.replace("/", "").replace("-", "").replace(":", "").replace(" ", "").replace("&", "").upper()
-    if upper in ("XAUUSD", "GOLD", "XAU", "OANDA", "XAU_USD", "OANDAXAUUSD"):
-        return "OANDA:XAUUSD"
-    if upper in ("EURUSD", "EUR_USD", "OANDAEURUSD"):
-        return "OANDA:EURUSD"
-    if any(k in upper for k in ["SP500", "SPX", "ES", "US500", "SPY", "ES1"]):
-        return "CME_MINI:ES1!"
-    if "BTC" in upper:
-        return "BINANCE:BTCUSDT"
-    if "ETH" in upper:
-        return "BINANCE:ETHUSDT"
-    if "SOL" in upper:
-        return "BINANCE:SOLUSDT"
+    upper = _normalize_ticker_key(raw)
+    if upper in _EXACT_SYMBOL_MAP:
+        return _EXACT_SYMBOL_MAP[upper]
     return upper
 
 
 def get_market_price_precision(symbol: str) -> int:
     """Returns price decimal precision for asset class (FX: 5 decimals, JPY: 3, Crypto/Indices/Metals: 2)."""
-    s = (symbol or "").upper()
-    if any(k in s for k in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "USD"]):
-        if "JPY" in s:
+    resolved = resolve_market_symbol(symbol)
+    ticker = resolved.split(":", 1)[1] if ":" in resolved else resolved
+    if ticker in ("OANDA:XAUUSD", "XAUUSD", "GC1!", "ES1!", "NQ1!", "SPY", "QQQ", "USOIL", "BTCUSDT", "ETHUSDT", "SOLUSDT"):
+        return 2
+    if len(ticker) == 6 and ticker.isalpha():
+        if ticker.endswith("JPY"):
             return 3
-        if not any(m in s for m in ["XAU", "GOLD", "BTC", "ETH", "SOL", "SP", "ES", "US500"]):
+        fx_ccys = {"EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "USD", "JPY"}
+        if ticker[:3] in fx_ccys and ticker[3:] in fx_ccys:
             return 5
     return 2
 
 
 def canonical_market_slug(symbol: str) -> str:
-    """Returns a clean filesystem slug for a symbol (e.g., XAUUSD, BTCUSDT, SP500)."""
+    """Returns a clean filesystem slug for a symbol (e.g., XAUUSD, BTCUSDT, SP500, NQ1, QQQ, SPY)."""
     tv_sym = resolve_market_symbol(symbol)
     if tv_sym == "OANDA:XAUUSD":
         return "XAUUSD"
     if tv_sym == "CME_MINI:ES1!":
         return "SP500"
+    if tv_sym == "CME_MINI:NQ1!":
+        return "NQ1"
     if ":" in tv_sym:
         tv_sym = tv_sym.split(":", 1)[1]
     return "".join(c for c in tv_sym.upper() if c.isalnum()) or "BTCUSDT"
@@ -102,38 +177,67 @@ def get_market_dataset_path(symbol: str, timeframe: str = "15m", check_legacy: b
     return canon_path
 
 
-def update_market_catalog(symbol: str, timeframe: str, path: str, df: pd.DataFrame, source: str = "live") -> None:
-    """Updates `data/market/catalog.json` with dataset metadata."""
+def _market_lock(lock_name: str = ".catalog.lock"):
+    """Context manager for advisory file locking on the market cache (prevents concurrent corruption)."""
+    import contextlib
     try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+
+    @contextlib.contextmanager
+    def _cm():
         os.makedirs(MARKET_DIR, exist_ok=True)
-        catalog: Dict[str, Any] = {}
-        if os.path.exists(CATALOG_PATH):
+        lock_path = os.path.join(MARKET_DIR, lock_name)
+        fh = open(lock_path, "a+", encoding="utf-8")
+        try:
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
             try:
-                with open(CATALOG_PATH, "r", encoding="utf-8") as f:
-                    catalog = json.load(f)
-            except Exception:
-                catalog = {}
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            finally:
+                fh.close()
 
-        slug = canonical_market_slug(symbol)
-        tf = (timeframe or "15m").lower().strip()
-        key = f"{slug}_{tf}"
-        t_col = "timestamp" if "timestamp" in df.columns else ("time" if "time" in df.columns else None)
-        start_ts = int(df[t_col].iloc[0]) if (t_col and len(df) > 0) else 0
-        end_ts = int(df[t_col].iloc[-1]) if (t_col and len(df) > 0) else 0
+    return _cm()
 
-        catalog[key] = {
-            "symbol": resolve_market_symbol(symbol),
-            "slug": slug,
-            "timeframe": tf,
-            "path": os.path.relpath(path, _ROOT),
-            "rows": int(len(df)),
-            "start_timestamp": start_ts,
-            "end_timestamp": end_ts,
-            "source": source,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        with open(CATALOG_PATH, "w", encoding="utf-8") as f:
-            json.dump(catalog, f, indent=2)
+
+def update_market_catalog(symbol: str, timeframe: str, path: str, df: pd.DataFrame, source: str = "live") -> None:
+    """Updates `data/market/catalog.json` atomically under a file lock."""
+    try:
+        with _market_lock(".catalog.lock"):
+            catalog: Dict[str, Any] = {}
+            if os.path.exists(CATALOG_PATH):
+                try:
+                    with open(CATALOG_PATH, "r", encoding="utf-8") as f:
+                        catalog = json.load(f)
+                except Exception:
+                    catalog = {}
+
+            slug = canonical_market_slug(symbol)
+            tf = (timeframe or "15m").lower().strip()
+            key = f"{slug}_{tf}"
+            t_col = "timestamp" if "timestamp" in df.columns else ("time" if "time" in df.columns else None)
+            start_ts = int(df[t_col].iloc[0]) if (t_col and len(df) > 0) else 0
+            end_ts = int(df[t_col].iloc[-1]) if (t_col and len(df) > 0) else 0
+
+            catalog[key] = {
+                "symbol": resolve_market_symbol(symbol),
+                "slug": slug,
+                "timeframe": tf,
+                "path": os.path.relpath(path, _ROOT),
+                "rows": int(len(df)),
+                "start_timestamp": start_ts,
+                "end_timestamp": end_ts,
+                "source": source,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            tmp_path = f"{CATALOG_PATH}.{os.getpid()}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(catalog, f, indent=2)
+            os.replace(tmp_path, CATALOG_PATH)
     except Exception as e:
         logger.debug(f"[DataManager] Catalog update note: {e}")
 

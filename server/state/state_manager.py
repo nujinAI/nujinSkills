@@ -653,20 +653,19 @@ class StrategyRegistry:
                     sym_m = re.search(r'symbol\s*(?::\s*str)?\s*=\s*[\"\']([^\"\']+)[\"\']', content)
                     if sym_m:
                         raw_sym = sym_m.group(1).strip()
-                        if any(k in raw_sym.upper() for k in ["XAU", "GOLD"]):
-                            symbol = "XAU/USD"
-                        elif any(k in raw_sym.upper() for k in ["SP", "ES", "US500", "S&P"]):
-                            symbol = "S&P 500 (ES)"
-                        elif any(k in raw_sym.upper() for k in ["MNQ", "NQ"]):
-                            symbol = "MNQ (Futures)"
-                        elif "BTC" in raw_sym.upper():
-                            symbol = "BTC/USDT"
-                        elif "ETH" in raw_sym.upper():
-                            symbol = "ETH/USDT"
-                        elif "SOL" in raw_sym.upper():
-                            symbol = "SOL/USDT"
-                        else:
-                            symbol = raw_sym
+                        from core.data import resolve_market_symbol
+                        _res = resolve_market_symbol(raw_sym)
+                        _SYM_LABELS = {
+                            "OANDA:XAUUSD": "XAU/USD",
+                            "CME_MINI:ES1!": "S&P 500 (ES)",
+                            "CME_MINI:NQ1!": "CME_MINI:NQ1!",
+                            "NASDAQ:QQQ": "NASDAQ:QQQ",
+                            "AMEX:SPY": "AMEX:SPY",
+                            "BINANCE:BTCUSDT": "BTC/USDT",
+                            "BINANCE:ETHUSDT": "ETH/USDT",
+                            "BINANCE:SOLUSDT": "SOL/USDT",
+                        }
+                        symbol = _SYM_LABELS.get(_res, raw_sym)
 
                     tf_m = re.search(r'timeframe\s*(?::\s*str)?\s*=\s*[\"\']([^\"\']+)[\"\']', content)
                     if tf_m:
@@ -690,14 +689,19 @@ class StrategyRegistry:
                             target_profile = line_s.split(":", 1)[1].strip()
                         elif line_s.startswith("# Asset:") or line_s.startswith("# Symbol:"):
                             sym = line_s.split(":", 1)[1].strip()
-                            if any(k in sym.upper() for k in ["XAU", "GOLD"]):
-                                symbol = "XAU/USD"
-                            elif any(k in sym.upper() for k in ["SP", "ES"]):
-                                symbol = "S&P 500 (ES)"
-                            elif "BTC" in sym.upper():
-                                symbol = "BTC/USDT"
-                            else:
-                                symbol = sym
+                            from core.data import resolve_market_symbol
+                            _res = resolve_market_symbol(sym)
+                            _SYM_LABELS = {
+                                "OANDA:XAUUSD": "XAU/USD",
+                                "CME_MINI:ES1!": "S&P 500 (ES)",
+                                "CME_MINI:NQ1!": "CME_MINI:NQ1!",
+                                "NASDAQ:QQQ": "NASDAQ:QQQ",
+                                "AMEX:SPY": "AMEX:SPY",
+                                "BINANCE:BTCUSDT": "BTC/USDT",
+                                "BINANCE:ETHUSDT": "ETH/USDT",
+                                "BINANCE:SOLUSDT": "SOL/USDT",
+                            }
+                            symbol = _SYM_LABELS.get(_res, sym)
 
                     # If symbol not yet resolved, check docstrings for Gold / XAU keywords
                     if not symbol or symbol == "BTC/USDT":
@@ -761,10 +765,12 @@ class StrategyRegistry:
         if any(k in clean_up for k in ["XAU", "GOLD"]):
             symbol = "XAU/USD"
         elif not symbol or symbol.lower() in ["pair", "symbol", "none", "self.symbol"] or symbol.startswith("self."):
-            if any(k in clean_up for k in ["SP500", "SPX", "ES", "FLUSH"]):
+            if any(k in clean_up for k in ["MNQ", "NQ1", "NAS100", "QQQ"]):
+                symbol = "CME_MINI:NQ1!"
+            elif any(k in clean_up for k in ["SP500", "SPX", "US500", "ES1"]):
                 symbol = "S&P 500 (ES)"
-            elif any(k in clean_up for k in ["MNQ", "NQ"]):
-                symbol = "MNQ (Futures)"
+            elif "SPY" in clean_up:
+                symbol = "AMEX:SPY"
             elif any(k in clean_up for k in ["ETH"]):
                 symbol = "ETH/USDT"
             elif any(k in clean_up for k in ["SOL"]):

@@ -210,7 +210,8 @@ class StrategyEvaluator:
                     logger.error(f"[StrategyEvaluator] REJECTED inverted SHORT signal for {clean_name}: Entry={ref_entry}, SL={sl}, TP={tp}")
                     return None
 
-            is_sp = any(k in symbol.upper() for k in ["SP", "ES", "S&P", "US500"])
+            from core.data import resolve_market_symbol
+            is_sp = resolve_market_symbol(symbol) == "CME_MINI:ES1!"
             if is_sp and abs(sl - ref_entry) > 50.0:
                 logger.error(f"[StrategyEvaluator] REJECTED excessive S&P stop loss ({abs(sl - ref_entry):.2f} pts > 50 pts) for {clean_name}")
                 return None

@@ -271,16 +271,24 @@ class ProviderRegistry:
 
     @classmethod
     def canonical_symbol(cls, symbol: str) -> str:
-        upper_sym = (symbol or "").upper()
-        if any(s in upper_sym for s in ["SP", "ES", "S&P", "US500", "OPENING"]):
-            return "S&P 500 (ES)"
-        elif any(g in upper_sym for g in ["XAU", "GOLD", "GC"]) or upper_sym in ("OANDA", "OANDA:XAUUSD"):
-            return "XAU/USD"
-        elif "BTC" in upper_sym:
-            return "BTC/USDT"
-        elif "EUR" in upper_sym and "USD" in upper_sym:
-            return "EUR/USD"
-        return symbol or "XAU/USD"
+        from core.data import resolve_market_symbol
+        resolved = resolve_market_symbol(symbol)
+        _DISPLAY_MAP = {
+            "CME_MINI:ES1!": "S&P 500 (ES)",
+            "CME_MINI:NQ1!": "MNQ (Futures)",
+            "OANDA:XAUUSD": "XAU/USD",
+            "BINANCE:BTCUSDT": "BTC/USDT",
+            "BINANCE:ETHUSDT": "ETH/USDT",
+            "BINANCE:SOLUSDT": "SOL/USDT",
+            "OANDA:EURUSD": "EUR/USD",
+            "OANDA:GBPUSD": "GBP/USD",
+            "OANDA:USDJPY": "USD/JPY",
+            "NASDAQ:QQQ": "NASDAQ:QQQ",
+            "AMEX:SPY": "AMEX:SPY",
+            "COMEX:GC1!": "COMEX:GC1!",
+            "TVC:USOIL": "TVC:USOIL",
+        }
+        return _DISPLAY_MAP.get(resolved, symbol or "XAU/USD")
 
     @classmethod
     def get_provider_key(cls, symbol: str, timeframe: str) -> str:

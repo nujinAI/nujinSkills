@@ -2,35 +2,58 @@
 core/friction.py - The Single Source of Truth for Broker Friction & Hurdle Math.
 Used by: AI CLI tools, Backtest Simulation, Live Bot Execution, and Server APIs.
 """
-from typing import Tuple
+from typing import Dict, Tuple
+
 
 def resolve_asset_friction(symbol: str, price: float) -> Tuple[float, float, float]:
     """
-    Returns (spread_pts, fee_pct, slippage_pts) for any asset.
-    Pure execution reality. Spot Cash only.
+    Returns (spread_pts, fee_pct, slippage_pts) for any supported asset.
+    Uses exact normalized symbol resolution (no loose substring matching or silent fallbacks).
     """
-    sym = (symbol or "").upper()
-    if "XAU" in sym or "GOLD" in sym:
-        # Gold Spot CFD: ~$0.25 typical spread, $0.05 slippage buffer
-        return 0.25, 0.0000, 0.05
-    elif "BTC" in sym:
-        # Crypto: 0.04% taker fee, $5.0 spread
+    from core.data import resolve_market_symbol
+    resolved = resolve_market_symbol(symbol)
+
+    # Exact per-instrument friction table: (spread_pts_or_none, fee_pct, slippage_pts_or_none, spread_pct_if_none, slip_pct_if_none)
+    # Commissions reflect institutional raw-spread / exchange taker schedules.
+    if resolved == "OANDA:XAUUSD":
+        # Spot Gold CFD: $0.25 spread, ~$7/lot RT (~0.0035% per side), $0.05 slippage
+        return 0.25, 0.000035, 0.05
+    if resolved == "COMEX:GC1!":
+        # COMEX Gold Futures: $0.20 spread (2 ticks), ~$2.50/side (~0.001%), $0.10 slippage
+        return 0.20, 0.00001, 0.10
+    if resolved == "CME_MINI:ES1!":
+        # E-mini S&P 500 Futures: 0.25-0.50 pts spread, ~$2.25/side (~0.0008%), 0.25 pts slippage
+        return 0.50, 0.00001, 0.25
+    if resolved == "AMEX:SPY":
+        # SPY ETF: $0.02 spread, 0.001% SEC/clearing/slippage
+        return 0.02, 0.00001, 0.02
+    if resolved == "CME_MINI:NQ1!":
+        # E-mini / Micro Nasdaq-100 Futures: 0.50-1.00 pts spread, ~$2.25/side (~0.0008%), 0.50 pts slippage
+        return 1.00, 0.00001, 0.50
+    if resolved == "NASDAQ:QQQ":
+        # QQQ ETF: $0.02 spread, 0.001% fee, $0.02 slippage
+        return 0.02, 0.00001, 0.02
+    if resolved == "TVC:USOIL":
+        # WTI Crude Oil: $0.03 spread, 0.005% fee, $0.02 slippage
+        return 0.03, 0.00005, 0.02
+    if resolved == "BINANCE:BTCUSDT":
+        # Crypto BTC: 0.04% taker fee, $5.0 spread, $2.5 slippage
         return 5.0, 0.0004, 2.5
-    elif "ETH" in sym:
+    if resolved == "BINANCE:ETHUSDT":
+        # Crypto ETH: 0.04% taker fee, $0.50 spread, $0.25 slippage
         return 0.50, 0.0004, 0.25
-    elif any(k in sym for k in ["SPX", "US500", "ES", "SP500"]):
-        # Equity index: 0.50 index pts spread
-        return 0.50, 0.0000, 0.20
-    elif any(k in sym for k in ["EURUSD", "USDJPY", "GBPUSD"]):
-        # Major Forex: 0.8 pips spread, 0.2 pips slippage
-        spread_pts = price * 0.00008
-        slippage_pts = price * 0.00002
-        return spread_pts, 0.0000, slippage_pts
-    else:
-        # Cross Forex / Spot: 1.5 pips spread
-        spread_pts = price * 0.00015
-        slippage_pts = price * 0.00003
-        return spread_pts, 0.0000, slippage_pts
+    if resolved == "BINANCE:SOLUSDT":
+        # Crypto SOL: 0.04% taker fee, 0.03% spread, 0.02% slippage
+        return price * 0.0003, 0.0004, price * 0.0002
+    if resolved in ("OANDA:EURUSD", "OANDA:USDJPY", "OANDA:GBPUSD"):
+        # Major Forex (Raw ECN): 0.8 pips spread, $7/lot RT (~0.0035% per side), 0.2 pips slippage
+        return price * 0.00008, 0.000035, price * 0.00002
+
+    # Explicitly fail on unknown symbols rather than silently applying a cheap FX fallback
+    raise ValueError(
+        f"[Friction] Unknown or unsupported instrument '{symbol}' (resolved='{resolved}'). "
+        "Add its exact friction schedule to core/friction.py before backtesting."
+    )
 
 def get_roundtrip_friction(symbol: str, price: float, atr: float = 0.0) -> float:
     """Returns authentic round-trip dollar drag per unit (1x spread + roundtrip fees + 2x slippage)."""

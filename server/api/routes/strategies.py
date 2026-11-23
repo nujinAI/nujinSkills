@@ -108,10 +108,13 @@ async def list_strategies():
             stat_size = st.st_size
             stat_mtime = st.st_mtime
         raw_sym = s.get("symbol")
+        fn_upper = file_name.upper()
         if not raw_sym or str(raw_sym).lower() in ["pair", "symbol", "none", "self.symbol"] or str(raw_sym).startswith("self."):
-            if any(k in file_name.upper() for k in ["XAU", "GOLD"]):
+            if any(k in fn_upper for k in ["XAU", "GOLD"]):
                 strat_sym = "XAU/USD"
-            elif any(k in file_name.upper() for k in ["SP", "ES", "OPENING"]):
+            elif any(k in fn_upper for k in ["MNQ", "NQ1", "NAS100", "QQQ"]):
+                strat_sym = "CME_MINI:NQ1!"
+            elif any(k in fn_upper for k in ["SP500", "SPX", "US500", "ES1"]):
                 strat_sym = "S&P 500 (ES)"
             else:
                 strat_sym = "BTC/USDT"
@@ -126,7 +129,7 @@ async def list_strategies():
             "plugin_id": s.get("plugin_id"),
             "display_name": s.get("display_name", file_name.replace(".py", "")),
             "symbol": strat_sym,
-            "timeframe": s.get("timeframe", "5m" if any(k in file_name.upper() for k in ["XAU", "GOLD"]) else ("1m" if any(k in file_name.upper() for k in ["SP", "ES", "OPENING"]) else "15m")),
+            "timeframe": s.get("timeframe", "5m" if any(k in fn_upper for k in ["XAU", "GOLD"]) else ("1m" if any(k in fn_upper for k in ["SP500", "SPX", "US500", "ES1"]) else "15m")),
             "size_bytes": stat_size,
             "last_modified": stat_mtime,
             "status": s.get("status", "DEACTIVATED"),

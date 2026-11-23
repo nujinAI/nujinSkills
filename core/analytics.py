@@ -253,7 +253,8 @@ def compute_account_growth_models(
 
 def compute_institutional_tier(
     summary: Dict[str, Any],
-    gates: Dict[str, Any]
+    gates: Dict[str, Any],
+    max_mdd_limit: float = 0.030
 ) -> Dict[str, Any]:
     """
     CANONICAL SINGLE SOURCE OF TRUTH for Strategy Ranking Score & Institutional Tier.
@@ -407,18 +408,18 @@ def compute_institutional_tier(
         composite_score >= 82.0 and
         sharpe >= 2.5 and
         dsr >= 0.95 and
-        max_dd <= 0.018 and
+        max_dd <= min(0.018, max_mdd_limit * 0.6) and
         profit_factor >= 1.6 and
-        trades >= 20
+        trades >= 40
     )
     is_a = (
         all_gates_approved and
         composite_score >= 68.0 and
         sharpe >= 1.8 and
         dsr >= 0.90 and
-        max_dd <= 0.030 and
+        max_dd <= max_mdd_limit and
         profit_factor >= 1.3 and
-        trades >= 15
+        trades >= 30
     )
 
     if is_s:
@@ -445,7 +446,7 @@ def compute_institutional_tier(
             reasons.append(f"Failed {gates_total - gates_passed}/{gates_total} Gates")
         if sharpe < 1.2:
             reasons.append(f"Low Sharpe ({sharpe:.2f})")
-        if max_dd > 0.030:
+        if max_dd > max_mdd_limit:
             reasons.append(f"Excessive DD ({max_dd*100:.1f}%)")
         tier_reason = f"Sub-Hurdle: {', '.join(reasons) or 'Fails Core Verification'}"
 
