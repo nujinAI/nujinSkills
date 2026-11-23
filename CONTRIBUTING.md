@@ -40,21 +40,23 @@ Every contributor whose pull request is merged is **attributed in [`README.md`](
 
 ## Engineering & Quantitative Standards
 
-To preserve the mathematical and operational rigor of `nujinSkills`, please follow these standards:
+To preserve the universality, mathematical rigor, and operational reliability of `nujinSkills`, please follow these standards:
 
-1. **Strict Causality (Zero Lookahead):** Any indicator, feature, or market-structure logic must be strictly causal and prefix-invariant. Never leak future bar data into historical signals.
-2. **No Silent Fallbacks or Hardcoded Capital:** Fail explicitly on missing/corrupt data or invalid parameters. Risk and position sizing must remain dynamic.
-3. **CPU-First Performance:** Keep research, scanning, and validation tools fast and runnable on standard CPU hardware without requiring a GPU.
-4. **Focused, Tested Changes:** Keep pull requests scoped to a single concern. Add or update unit tests in `tests/` for bug fixes and new features.
-5. **Keep Docs in Sync:** If your change alters CLI flags, protocols, or agent behavior, update the corresponding files (`SKILL.md`, `references/`, or `README.md`).
+1. **Always Universal & Dynamic (No Personal Trading Artifacts):** `nujinSkills` is used across a wide variety of markets, timeframes, and mandates. Everything committed to the core repository **must remain dynamic and universal**. Never commit personal trading strategies, account-specific configs, or personal broker integrations—keep those isolated locally via `.gitignore` and the plugin system before opening a PR.
+2. **Strict Causality (Zero Lookahead):** Any indicator, feature, or market-structure logic must be strictly causal and prefix-invariant. Never leak future bar data into historical signals.
+3. **No Silent Fallbacks or Hardcoded Capital:** Fail explicitly on missing/corrupt data or invalid parameters. Risk and position sizing must remain dynamic.
+4. **CPU-First Performance:** Keep research, scanning, and validation tools fast and runnable on standard CPU hardware without requiring a GPU.
+5. **Focused, Tested Changes:** Keep pull requests scoped to a single concern. Add or update unit tests in `tests/` for bug fixes and new features.
+6. **Keep Docs in Sync:** If your change alters CLI flags, protocols, or agent behavior, update the corresponding files (`SKILL.md`, `references/`, or `README.md`).
 
 ---
 
 ## Pull Request Process
 
-1. Create a branch from `main` with a descriptive name (e.g., `feat/add-indicator`, `fix/causal-resample`, `docs/update-cynic-gates`).
-2. Make your changes and ensure `pytest` passes locally.
-3. Open a Pull Request against `main` with:
+1. Ensure no personal strategies, credentials, or broker integrations are included in your diff (keep them isolated via `.gitignore` and the plugin system).
+2. Create a branch from `main` with a descriptive name (e.g., `feat/add-indicator`, `fix/causal-resample`, `docs/update-cynic-gates`).
+3. Make your changes and ensure `pytest` passes locally.
+4. Open a Pull Request against `main` with:
    - A clear summary of **what** changed and **why**.
    - How you tested/verified the change.
    - Any relevant issue links.
