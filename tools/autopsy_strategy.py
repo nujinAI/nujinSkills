@@ -72,6 +72,51 @@ def main():
     is_cutoff = max(1, int(n_total_trades * 0.667))
     is_trades = trades[:is_cutoff]
 
+    # Compact 4-Layer In-Sample Structural Failure Diagnostics (works for ANY strategy)
+    layer_diagnosis = {}
+    if is_trades:
+        is_pnls = np.array([float(t.get("pnl_pct") or t.get("pnl") or t.get("return_pct") or 0.0) for t in is_trades], dtype=float)
+        # Estimate holding bars/duration for immediate stop-out detection
+        fast_stops = 0
+        duration_known = 0
+        tf_sec = 900
+        tf_s = str(tf).strip().lower()
+        if tf_s.endswith("m"):
+            tf_sec = max(60, int(tf_s[:-1] or 15) * 60)
+        elif tf_s.endswith("h"):
+            tf_sec = max(3600, int(tf_s[:-1] or 1) * 3600)
+        elif tf_s.endswith("d"):
+            tf_sec = 86400
+
+        reg_stats = {}
+        for t, pnl_v in zip(is_trades, is_pnls):
+            reg = t.get("regime") or "unknown"
+            reg_stats.setdefault(reg, []).append(pnl_v)
+            et = _parse_ts(t.get("entry_time") or t.get("time"))
+            xt = _parse_ts(t.get("exit_time"))
+            if et is not None and xt is not None:
+                duration_known += 1
+                bars_held = max(0.0, (xt - et).total_seconds() / tf_sec)
+                if pnl_v < 0 and bars_held <= 2.5:
+                    fast_stops += 1
+
+        bleeding_regs = [
+            f"{k}({len(v)}t,{np.sum(v):+.2f}%)"
+            for k, v in reg_stats.items()
+            if len(v) >= 3 and float(np.mean(v)) < 0
+        ]
+        fast_stop_rate = round(fast_stops / duration_known, 3) if duration_known > 0 else None
+        layer_hints = []
+        if bleeding_regs:
+            layer_hints.append(f"Context layer bleeding in: {', '.join(bleeding_regs)}")
+        if fast_stop_rate is not None and fast_stop_rate >= 0.35:
+            layer_hints.append(f"Confirmation layer weak: {fast_stop_rate*100:.0f}% immediate <=2-bar stop-outs")
+        layer_diagnosis = {
+            "bleeding_regimes": bleeding_regs,
+            "fast_stopout_rate": fast_stop_rate,
+            "layer_hints": layer_hints,
+        }
+
     tree_filter_recommendation = None
     try:
         from sklearn.tree import DecisionTreeRegressor
@@ -191,6 +236,7 @@ def main():
         "timeframe": tf,
         "in_sample_trades_analyzed": len(is_trades),
         "failed_gates_count": len(failed_gates),
+        "layer_diagnosis": layer_diagnosis,
         "ml_tree_regime_diagnosis": tree_filter_recommendation,
         "gate_prescriptions": prescriptions,
     }
@@ -207,6 +253,11 @@ def main():
     if not failed_gates:
         print("[+] All 8 Cynic Gates PASSED. No remediation required.")
         return
+
+    if layer_diagnosis.get("layer_hints"):
+        print("\n[4-LAYER IN-SAMPLE FAILURE DIAGNOSIS]")
+        for h in layer_diagnosis["layer_hints"]:
+            print(f"  - {h}")
 
     if tree_filter_recommendation:
         tf_rec = tree_filter_recommendation

@@ -19,22 +19,27 @@ The Cynic Audit evaluates all quantitative trading strategies against 8 adversar
 
 ---
 
-## 2. Canonical Audit & ML Trade Autopsy Workflow
+## 2. Canonical Pre-Validation, Audit & Autopsy Workflow
 
-1. **Execute the 8-Gate Audit:**
+1. **In-Sample Hypothesis Pre-Validation (Before Touching Blind OOS):**
+   ```bash
+   python tools/validate_hypothesis.py --strategy <StrategyName.py> --days 60
+   ```
+   Verifies **Zero Lookahead (prefix-invariance)**, In-Sample Sub-Era Invariance, Friction Floor, and 4-Layer Diagnostics strictly on the first 66.7% In-Sample window.
+2. **Execute the 8-Gate Blind OOS Audit:**
    ```bash
    python tools/run_backtest_audit.py --strategy <StrategyName.py> --days 60
    ```
-2. **If Any Gate Fails — Execute ML Trade Autopsy (Zero Brute-Forcing):**
+3. **If Any Gate Fails — Execute Layer-Aware & ML Trade Autopsy (Zero Brute-Forcing):**
    ```bash
    python tools/autopsy_strategy.py --audit-json data/audit_report.json
    ```
-   `autopsy_strategy.py` isolates the In-Sample trades (never leaking Blind Out-of-Sample data) and fits a shallow DecisionTree across the 39 stationary primitives in `core/feature_factory.py` to output the exact `--extra-filter-feature` or geometry correction needed.
+   `autopsy_strategy.py` isolates ONLY In-Sample trades (never leaking Blind OOS) and outputs both **4-Layer failure diagnostics** (Context regime bleed, Confirmation immediate stop-outs) and a shallow DecisionTree feature split across `core/feature_factory.py` so you can refine the failing layer structurally rather than guessing parameters.
 
 ---
 
 ## 3. Strict Verdict Enforcement (Anti-Hallucination Law)
 
 1. **Zero Cherry-Picking:** An agent is **strictly forbidden** from presenting a strategy as "COMPLIANT", "READY", or "DEPLOYABLE" if the Cynic Audit overall verdict is `REJECTED`.
-2. **Zero Parameter Brute-Forcing:** Never manually guess decimal changes to `sl_atr_mult`, `tp_atr_mult`, or indicator periods. Always rely on `tools/scan_edge.py` (`--from-scan-rank`) and `tools/autopsy_strategy.py`.
+2. **Zero Parameter Brute-Forcing:** Never manually guess decimal changes to `sl_atr_mult`, `tp_atr_mult`, or indicator periods. Refine the structural hypothesis via `tools/validate_hypothesis.py` and `tools/autopsy_strategy.py` (or `tools/scan_edge.py`).
 3. **Forbidden Escape Hatch:** Agents are strictly forbidden from abandoning a user's objective to audit or report an unrelated pre-existing strategy.

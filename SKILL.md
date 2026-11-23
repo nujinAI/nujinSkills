@@ -1,16 +1,16 @@
 ---
 name: nujinskills
 description: >-
-  Autonomous quantitative research, pure mathematical anomaly discovery, and systematic trading
-  engine for NujinAI. Translates user mandates (scalping, prop-firm day trading, swing trading,
-  investing) into mathematically verified systems using a 124-coordinate multi-scale mathematical
-  basis grid, 5-slice Sub-Era Invariance, MFE/MAE plateau geometry optimization, pessimistic
-  intrabar resolution, and the 8 Institutional Cynic Stress Gates.
+  Autonomous quantitative research, creative institutional strategy engineering, and systematic
+  trading engine for NujinAI. Combines In-Sample market microstructure research, the 4-layer
+  Context -> Location -> Confirmation -> Invalidation architecture, professional indicator
+  discipline, optional multi-scale mathematical anomaly scanning, automated zero-lookahead
+  validation, pessimistic intrabar simulation, and the 8 Institutional Cynic Stress Gates.
 license: MIT
 compatibility: Requires python3 >= 3.10 with pandas, numpy, scipy, yfinance, and requests.
 metadata:
   author: NujinAI
-  version: "1.0.0"
+  version: "2.0.0"
 ---
 
 # Skill: NujinSkills
@@ -20,90 +20,83 @@ metadata:
 
 ---
 
-## 1. Core Operating Tenets (The Invariant Quant Rules)
+## 1. Core Operating Tenets (The 5 Invariant Quant Laws)
 
-These 5 mathematical principles are inviolable regardless of the user's requested horizon or asset class:
-
-1. **Zero Pre-Bias (Pure Mathematical Basis First):**
-   Never guess indicators, chart patterns, or retail rules from LLM training memory. All edge discovery must run through `core/feature_factory.py` and `tools/scan_edge.py`, which decompose raw OHLCV into the 6 fundamental physical bar vectors (`V1..V6`) across Fibonacci scales $W \in \{2, 3, 5, 8, 13, 21, 34, 55\}$ (~124 dimensionless coordinates).
-2. **User Mandate Translation (Constraint Envelope Only):**
-   Translate the user's request ("scalping", "prop-firm day trading", "swing trading", "investment plan") strictly into mathematical envelope constraints (`--tf`, `--style [scalp|day|swing|invest]`, `--max-mdd`), leaving entry/exit rule discovery 100% to the mathematical scanner.
-3. **Sub-Era Invariance (Anti-70/30 Regime Overfitting):**
-   Every candidate mathematical rule must survive **5-Slice Chronological Sub-Era Invariance** ($\ge 75\text{--}80\%$ positive sub-eras) and internal Walk-Forward before ever touching the Blind Out-of-Sample window.
-4. **Edge is Risk Geometry & Plateau Expectancy:** 
-   Alpha requires an objective volatility invalidation level (`sl_atr_mult`), dynamic $1R$ dollar risk normalization ($Units = \text{DollarRisk} / |Entry - SL|$), and parameters centered on a 2D MFE/MAE stability plateau (`core/geometry_optimizer.py`) with positive net expectancy after all broker friction:
+1. **Market Research First & Unrestricted Creative Engineering:**
+   Never assume a canned playbook—and if the user does not specify a style or thesis, research the market empirically on the In-Sample slice first (`tools/validate_hypothesis.py --profile`, volatility/friction/persistence/session behavior, plus optional `tools/scan_edge.py`) to choose the strongest approach autonomously. You are free to build any causal strategy thesis—price/volume microstructure, structural zones, professional indicators (`core/indicators.py`), causal MTF/cross-asset context, pure mathematical coordinates (`core/feature_factory.py`), or novel hybrids.
+2. **4-Layer Architecture & Professional Indicator Discipline:**
+   Ground strategies in **Context** (regime/environmental permission) → **Location** (zone / area of value) → **Confirmation** (participation/shift proof) → **Structural Invalidation**, adapted creatively to the user request (see [`references/strategy_craft.md`](references/strategy_craft.md)). Indicators are allowed whenever they fit the thesis, strictly as **orthogonal, volatility-normalized, causal state sensors**—never standalone retail triggers (`RSI < 30`, naive MA crosses), collinear stacks, or magic-number curve-fits.
+3. **Zero Lookahead, Blind OOS Isolation & Sub-Era Invariance:**
+   Strictly isolate the first 66.7% of bars (In-Sample) and leave the final 33.3% completely untouched as Blind OOS. Every creative strategy must pass automated **Prefix-Invariance Causality (Zero Lookahead)**, **5-Slice Sub-Era Invariance**, and **Friction Floor** checks via `tools/validate_hypothesis.py` *before* touching Blind OOS.
+4. **Structural Risk Geometry, Parsimony & Positive Expectancy:**
+   Anchor stops to objective structural/volatility invalidation (`stop_loss`), size dynamically via fractional equity risk (`risk_pct_1r`), keep tunable parameters minimal and plateau-stable (enforced empirically by Gate 1 DSR & Gate 2 $\pm 10\%$ stability), and clear all broker friction ($\le 10\%$ of SL distance):
    $$\mathbb{E}[R] = (W \times R_{\text{win}}) - ((1 - W) \times 1.0) - \text{Friction} > 0$$
-5. **Zero Hardcoded Capital & Zero Silent Fallbacks:** 
-   Never hardcode static account sizes or fixed lot sizes. Always parameterize risk as equity percentage (`risk_pct_1r`, calibrated to keep Monte Carlo $\text{MDD}_{99}$ within the user's drawdown ceiling).
-   **Anti-Fallback & Verbatim Audit Law (STRICTLY ENFORCED):**
-   - The AI is strictly forbidden from searching through pre-existing strategy folders or reusing old files to fulfill a user prompt. If a mathematical scan yields 0 survivors for an asset or timeframe, report that empirical fact honestly and adjust constraints or test another asset/timeframe.
-   - **Absolute Audit Transparency:** The agent MUST print the raw, verbatim output block of `tools/run_backtest_audit.py` (including the exact 8-Gate Cynic matrix and overall VERDICT). The agent is strictly prohibited from selectively cherry-picking passing gates, redacting failed gates, or presenting a custom sanitized table. If any gate fails, the verdict is `REJECTED`, and the agent must diagnose the failure with `tools/autopsy_strategy.py` rather than claiming success.
+5. **Zero Hardcoded Capital, Zero Silent Fallbacks & Verbatim Audit Law (STRICTLY ENFORCED):**
+   - Never hardcode account balances or fixed lot sizes. Never search pre-existing strategy folders or recycle old files to fulfill a prompt. If no viable edge exists on an asset/timeframe, report it honestly and adapt asset, timeframe, or thesis.
+   - **Absolute Audit Transparency:** Print the raw, verbatim output block of `tools/run_backtest_audit.py` (exact 8-Gate Cynic matrix and overall VERDICT). Never cherry-pick gates or redact failures. If `REJECTED`, diagnose with `tools/autopsy_strategy.py` and iterate autonomously.
 
 ---
 
-## 2. Universal A-to-Z Strategy Discovery Protocol (The 5 Phases)
+## 2. Universal 5-Phase Systematic Pipeline
 
 ```
-[ Phase 1: User Mandate & Envelope Translation ]
-  └─ Map user goal (scalp, prop-firm day, swing, invest) to timeframe, --style, and --max-mdd constraints.
-[ Phase 2: Blind Out-of-Sample Partitioning ]
-  └─ First 66.7% of bars isolated for mathematical discovery; final 33.3% locked as unseen Blind OOS.
-[ Phase 3: Pure Mathematical Basis & Plateau Scan (tools/scan_edge.py) ]
-  └─ Evaluates ~124 multi-scale basis coordinates -> Shallow Surrogate Trees -> 5-Era Invariance -> MFE/MAE Plateau.
-[ Phase 4: Formula-Driven Strategy Synthesis (<= 3 Parameters, tools/build_strategy.py) ]
-  └─ Synthesize directly from verified scan rank (`--from-scan-rank 1`) into zillionsAlpha/strategies/<Name>.py.
-[ Phase 5: Adversarial 8-Gate Cynic Audit & ML Trade Autopsy (tools/run_backtest_audit.py & tools/autopsy_strategy.py) ]
-  └─ Test on In-Sample and unseen Blind OOS. If any gate fails, run `tools/autopsy_strategy.py` (NEVER brute-force).
+[ Phase 1: Mandate & In-Sample Market Research ]
+  └─ Parse user constraints; profile asset microstructure (`validate_hypothesis.py --profile` + optional `scan_edge.py`).
+[ Phase 2: Blind Out-of-Sample Isolation ]
+  └─ First 66.7% In-Sample for research & iteration; final 33.3% strictly locked as unseen Blind OOS.
+[ Phase 3: Creative 4-Layer Thesis & Strategy Synthesis ]
+  └─ Design Context -> Location -> Confirmation -> Invalidation (custom causal code or `build_strategy.py`).
+[ Phase 4: In-Sample Hypothesis Pre-Validation (`tools/validate_hypothesis.py`) ]
+  └─ Verify Zero Lookahead, Sub-Era Invariance, Friction Floor, and 4-Layer Diagnostics BEFORE Blind OOS.
+[ Phase 5: Adversarial 8-Gate Cynic Audit & Autonomous Autopsy Loop ]
+  └─ Run `run_backtest_audit.py` (IS + Blind OOS). On failure, diagnose via `autopsy_strategy.py` (NEVER brute-force).
 ```
 
-| Lifecycle Phase / Domain | Reference Guide |
+| Lifecycle Phase / Domain | Reference Guide (Load On Demand) |
 |---|---|
-| **Pure Math Basis & Sub-Era Discovery** | [`references/edge_discovery.md`](references/edge_discovery.md) |
-| **Execution Geometry & Sizing** | [`references/execution_geometry.md`](references/execution_geometry.md) |
+| **4-Layer Craft & Pro Indicator Doctrine** | [`references/strategy_craft.md`](references/strategy_craft.md) |
 | **5-Phase Alpha Pipeline** | [`references/alpha_pipeline.md`](references/alpha_pipeline.md) |
+| **Pure Math Basis & Optional ML Scanner** | [`references/edge_discovery.md`](references/edge_discovery.md) |
+| **Execution Geometry & Structural Invalidation** | [`references/execution_geometry.md`](references/execution_geometry.md) |
 | **8-Gate Cynic Falsification & Autopsy** | [`references/cynic_gates_protocol.md`](references/cynic_gates_protocol.md) |
 | **Strategy Code Contract & Deployment** | [`references/strategy_interface.md`](references/strategy_interface.md) |
 | **Live Bot Supervision & State Control** | [`references/bot_operations.md`](references/bot_operations.md) |
-| **Chart Visual Protocol (TradingView)** | [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md) |
-| **Telemetry & WebSocket Endpoints** | [`references/telemetry_api.md`](references/telemetry_api.md) |
+| **Chart Visual Protocol & Telemetry API** | [`references/chart_copilot_protocol.md`](references/chart_copilot_protocol.md) / [`references/telemetry_api.md`](references/telemetry_api.md) |
 
 ---
 
-## 3. Fast-Path Strategy Deployment (Black-Box Execution)
+## 3. Fast-Path CLI Toolkit (Black-Box Execution)
 
-Do NOT inspect internal engine mechanics (`server/`, `core/simulation.py`, `tests/`) or historical archives. Treat the engine as a black box:
+Do NOT inspect internal engine mechanics (`server/`, `core/simulation.py`, `tests/`) or archives. Treat the engine as a black box:
 
-1. **Discover Unbiased Mathematical Anomalies & Optimal SL/TP Plateau:**
+1. **Research Market Microstructure (Strictly In-Sample):**
    ```bash
-   python tools/scan_edge.py --symbol <SYMBOL> --tf <TIMEFRAME> --days <DAYS> --style <scalp|day|swing|invest>
+   python tools/validate_hypothesis.py --profile --symbol <SYMBOL> --tf <TF> --days <DAYS>
+   # Optional unbiased ML basis radar:
+   python tools/scan_edge.py --symbol <SYMBOL> --tf <TF> --days <DAYS> --style <auto|scalp|day|swing|invest>
    ```
-2. **Synthesize Strategy Directly from Verified Anomaly:**
+2. **Author Strategy** in `../zillionsAlpha/strategies/<Name>.py` and symlink into `strategies/<Name>.py` (or synthesize from scan via `python tools/build_strategy.py --name <Name> --from-scan-rank 1`).
+3. **Pre-Validate Strictly In-Sample (Zero-Lookahead + Sub-Era + 4-Layer Telemetry):**
    ```bash
-   python tools/build_strategy.py --name <StrategyName> --from-scan-rank 1
+   python tools/validate_hypothesis.py --strategy <Name>.py --days <DAYS>
    ```
-3. **Audit Strategy Across All 8 Cynic Gates (SSOT):**
+4. **Audit Across All 8 Cynic Gates & Unseen Blind OOS (SSOT):**
    ```bash
-   python tools/run_backtest_audit.py --strategy <StrategyName>.py --days <DAYS>
+   python tools/run_backtest_audit.py --strategy <Name>.py --days <DAYS>
    ```
-4. **If Rejected — Run ML Trade Autopsy & Loop Autonomously (Zero Brute-Forcing):**
+5. **If Rejected — Diagnose & Loop Autonomously (Zero Brute-Forcing):**
    ```bash
    python tools/autopsy_strategy.py --audit-json data/audit_report.json
    ```
-   Apply the exact mathematical coordinate gate (`--extra-filter-feature ...`) or synthesize the next verified anomaly rank (`--from-scan-rank 2`, `3`, ...), then re-run `tools/run_backtest_audit.py`.
-   - **Autonomous Completion Rule:** Do **NOT** stop or ask the user for permission to continue when gates fail. Keep iterating through the Autopsy → Refine/Next-Rank → Audit loop autonomously until **all 8 Cynic Gates PASS** (`APPROVED`) or all viable scan ranks are exhausted. Only present the final result to the user once the goal is achieved (or all candidates are empirically exhausted).
+   - **Autonomous Completion Rule:** Do **NOT** stop or ask permission when gates fail. Iterate autonomously through `Autopsy → Structural Layer / Thesis Refinement → validate_hypothesis.py → run_backtest_audit.py` until **all 8 Cynic Gates PASS** (`APPROVED`) or all viable hypotheses for the asset/timeframe are empirically exhausted.
 
 ---
 
-## 4. Shared Core Library (`core/`)
+## 4. Shared Core Library (`core/` — Single Source of Truth)
 
-All modules in `core/` are pure calculation primitives with zero trading bias and zero hardcoded capital:
-- `core.feature_factory`: 124-coordinate Pure Mathematical Basis Grid (`V1..V6` physical bar vectors $\times$ multi-scale operators over $W \in \{2, 3, 5, 8, 13, 21, 34, 55\}$).
-- `core.discovery`: CPU ML conditional anomaly miner (`ExtraTrees` + shallow surrogate trees + 5-slice Sub-Era Invariance).
-- `core.geometry_optimizer`: 2D MFE/MAE excursion surface & parameter stability plateau optimizer.
-- `core.data`: Dynamic candle fetcher, True Range, ATR, relative volume.
-- `core.risk`: Dynamic risk-of-ruin sizing, 1R units, and circuit breakers.
-- `core.friction`: Real-world spread, commission, and slippage simulation.
-- `core.simulation`: Discrete simulator with **Pessimistic Intrabar Resolution** (SL triggers first if both SL and TP hit in the same bar).
-- `core.cynic_gates`: The 8 Canonical Cynic Falsification Gates & Monte Carlo stress tests.
-- `core.portfolio`: Correlation filtering and ensemble diversification.
-- `core.regimes`: Market regime classification (Bull, Bear, Ranging).
+- `core.indicators`: 201 TA-Lib indicators, `ta` suite, dynamic token resolver, VWAP/bands, causal MTF (`add_causal_mtf_features`), cross-asset context.
+- `core.market_structure`: Swing pivots (`detect_swing_points(..., causal=True)` for zero-lookahead structural levels) and chart structure extraction.
+- `core.feature_factory`: ~103-coordinate stationary dimensionless basis grid (`V1..V6` $\times$ Fibonacci scales).
+- `core.hypothesis_validator`: In-Sample microstructure profiling, prefix-invariance lookahead proof, and 4-layer diagnostics.
+- `core.discovery` & `core.geometry_optimizer`: Optional CPU ML conditional anomaly miner & 2D MFE/MAE plateau optimizer.
+- `core.data`, `core.risk`, `core.friction`, `core.simulation`, `core.cynic_gates`, `core.regimes`, `core.portfolio`: Data, dynamic 1R sizing, friction, pessimistic simulator, 8 Cynic Gates, regimes, portfolio analytics.

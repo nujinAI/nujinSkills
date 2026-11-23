@@ -9,9 +9,9 @@ This reference specifies the execution geometry rules, invalidation principles, 
 1. **Market Direction is Non-Deterministic:**
    Order flow is partially hidden and passive liquidity is non-binding. Statistical edge stems from **asymmetric payoff geometry** and strictly defined invalidation, not high-certainty directional forecasts.
 
-2. **Objective Structural Invalidation:**
-   - Every setup must define an exact structural price level that unambiguously falsifies the premise (e.g., swing high/low breach, key level failure, session range break, volatility boundary).
-   - Invalidation must reflect the underlying structural thesis—never rely solely on an arbitrary static ATR distance unless explicitly designed as a pure volatility envelope strategy.
+2. **Objective Structural Invalidation (Anchored to Location/Zone):**
+   - Every setup must define an exact structural price level that unambiguously falsifies the premise (e.g., beyond the defended zone boundary, causal swing high/low breach, sweep extreme + ATR volatility buffer, session range break, or volatility envelope boundary).
+   - Invalidation must reflect the underlying structural thesis—never rely on arbitrary static pip stops; pure ATR-multiple stops should only be used when volatility expansion/mean-excursion is itself the structural invalidation mechanism.
 
 3. **Normalized 1R Dollar Risk:**
    - Risk is parameterized exclusively as a fractional percentage of current account equity:

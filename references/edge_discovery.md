@@ -1,54 +1,57 @@
-# Pure Mathematical Basis Discovery & Hypothesis Formulation
+# Market Research, Pure Mathematical Basis & Optional ML Edge Scanner
 
-This document guides the AI in discovering, verifying, and synthesizing empirical statistical anomalies across any market, horizon, and user mandate with zero indicator or keyword bias.
+This guide covers NujinSkills' quantitative research instruments for uncovering empirical market behavior strictly on the **66.7% In-Sample** slice before touching Blind Out-of-Sample data.
 
 ---
 
 ## 1. The Core Scientific Law of Edge
 
-An edge exists if and only if a measurable, stationary mathematical coordinate $S_t$ has a **non-random, sub-era invariant predictive relationship** with future barrier outcomes $R_{t+h}$ that **comfortably exceeds transaction friction**:
+An edge exists if and only if a causal, stationary mechanism has a **non-random, sub-era invariant predictive relationship** with future barrier outcomes that **comfortably exceeds transaction friction**:
 
 $$\text{Net Edge} = |\mathbb{E}[R_{t+h} \mid S_t]| - \text{Roundtrip Friction} > 0$$
 
 ---
 
-## 2. The Lossless 6-Vector $\times$ Multi-Scale Basis Grid (`core/feature_factory.py`)
+## 2. Primary Research Microscope: In-Sample Microstructure Profiling
 
-To eliminate human indicator bias and LLM keyword fixation, `core/feature_factory.py` decomposes every OHLCV bar into its **6 fundamental dimensionless physical vectors**:
-- **`V1` (Normalized Return Velocity):** $r_t = \ln(C_t / C_{t-1}) / \sigma_{21}$
-- **`V2` (Normalized Span Energy):** $w_t = \text{TR}_t / \text{mean}_{14}(\text{TR})$
-- **`V3` (Intrabar Displacement Vector):** $b_t = (C_t - O_t) / (H_t - L_t) \in [-1, 1]$
-- **`V4` (Boundary Asymmetry Vector):** $a_t = ((\min(O,C) - L) - (H - \max(O,C))) / \text{TR}_t \in [-1, 1]$
-- **`V5` (Close Coordinate):** $c_t = (2C_t - H_t - L_t) / (H_t - L_t) \in [-1, 1]$
-- **`V6` (Volume Activity):** $v_t = \text{zscore}_{21}(\ln(1 + V_t))$
+Before committing to any paradigm, indicator family, or scanner, profile the target market strictly In-Sample:
 
-Across the geometric scale grid $W \in \{2, 3, 5, 8, 13, 21, 34, 55\}$, the engine applies pure mathematical operators (rolling moments 1–3, non-parametric IQR coordinates, cross-scale dispersion ratios, serial autocorrelation, variance ratios, path efficiency, and vector inner products) to generate **~124 pure mathematical coordinates** (`v1_drift_w{W}`, `coord_iqr_w{W}`, `path_eff_w{W}`, `disp_ratio_{Wf}_{Ws}`, `autocorr_lag1_w{W}`, `coupling_v3_v6_w{W}`, etc.).
+```bash
+python tools/validate_hypothesis.py --profile --symbol <TICKER> --tf <TIMEFRAME> --days 60
+```
+
+This reveals in one compact pass (with Blind OOS locked):
+- **Volatility & Friction Feasibility:** `ATR14`, `ATR%`, roundtrip friction as % of `1x ATR`, and minimum stop distance required to clear the 10% friction floor.
+- **Return Dynamics:** Lag-1 autocorrelation, 5-bar variance ratio, 20-bar path efficiency, and range volatility clustering (informing whether momentum/breakout, mean-reversion, or mixed-regime approaches fit best).
+- **Regime Mix & Diurnal Profile:** In-Sample Bull/Bear/Ranging split and peak vs. quiet UTC hours.
 
 ---
 
-## 3. Translating User Mandates into Mathematical Envelopes (`tools/scan_edge.py`)
+## 3. Optional ML Anomaly Scanner (`tools/scan_edge.py` & `core/feature_factory.py`)
 
-When the user requests a trading style or account objective, translate it strictly into CLI envelope flags:
-
-| User Request | Recommended Timeframe | `--style` Flag | `--max-mdd` Target |
-| :--- | :--- | :--- | :--- |
-| **Algo Scalping** | `1m` or `5m` | `--style scalp` | `0.018` (1.8%) |
-| **Prop-Firm Day Trading** | `5m` or `15m` | `--style day` | `0.020` (2.0%) |
-| **Swing Trading** | `1h` or `4h` | `--style swing` | `0.022` (2.2%) |
-| **Investment / Position Plan** | `4h` or `1d` | `--style invest` | `0.024` (2.4%) |
+When you want an unbiased statistical radar across raw bar physics (either as a standalone discovery source or as research inspiration for a 4-layer thesis), run `tools/scan_edge.py`:
 
 ```bash
-python tools/scan_edge.py --symbol <TICKER> --tf <TIMEFRAME> --days 60 --style <scalp|day|swing|invest>
+python tools/scan_edge.py --symbol <TICKER> --tf <TIMEFRAME> --days 60 --style <auto|scalp|day|swing|invest>
 ```
 
-### The 5 Institutional Discovery Hurdles:
-1. **ExtraTrees + Shallow Surrogate Tree Conditional Mining:**
-   - Identifies top directional basis coordinates and trains depth-1 surrogate decision trees on discrete barrier outcomes to isolate the single strongest conditioning state coordinate (`<`, `>`, `align`, or `strict_align`).
-2. **5-Slice Chronological Sub-Era Invariance:**
-   - Splits the 66.7% In-Sample dataset into 5 chronological sub-eras; requires $\ge 75\text{--}80\%$ positive sub-eras.
-3. **Canonical Regime Survival Pre-Check:**
-   - Evaluates candidate trades across `bull_market`, `bear_market`, and `ranging_market` slices (`core/regimes.py`) inside the In-Sample window.
-4. **Permutation Noise Test & $t$-stat Hurdle:**
-   - Requires $|t\text{-stat}| \ge 1.85\text{--}2.0$ and 200-shuffle permutation $p \le 0.05$.
-5. **2D MFE/MAE Stability Plateau Optimization (`core/geometry_optimizer.py`):**
-   - Simulates exact Pessimistic Intrabar Resolution + Opposite-Signal Reversals across the `(sl_atr_mult, tp_atr_mult)` grid and applies a $3\times 3$ neighborhood smoothing filter.
+### The ~103-Coordinate Multi-Scale Mathematical Basis (`core/feature_factory.py`)
+Decomposes OHLCV into 6 dimensionless physical bar vectors (`V1` return velocity, `V2` span energy, `V3` body displacement, `V4` wick/boundary asymmetry, `V5` close location, `V6` log-volume z-score) across Fibonacci scales $W \in \{2, 3, 5, 8, 13, 21, 34, 55\}$ using rolling moments, IQR/EMA/channel coordinates, dispersion ratios, autocorrelation, variance ratios, path efficiency, and volume-displacement coupling.
+
+### Scanner Hurdles (In-Sample Only):
+1. **ExtraTrees + Shallow Surrogate Trees:** Surfaces top directional coordinates and conditioning regime gates.
+2. **5-Slice Chronological Sub-Era Invariance:** Requires consistent positive sub-eras across time.
+3. **Permutation Noise Test & $t$-stat Hurdle:** Rejects random timing coincidences ($p \le 0.05$).
+4. **2D MFE/MAE Stability Plateau (`core/geometry_optimizer.py`):** Simulates pessimistic intrabar resolution + neighborhood smoothing for robust SL/TP plateaus.
+
+---
+
+## 4. Validating Creative Hypotheses (`tools/validate_hypothesis.py`)
+
+For any custom/creative strategy (using indicators, structural zones, MTF, cross-asset context, or upgraded scan discoveries), verify it strictly In-Sample before touching Blind OOS:
+
+```bash
+python tools/validate_hypothesis.py --strategy <StrategyName>.py --days 60
+```
+
+This proves **Zero Lookahead (prefix-invariance)**, **5-Slice Sub-Era Invariance**, **Permutation $p$-value**, **Actual Structural Friction Floor**, and **4-Layer Diagnostic Telemetry** (Context regime split, Location/Geometry MAE-MFE & winner giveback, Confirmation 1–2 bar stop-out rate).

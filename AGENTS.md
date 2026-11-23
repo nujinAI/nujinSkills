@@ -35,8 +35,10 @@ Use standard CLI tools instead of inventing one-off scripts:
 
 | Tool | Purpose | Command |
 |---|---|---|
-| `tools.scan_edge` | Empirical edge & permutation noise scanner | `python tools/scan_edge.py --symbol <TICKER> --tf <TF> --days 60` |
+| `tools.validate_hypothesis` | In-Sample market profiler & zero-lookahead hypothesis validator | `python tools/validate_hypothesis.py --profile --symbol <TICKER> --tf <TF> --days 60` |
+| `tools.scan_edge` | Optional ML basis & permutation anomaly scanner | `python tools/scan_edge.py --symbol <TICKER> --tf <TF> --days 60` |
 | `tools.run_backtest_audit` | Backtest & 8-Gate Cynic audit | `python tools/run_backtest_audit.py --strategy <path>` |
+| `tools.autopsy_strategy` | In-Sample 4-layer & ML failure diagnosis | `python tools/autopsy_strategy.py --audit-json data/audit_report.json` |
 | `tools.preflight` | Architecture & test suite verifier | `.venv/bin/python -m tools.preflight` |
 | `tools.strategy_manager` | Strategy discovery, ranking & tiers | `python tools/strategy_manager.py rank` |
 | `tools.state_control` | Telemetry state inspection & sync | `python tools/state_control.py get` |
@@ -46,8 +48,8 @@ Use standard CLI tools instead of inventing one-off scripts:
 | `tools.frontend_control` | Cockpit UI lifecycle daemon | `python tools/frontend_control.py start --port 3000 --daemon` |
 
 ## 3. Autonomous Strategy Protocol Mandate
-- When requested to build or research a trading strategy, agents MUST follow the 5-Phase Protocol in [`SKILL.md`](SKILL.md).
-- NEVER audit, retrofit, or recycle existing strategies. Always scan fresh market data with `tools/scan_edge.py` to confirm statistical significance and friction clearance before authoring a new strategy.
+- When requested to build or research a trading strategy, agents MUST follow the 5-Phase Protocol in [`SKILL.md`](SKILL.md) and [`references/strategy_craft.md`](references/strategy_craft.md).
+- NEVER audit, retrofit, or recycle existing strategies. Always research fresh In-Sample market data (`tools/validate_hypothesis.py --profile` and optionally `tools/scan_edge.py`) and pre-validate causality & friction clearance before auditing on Blind OOS.
 
 ---
 

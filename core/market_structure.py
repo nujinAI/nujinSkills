@@ -14,44 +14,65 @@ import pandas as pd
 
 
 def detect_swing_points(
-    df: pd.DataFrame, 
-    left_bars: int = 5, 
-    right_bars: int = 5
+    df: pd.DataFrame,
+    left_bars: int = 5,
+    right_bars: int = 5,
+    causal: bool = False,
 ) -> pd.DataFrame:
     """
     Identifies clean, major fractal swing pivots.
-    Requires 5 bars on each side to eliminate intraday jitter.
+    - causal=False (default, chart visualization): marks the exact pivot bar `i`.
+    - causal=True (backtesting / live strategies): marks confirmation at bar
+      `i + right_bars` (zero lookahead) and attaches forward-filled
+      `last_swing_high` / `last_swing_low` structural price levels.
     """
     res = df.copy()
     highs = res["high"].values
     lows = res["low"].values
     n = len(df)
-    
+
     swing_high = np.zeros(n, dtype=bool)
     swing_low = np.zeros(n, dtype=bool)
-    
+    last_sh = np.full(n, np.nan, dtype=float)
+    last_sl = np.full(n, np.nan, dtype=float)
+
+    cur_sh = np.nan
+    cur_sl = np.nan
+
     for i in range(left_bars, n - right_bars):
         curr_h = highs[i]
         curr_l = lows[i]
-        
+
         # Check swing high
         is_sh = True
         for j in range(i - left_bars, i + right_bars + 1):
             if j != i and highs[j] >= curr_h:
                 is_sh = False
                 break
-        swing_high[i] = is_sh
-        
+
         # Check swing low
         is_sl = True
         for j in range(i - left_bars, i + right_bars + 1):
             if j != i and lows[j] <= curr_l:
                 is_sl = False
                 break
-        swing_low[i] = is_sl
+
+        mark_idx = (i + right_bars) if causal else i
+        swing_high[mark_idx] = is_sh
+        swing_low[mark_idx] = is_sl
+        if causal:
+            if is_sh:
+                cur_sh = float(curr_h)
+            if is_sl:
+                cur_sl = float(curr_l)
+            last_sh[mark_idx] = cur_sh
+            last_sl[mark_idx] = cur_sl
 
     res["is_swing_high"] = swing_high
     res["is_swing_low"] = swing_low
+    if causal:
+        res["last_swing_high"] = pd.Series(last_sh, index=res.index).ffill()
+        res["last_swing_low"] = pd.Series(last_sl, index=res.index).ffill()
     return res
 
 
