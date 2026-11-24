@@ -53,6 +53,42 @@ class BaseExecutionBroker(abc.ABC):
         """
         return None
 
+    def get_contract_size(self, symbol: str) -> Optional[float]:
+        """
+        Optional broker-authoritative contract size (units per 1.00 lot) for `symbol`.
+        Returns None when unavailable (callers on live brokers must fail closed).
+        """
+        return None
+
+    def get_point_value(
+        self,
+        symbol: str,
+        price: float,
+        account_currency: str = "USD",
+    ) -> Optional[float]:
+        """
+        Optional broker-authoritative account-currency PnL per 1.0 price move per 1.00 lot.
+        Defaults to `get_contract_size(symbol)` for account-currency-quoted instruments.
+        """
+        return self.get_contract_size(symbol)
+
+    def get_pending_orders(self, symbol: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+        """
+        Optional hook returning resting pending (LIMIT / STOP) orders on the broker.
+        Returns None on API failure so callers never falsely assume an order disappeared.
+        """
+        return None
+
+    def cancel_order(
+        self,
+        order_id: str,
+        symbol: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Optional hook to cancel a resting pending (LIMIT / STOP) order on the broker.
+        """
+        return {"status": "UNSUPPORTED", "order_id": order_id, "error": "cancel_order not implemented"}
+
     @abc.abstractmethod
     def connect(self, config: Optional[Dict[str, Any]] = None) -> bool:
         """

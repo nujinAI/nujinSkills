@@ -172,6 +172,29 @@ class BaseMarketDataProvider(abc.ABC):
 
         safe_vol_inc = min(max(float(volume_increment or 10.0), 1.0), 50.0)
 
+        from core.data import get_market_price_precision
+        prec = get_market_price_precision(self.symbol)
+        spread = abs(price * 0.0001)
+        eff_bid = bid if bid is not None else round(price - spread, prec)
+        eff_ask = ask if ask is not None else round(price + spread, prec)
+
+        # Update latest quote BEFORE notifying bar close so pre-trade freshness,
+        # spread, and slippage guards inside _notify_bar see the actual live tick
+        # (never a stale quote from the previous bar).
+        self._latest_quote = {
+            "symbol": self.symbol,
+            "price": price,
+            "bid": eff_bid,
+            "ask": eff_ask,
+            "open": last_bar["open"],
+            "high": last_bar["high"],
+            "low": last_bar["low"],
+            "volume": last_bar["volume"],
+            "timestamp": now_sec,
+            "source": source,
+            "candle": last_bar,
+        }
+
         # 1. Bar Rollover Detection
         if bar_time > last_bar_t:
             closed_bar = await self._on_bar_closing(dict(last_bar))
@@ -214,14 +237,11 @@ class BaseMarketDataProvider(abc.ABC):
             last_bar["low"] = min(float(last_bar["low"]), price)
             last_bar["volume"] = round(float(last_bar.get("volume", 0.0)) + safe_vol_inc, 2)
 
-        from core.data import get_market_price_precision
-        prec = get_market_price_precision(self.symbol)
-        spread = abs(price * 0.0001)
         quote = {
             "symbol": self.symbol,
             "price": price,
-            "bid": bid if bid is not None else round(price - spread, prec),
-            "ask": ask if ask is not None else round(price + spread, prec),
+            "bid": eff_bid,
+            "ask": eff_ask,
             "open": last_bar["open"],
             "high": last_bar["high"],
             "low": last_bar["low"],

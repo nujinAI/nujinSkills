@@ -30,7 +30,10 @@ async def get_drawdown_status(strategy: Optional[str] = None):
             "total_drawdown_pct": 0.0,
         }
 
-    runner = NativeStrategyRunner(target_strat)
+    entry = bot_supervisor.runners.get(target_strat) if hasattr(bot_supervisor, "runners") else None
+    runner = entry.get("native_runner") if isinstance(entry, dict) else entry
+    if runner is None or not hasattr(runner, "check_drawdown_safety"):
+        runner = NativeStrategyRunner(target_strat)
     safe, reason, details = runner.check_drawdown_safety()
     return {
         "status": "SAFE" if safe else "HALTED",

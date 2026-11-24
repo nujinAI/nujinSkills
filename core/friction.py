@@ -126,6 +126,26 @@ def get_roundtrip_friction(
     return spread_pts + (price * fee_pct * 2.0) + (slippage_pts * 2.0)
 
 
+def default_paper_contract_size(symbol: str) -> float:
+    """
+    Universal standard contract multiplier for offline/paper simulation ONLY.
+    Live/demo brokers must supply their own verified lotSize / point value via
+    BaseExecutionBroker.get_point_value() rather than relying on static defaults.
+    """
+    import re
+    from core.data import resolve_market_symbol
+    resolved = resolve_market_symbol(symbol)
+    if resolved in ("OANDA:XAUUSD", "COMEX:GC1!"):
+        return 100.0
+    if resolved in ("OANDA:XAGUSD", "XAGUSD"):
+        return 5000.0
+    ticker = resolved.split(":", 1)[1] if ":" in resolved else resolved
+    alpha = re.sub(r"[^A-Z]", "", ticker.upper())
+    if len(alpha) == 6 and alpha[:3] in _ISO_FX_CCYS and alpha[3:] in _ISO_FX_CCYS:
+        return 100000.0
+    return 1.0
+
+
 def check_friction_hurdle(
     symbol: str,
     entry_price: float,

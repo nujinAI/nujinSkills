@@ -278,14 +278,14 @@ class SignalStore:
         return signals
 
     def get_active(self, strategy: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Return the current ACTIVE_IN_POSITION signal for a strategy or the first open position."""
+        """Return the current ACTIVE_IN_POSITION or PENDING_LIMIT signal for a strategy or first open signal."""
         signals = self.get_all(strategy)
-        return next((s for s in signals if s.get("status") == "ACTIVE_IN_POSITION"), None)
+        return next((s for s in signals if s.get("status") in ("ACTIVE_IN_POSITION", "PENDING_LIMIT")), None)
 
     def get_active_signals(self) -> List[Dict[str, Any]]:
-        """Return all signals currently marked ACTIVE_IN_POSITION across all strategies."""
+        """Return all signals currently ACTIVE_IN_POSITION or PENDING_LIMIT across all strategies."""
         signals = self.get_all()
-        return [s for s in signals if s.get("status") == "ACTIVE_IN_POSITION"]
+        return [s for s in signals if s.get("status") in ("ACTIVE_IN_POSITION", "PENDING_LIMIT")]
 
     def add(self, signal: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Prepend a new real signal, auto-assign id, write, return all signals."""
@@ -366,7 +366,7 @@ class SignalStore:
         signals = self.get_all()
         target = None
         for s in signals:
-            if s.get("status") == "ACTIVE_IN_POSITION":
+            if s.get("status") in ("ACTIVE_IN_POSITION", "PENDING_LIMIT"):
                 if signal_id is not None and s.get("id") == signal_id:
                     target = s
                     break
@@ -379,6 +379,18 @@ class SignalStore:
 
         if not target:
             return None
+
+        was_pending = target.get("status") == "PENDING_LIMIT"
+        if was_pending and exit_reason in ("EXPIRED_LIMIT", "CANCELLED_ORDER", "MANUAL_CLOSE", "MANUAL_UI_CLOSE"):
+            target["status"] = "EXPIRED_LIMIT" if exit_reason == "EXPIRED_LIMIT" else "CANCELLED_ORDER"
+            target["exit_price"] = None
+            target["exit_reason"] = exit_reason
+            target["exit_time"] = int(time.time())
+            target["pnl_pct"] = 0.0
+            target["pnl_usd"] = 0.0
+            _write_json_locked(self._path, signals)
+            logger.info(f"[SignalStore] Pending order #{target['id']} finalized for {target['strategy']}: {target['status']} ({exit_reason})")
+            return target
 
         target["status"] = "CLOSED"
         target["exit_price"] = exit_price
@@ -400,30 +412,20 @@ class SignalStore:
         try:
             from server.brokers.registry import broker_registry
             broker = broker_registry.get_broker(connect=False)
-            if broker and getattr(broker, "is_connected", False) and hasattr(broker, "get_contract_size"):
-                cv = float(broker.get_contract_size(pair) or 0.0)
-                if cv > 0:
-                    contract_val = cv
+            if broker and getattr(broker, "is_connected", False):
+                if hasattr(broker, "get_point_value") and entry_p > 0:
+                    pv = broker.get_point_value(pair, entry_p)
+                    if pv is not None and float(pv) > 0:
+                        contract_val = float(pv)
+                if contract_val is None and hasattr(broker, "get_contract_size"):
+                    cv = broker.get_contract_size(pair)
+                    if cv is not None and float(cv) > 0:
+                        contract_val = float(cv)
         except Exception:
             pass
         if contract_val is None:
-            try:
-                from core.data import resolve_market_symbol
-                resolved_pair = resolve_market_symbol(pair)
-            except Exception:
-                resolved_pair = str(pair or "").upper()
-            if resolved_pair in ("OANDA:XAUUSD", "COMEX:GC1!"):
-                contract_val = 100.0
-            elif resolved_pair in ("CME_MINI:NQ1!", "CME_MINI:ES1!"):
-                contract_val = 10.0
-            else:
-                ticker = resolved_pair.split(":", 1)[1] if ":" in resolved_pair else resolved_pair
-                alpha = re.sub(r"[^A-Z]", "", ticker.upper())
-                iso_fx = {"EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "USD", "JPY", "SEK", "NOK", "SGD", "HKD"}
-                if len(alpha) == 6 and alpha[:3] in iso_fx and alpha[3:] in iso_fx:
-                    contract_val = 100000.0
-                else:
-                    contract_val = 1.0
+            from core.friction import default_paper_contract_size
+            contract_val = default_paper_contract_size(pair)
         is_long = target.get("action") in ("BUY", "LONG") or target.get("side") == "LONG"
         if entry_p > 0 and exit_price > 0:
             diff = (exit_price - entry_p) if is_long else (entry_p - exit_price)

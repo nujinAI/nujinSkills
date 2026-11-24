@@ -23,7 +23,7 @@ export function useSignals() {
 
   const activePositions = computed<SignalData[]>(() => {
     return signals.value.filter(
-      (s) => s.status !== 'CLOSED' && s.status !== 'FAILED_BROKER_ORDER' && s.status !== 'REJECTED'
+      (s) => s.status === 'ACTIVE_IN_POSITION' || s.status === 'PENDING_LIMIT' || s.status === 'OPEN' || s.status === 'PENDING'
     );
   });
 
@@ -61,7 +61,7 @@ export function useSignals() {
         body: JSON.stringify({
           id: signal.id,
           strategy: signal.strategy,
-          exit_price: exitPrice || signal.price,
+          exit_price: exitPrice ?? 0,
           exit_reason: 'MANUAL_UI_CLOSE',
         }),
       });

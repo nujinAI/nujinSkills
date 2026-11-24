@@ -20,48 +20,56 @@ from server.brokers.registry import broker_registry
 
 logger = logging.getLogger("StrategyExecutor")
 
-_ISO_FX_CCYS = {"EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "USD", "JPY", "SEK", "NOK", "SGD", "HKD"}
+# Per-loop execution mutex preventing concurrent strategies from racing past
+# allow_pyramiding / cannibalization guards on simultaneous bar rollovers.
+_EXEC_LOCKS: Dict[int, asyncio.Lock] = {}
 
 
-def _fallback_contract_size(symbol: str) -> float:
-    from core.data import resolve_market_symbol
-    resolved = resolve_market_symbol(symbol)
-    if resolved in ("OANDA:XAUUSD", "COMEX:GC1!"):
-        return 100.0
-    if resolved in ("CME_MINI:NQ1!", "CME_MINI:ES1!"):
-        return 10.0
-    ticker = resolved.split(":", 1)[1] if ":" in resolved else resolved
-    alpha = re.sub(r"[^A-Z]", "", ticker.upper())
-    if len(alpha) == 6 and alpha[:3] in _ISO_FX_CCYS and alpha[3:] in _ISO_FX_CCYS:
-        return 100000.0
-    return 1.0
+def _get_execution_lock() -> asyncio.Lock:
+    loop_id = id(asyncio.get_running_loop())
+    lock = _EXEC_LOCKS.get(loop_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _EXEC_LOCKS[loop_id] = lock
+    return lock
 
 
-def _resolve_contract_size(symbol: str) -> float:
+def _resolve_contract_size(symbol: str, price: float = 0.0) -> float:
+    """
+    Resolves account-currency point value per 1.00 lot from the active broker
+    when connected, falling back to core.friction.default_paper_contract_size
+    for paper/offline mode only.
+    """
     try:
         broker = broker_registry.get_broker(connect=False)
-        if broker and getattr(broker, "is_connected", False) and hasattr(broker, "get_contract_size"):
-            val = float(broker.get_contract_size(symbol) or 0.0)
-            if val > 0:
-                return val
+        if broker and getattr(broker, "is_connected", False):
+            if hasattr(broker, "get_point_value") and price and float(price) > 0:
+                pv = broker.get_point_value(symbol, float(price))
+                if pv is not None and float(pv) > 0:
+                    return float(pv)
+            if hasattr(broker, "get_contract_size"):
+                cs = broker.get_contract_size(symbol)
+                if cs is not None and float(cs) > 0:
+                    return float(cs)
     except Exception:
         pass
-    return _fallback_contract_size(symbol)
+    from core.friction import default_paper_contract_size
+    return default_paper_contract_size(symbol)
 
 
 def _resolve_max_allowed_spread(symbol: str, price: float, stop_loss: float, strat_inst: Any) -> float:
+    """
+    Universal asset-agnostic spread-spike ceiling derived from core.friction
+    and stop-loss geometry (with optional per-strategy `max_allowed_spread` override).
+    """
     if strat_inst is not None:
         explicit = getattr(strat_inst, "max_allowed_spread", None)
         if explicit is not None and float(explicit) > 0:
             return float(explicit)
-    from core.data import resolve_market_symbol
     from core.friction import resolve_asset_friction
-    resolved = resolve_market_symbol(symbol)
-    if resolved == "OANDA:XAUUSD":
-        return 0.70
     px = max(float(price or 0.0), 1e-9)
     baseline_spread, _, _ = resolve_asset_friction(symbol, px)
-    base_cap = max(baseline_spread * 4.0, px * 0.0002)
+    base_cap = max(baseline_spread * 3.5, px * 0.0002)
     stop_dist = abs(px - float(stop_loss)) if (price and stop_loss and float(stop_loss) > 0) else 0.0
     if stop_dist > 0:
         stop_cap = stop_dist * 0.15
@@ -195,7 +203,14 @@ class StrategyEvaluator:
                 is_limit_order = (sig_order_t == "LIMIT") or (limit_p is not None and limit_p > 0)
 
                 atr_v = curr_atr if (curr_atr and not np.isnan(curr_atr) and curr_atr > 0) else (curr_p * 0.005)
-                if hasattr(strat_inst, "compute_indicators"):
+                found_sig_atr = False
+                for atr_col in ("atr", "atr_14", "ATR", "ATR_14"):
+                    if atr_col in sig_df.columns and not np.isnan(sig_df[atr_col].iloc[-1]):
+                        atr_v = float(sig_df[atr_col].iloc[-1])
+                        found_sig_atr = True
+                        break
+                # Only recompute compute_indicators if ATR wasn't already available on df/sig_df
+                if not found_sig_atr and (not curr_atr or np.isnan(curr_atr) or curr_atr <= 0) and hasattr(strat_inst, "compute_indicators"):
                     try:
                         ind_df = strat_inst.compute_indicators(df_idx)
                         for atr_col in ("atr", "atr_14", "ATR", "ATR_14"):
@@ -373,7 +388,7 @@ class StrategyEvaluator:
                 dollar_risk_1r = target_equity * float(getattr(strat_inst, "risk_pct_1r", 0.0035))
                 stop_dist = abs(ref_entry - sl) if sl > 0 else (atr_v * 1.5 if atr_v > 0 else ref_entry * 0.005)
                 if stop_dist > 0:
-                    multiplier = _resolve_contract_size(symbol)
+                    multiplier = _resolve_contract_size(symbol, ref_entry)
                     lots = dollar_risk_1r / (stop_dist * multiplier)
                 else:
                     lots = 0.01
@@ -382,6 +397,14 @@ class StrategyEvaluator:
 
             strat_max_bars = getattr(strat_inst, "time_invalidation_bars", getattr(strat_inst, "max_bars", getattr(strat_inst, "max_hold_bars", None)))
             max_hold_seconds = (strat_max_bars * bar_sec) if strat_max_bars is not None else None
+
+            raw_lim_exp = last_row.get("limit_expiry_bars", None) if hasattr(last_row, "get") else None
+            if raw_lim_exp is not None and not np.isnan(raw_lim_exp) and int(raw_lim_exp) > 0:
+                limit_expiry_bars = int(raw_lim_exp)
+            else:
+                strat_lim_exp = getattr(strat_inst, "limit_expiry_bars", None)
+                limit_expiry_bars = int(strat_lim_exp) if (strat_lim_exp is not None and int(strat_lim_exp) > 0) else None
+            limit_expiry_seconds = (limit_expiry_bars * bar_sec) if (is_limit_order and limit_expiry_bars) else None
 
             # 5. Dynamic Trailing Stop Configuration
             use_trailing = getattr(strat_inst, "trailing_stop", False)
@@ -410,6 +433,7 @@ class StrategyEvaluator:
                 "atr_trail_mult": atr_trail_m,
                 "min_hold_seconds": min_bars * bar_sec,
                 "max_hold_seconds": max_hold_seconds,
+                "limit_expiry_seconds": limit_expiry_seconds,
                 "trailing_stop": use_trailing,
                 "trailing_offset": trail_offset,
                 "trailing_buffer": trail_pos,
@@ -518,12 +542,15 @@ class NativeStrategyRunner:
         Prevents funded account breaches by halting new entries when daily or total loss limits
         are reached, or when the remaining daily budget is less than 2.5x single trade risk ($75 safety buffer).
         """
-        strat_inst = None
-        try:
-            from server.backtest_engine import load_strategy_instance
-            strat_inst = load_strategy_instance(self.strategy_name)
-        except Exception as e_st:
-            logger.debug(f"[DrawdownGuard] Could not load strategy instance for {self.strategy_name}: {e_st}")
+        strat_inst = getattr(self, "_cached_strat_inst", None)
+        if strat_inst is None:
+            try:
+                from server.backtest_engine import load_strategy_instance
+                strat_inst = load_strategy_instance(self.strategy_name)
+                if strat_inst is not None:
+                    self._cached_strat_inst = strat_inst
+            except Exception as e_st:
+                logger.debug(f"[DrawdownGuard] Could not load strategy instance for {self.strategy_name}: {e_st}")
 
         # 1. Resolve Account & Pluggable Risk Profile
         primary_acc = None
@@ -542,22 +569,29 @@ class NativeStrategyRunner:
         if not initial_balance or initial_balance <= 0:
             initial_balance = float(getattr(strat_inst, "benchmark_equity", 5000.0))
 
+        # Preserve authentic starting capital separately from live balance/equity
+        # so total drawdown tracks closed + floating losses from initial_balance accurately.
+        account_initial_balance = float(initial_balance)
+
         risk_profile = (primary_acc.get("risk_profile") if primary_acc else None) or {}
         now_utc = datetime.now(timezone.utc)
         today_utc_str = now_utc.strftime("%Y-%m-%d")
-
-        # If user explicitly bypassed drawdown guard for today or disabled it
-        if risk_profile.get("disable_daily_guard") is True or risk_profile.get("bypass_guard_date") == today_utc_str:
-            return True, f"Drawdown guard bypassed for today ({today_utc_str})", {"status": "BYPASSED", "day_key": today_utc_str}
+        daily_guard_bypassed = (
+            risk_profile.get("disable_daily_guard") is True
+            or risk_profile.get("bypass_guard_date") == today_utc_str
+        )
 
         # Respect account-level risk profile, falling back to strategy configuration, then generic defaults
         max_daily_dd_pct = float(risk_profile.get("max_daily_drawdown_pct") or getattr(strat_inst, "max_daily_drawdown_pct", 0.03))
         max_total_dd_pct = float(risk_profile.get("max_total_drawdown_pct") or getattr(strat_inst, "max_total_drawdown_pct", 0.05))
-        trade_risk_pct = float(risk_profile.get("risk_per_trade_pct") or getattr(strat_inst, "max_risk_pct", getattr(strat_inst, "risk_per_trade_pct", 0.0060)))
+        trade_risk_pct = float(risk_profile.get("risk_per_trade_pct") or getattr(strat_inst, "max_risk_pct", getattr(strat_inst, "risk_per_trade_pct", getattr(strat_inst, "risk_pct_1r", 0.0060))))
+        strat_max_daily_losses_raw = getattr(strat_inst, "max_daily_losses", None) if strat_inst else None
+        strat_max_daily_losses = int(strat_max_daily_losses_raw) if (strat_max_daily_losses_raw is not None and int(strat_max_daily_losses_raw) > 0) else None
 
         # 2. Check live broker equity/balance (ONLY IF not in paper mode, avoiding $100k paper mismatch)
         broker_equity = None
         broker_balance = None
+        broker_today_net = None
         try:
             broker = broker_registry.get_broker()
             is_paper = getattr(broker, "broker_id", "paper") == "paper"
@@ -567,8 +601,9 @@ class NativeStrategyRunner:
                 bal = float(info.get("balance") or 0.0)
                 if eq > 0:
                     broker_equity = eq
-                    broker_balance = bal
-                    initial_balance = bal
+                    broker_balance = bal if bal > 0 else eq
+                if info.get("today_net_usd") is not None:
+                    broker_today_net = float(info["today_net_usd"])
                 if bal > 0 and accounts_store and hasattr(accounts_store, "update_account_balance"):
                     accounts_store.update_account_balance(
                         broker_id=getattr(broker, "broker_id", "tradelocker"),
@@ -579,24 +614,19 @@ class NativeStrategyRunner:
             logger.debug(f"[DrawdownGuard] Broker info error: {e_b}")
 
         # 3. Calculate today's PnL from closed signals
-        now_utc = datetime.now(timezone.utc)
-        today_utc_str = now_utc.strftime("%Y-%m-%d")
         signals = signal_store.get_all()
         today_realized_usd = 0.0
         today_losses_count = 0
+        strategy_today_losses_count = 0
+        current_strat_clean = (self.strategy_name or "").replace(".py", "").lower()
 
         for s in signals:
-            # If a specific strategy is requested, isolate to it. If evaluating global account status, sum across all strategies.
-            current_strat_clean = (self.strategy_name or "").replace(".py", "").lower()
-            strat_name_sig = (s.get("strategy") or "").replace(".py", "").lower()
-            if self.strategy_name and self.strategy_name != "ALL" and strat_name_sig and current_strat_clean:
-                # If checking strategy-specific runner, isolate only if explicitly non-global
-                pass  # Global account PnL across all strategies today
-
-            t = s.get("time") or s.get("entry_time") or 0
-            dt = datetime.fromtimestamp(t, tz=timezone.utc)
+            t = s.get("exit_time") or s.get("executed_at") or s.get("time") or s.get("entry_time") or 0
+            if not t:
+                continue
+            dt = datetime.fromtimestamp(float(t), tz=timezone.utc)
             if dt.strftime("%Y-%m-%d") == today_utc_str:
-                if s.get("status") == "CLOSED" or s.get("exit_price"):
+                if s.get("status") == "CLOSED":
                     pnl = 0.0
                     if s.get("pnl_usd") is not None:
                         pnl = float(s["pnl_usd"])
@@ -605,7 +635,7 @@ class NativeStrategyRunner:
                         exit_p = float(s.get("exit_price") or 0.0)
                         lots = float(s.get("lots") or s.get("lot_size") or 0.01)
                         pair = s.get("pair") or s.get("symbol") or "XAU/USD"
-                        c_mult = _resolve_contract_size(pair)
+                        c_mult = _resolve_contract_size(pair, entry_p)
                         action = (s.get("action") or "BUY").upper()
                         if entry_p > 0 and exit_p > 0:
                             diff = (exit_p - entry_p) if action in ("BUY", "LONG") else (entry_p - exit_p)
@@ -613,15 +643,24 @@ class NativeStrategyRunner:
                     today_realized_usd += pnl
                     if pnl < 0:
                         today_losses_count += 1
+                        strat_name_sig = (s.get("strategy") or "").replace(".py", "").lower()
+                        if current_strat_clean and strat_name_sig == current_strat_clean:
+                            strategy_today_losses_count += 1
 
-        # 4. Losses and budget calculation
-        max_daily_loss_usd = round(initial_balance * max_daily_dd_pct, 2)
-        max_total_loss_usd = round(initial_balance * max_total_dd_pct, 2)
-        single_trade_risk_usd = round(initial_balance * trade_risk_pct, 2)
+        # 4. Losses and budget calculation (authentic initial balance for total DD, live equity & broker daily PnL for daily DD)
+        current_balance = broker_balance if (broker_balance and broker_balance > 0) else account_initial_balance
+        current_equity = broker_equity if (broker_equity and broker_equity > 0) else max(0.0, current_balance + min(0.0, today_realized_usd))
+        daily_ref_balance = max(current_balance, account_initial_balance)
 
-        broker_loss = (initial_balance - broker_equity) if (broker_equity and broker_equity < initial_balance) else 0.0
-        signals_loss = abs(today_realized_usd) if today_realized_usd < 0 else 0.0
-        today_loss_usd = round(max(broker_loss, signals_loss), 2)
+        max_daily_loss_usd = round(daily_ref_balance * max_daily_dd_pct, 2)
+        max_total_loss_usd = round(account_initial_balance * max_total_dd_pct, 2)
+        single_trade_risk_usd = round(current_equity * trade_risk_pct, 2)
+
+        total_drawdown_usd = round(max(0.0, account_initial_balance - current_equity), 2)
+        floating_loss_usd = max(0.0, current_balance - current_equity)
+        broker_daily_loss_usd = (abs(broker_today_net) if (broker_today_net is not None and broker_today_net < 0) else 0.0) + floating_loss_usd
+        signals_daily_loss_usd = (abs(today_realized_usd) if today_realized_usd < 0 else 0.0) + floating_loss_usd
+        today_loss_usd = round(max(broker_daily_loss_usd, signals_daily_loss_usd), 2)
         remaining_budget_usd = round(max(0.0, max_daily_loss_usd - today_loss_usd), 2)
         # Dynamically calculate required safety buffer strictly from 1R trade risk (2.5x safety buffer):
         buffer_required_usd = round(single_trade_risk_usd * 2.5, 2)
@@ -629,28 +668,49 @@ class NativeStrategyRunner:
         details = {
             "strategy": self.strategy_name,
             "day_key": today_utc_str,
-            "initial_balance": initial_balance,
-            "current_equity": broker_equity or (initial_balance - today_loss_usd),
+            "initial_balance": account_initial_balance,
+            "current_balance": current_balance,
+            "current_equity": current_equity,
+            "total_drawdown_usd": total_drawdown_usd,
+            "max_total_loss_usd": max_total_loss_usd,
+            "max_total_dd_pct": max_total_dd_pct,
             "today_loss_usd": today_loss_usd,
-            "today_realized_pnl_usd": round(today_realized_usd, 2),
+            "today_realized_pnl_usd": round(broker_today_net if broker_today_net is not None else today_realized_usd, 2),
             "today_losses_count": today_losses_count,
+            "strategy_today_losses_count": strategy_today_losses_count,
+            "max_daily_losses": strat_max_daily_losses,
             "max_daily_loss_usd": max_daily_loss_usd,
             "max_daily_dd_pct": max_daily_dd_pct,
             "remaining_budget_usd": remaining_budget_usd,
             "single_trade_risk_usd": single_trade_risk_usd,
             "buffer_required_usd": buffer_required_usd,
+            "daily_guard_bypassed": daily_guard_bypassed,
             "message": ""
         }
 
-        # 4. Respect Global Risk Budget as the single authority:
-        # Circuit breaker is governed purely by the user's dollar risk budget.
-        if broker_loss >= max_total_loss_usd:
-            details["message"] = f"Total drawdown limit reached: -${broker_loss:.2f} >= -${max_total_loss_usd:.2f} (5.0%)"
+        # 5. HARD ACCOUNT BLOW-UP GUARD: Total drawdown is ALWAYS enforced (even if daily guard is bypassed).
+        if total_drawdown_usd >= max_total_loss_usd:
+            details["message"] = (
+                f"Total drawdown limit reached: -${total_drawdown_usd:.2f} >= -${max_total_loss_usd:.2f} "
+                f"({max_total_dd_pct*100:.1f}% of ${account_initial_balance:.2f})"
+            )
             return False, "TOTAL_DRAWDOWN_LIMIT_EXCEEDED", details
+
+        # If user explicitly bypassed the DAILY guard, return SAFE with full real budget telemetry (never Budget: $0 lie!)
+        if daily_guard_bypassed:
+            details["status"] = "BYPASSED"
+            details["message"] = f"Daily guard bypassed; total DD safe (-${total_drawdown_usd:.2f} / -${max_total_loss_usd:.2f})"
+            return True, f"Drawdown guard bypassed for today ({today_utc_str})", details
 
         if today_loss_usd >= max_daily_loss_usd:
             details["message"] = f"Daily drawdown limit reached: -${today_loss_usd:.2f} >= -${max_daily_loss_usd:.2f} ({max_daily_dd_pct*100:.1f}%)"
             return False, "DAILY_DRAWDOWN_LIMIT_EXCEEDED", details
+
+        if strat_max_daily_losses is not None and strategy_today_losses_count >= strat_max_daily_losses:
+            details["message"] = (
+                f"Strategy daily loss count reached: {strategy_today_losses_count} / {strat_max_daily_losses} losses today"
+            )
+            return False, "MAX_DAILY_LOSSES_REACHED", details
 
         if remaining_budget_usd < buffer_required_usd:
             details["message"] = f"Daily drawdown safety buffer exhausted: remaining ${remaining_budget_usd:.2f} < required safety buffer ${buffer_required_usd:.2f}"
@@ -766,7 +826,10 @@ class NativeStrategyRunner:
                 if active_pos:
                     current_price = float(quote.get("price") or 0.0)
                     if current_price > 0:
-                        await self._evaluate_position_exit(active_pos, current_price, quote=quote)
+                        if active_pos.get("status") == "PENDING_LIMIT":
+                            await self._evaluate_pending_order(active_pos, current_price, quote=quote)
+                        else:
+                            await self._evaluate_position_exit(active_pos, current_price, quote=quote)
                 else:
                     await self.stop()
                 return
@@ -775,10 +838,13 @@ class NativeStrategyRunner:
             if current_price <= 0:
                 return
 
-            # 1. Check open position exit triggers (spread-aware with live Bid/Ask)
+            # 1. Monitor resting pending LIMIT order OR open position exit triggers
             active_pos = signal_store.get_active(self.strategy_name)
             if active_pos:
-                await self._evaluate_position_exit(active_pos, current_price, quote=quote)
+                if active_pos.get("status") == "PENDING_LIMIT":
+                    await self._evaluate_pending_order(active_pos, current_price, quote=quote)
+                else:
+                    await self._evaluate_position_exit(active_pos, current_price, quote=quote)
         except Exception as e_tick:
             logger.error(f"[NativeStrategyRunner] Error in _on_market_tick for {self.strategy_name}: {e_tick}", exc_info=True)
 
@@ -886,8 +952,18 @@ class NativeStrategyRunner:
             logger.error(f"[NativeStrategyRunner] Error in _on_market_bar for {self.strategy_name}: {e_bar}", exc_info=True)
 
     async def _trigger_new_signal(self, sig: Dict[str, Any]) -> None:
+        """Serialized entry point preventing concurrent strategies from racing past pyramiding/conflict guards."""
+        async with _get_execution_lock():
+            await self._trigger_new_signal_locked(sig)
+
+    async def _trigger_new_signal_locked(self, sig: Dict[str, Any]) -> None:
         """Saves signal to store, alerts Telegram, plays sound, and broadcasts to UI."""
-        # Cross-Strategy Pyramiding Guard (double defense before order execution)
+        # Re-check single-position-per-strategy inside the execution lock
+        if signal_store.get_active(self.strategy_name):
+            logger.info(f"[NativeStrategyRunner] Active position/order already exists for '{self.strategy_name}' — skipping duplicate entry.")
+            return
+
+        # Cross-Strategy Pyramiding Guard (double defense inside execution lock)
         pyr_blocked, pyr_reason = self._is_pyramiding_blocked()
         if pyr_blocked:
             logger.warning(f"[NativeStrategyRunner] ORDER EXECUTION BLOCKED: {pyr_reason}")
@@ -908,36 +984,137 @@ class NativeStrategyRunner:
             self._send_drawdown_alert(reason, dd_details)
             return
 
-        # Triple defense: Live Spread Guard (asset-aware threshold with stop-distance cap)
-        strat_inst = None
+        # Triple defense: Live Quote Freshness, Spread Guard, Pre-Trade SL/TP Orientation, & Max-Slippage ("No-Chase") Interlock
+        strat_inst = getattr(self, "_cached_strat_inst", None)
+        if strat_inst is None:
+            try:
+                from server.backtest_engine import load_strategy_instance
+                strat_inst = load_strategy_instance(self.strategy_name)
+                if strat_inst is not None:
+                    self._cached_strat_inst = strat_inst
+            except Exception:
+                pass
         try:
-            from server.backtest_engine import load_strategy_instance
-            strat_inst = load_strategy_instance(self.strategy_name)
+            active_broker = broker_registry.get_broker()
+            is_paper_precheck = getattr(active_broker, "broker_id", "paper") == "paper"
         except Exception:
-            pass
+            active_broker = None
+            is_paper_precheck = True
+
+        # Preserve immutable signal benchmark telemetry before live fill reconciliation
+        signal_price = float(sig.get("signal_price") or sig.get("price") or 0.0)
+        sig["signal_price"] = signal_price
+        bar_step = int(getattr(self.provider, "bar_step_seconds", 0) or 0) if hasattr(self, "provider") and self.provider else 0
+        raw_bar_t = int(sig.get("time") or 0)
+        if raw_bar_t > 0 and bar_step > 0:
+            sig["signal_bar_close_ts"] = raw_bar_t + bar_step
+
+        order_type_u = str(sig.get("order_type") or sig.get("type") or "MARKET").upper()
+        latest_quote = self.provider.get_latest_quote() if hasattr(self, "provider") and self.provider else None
+        now_check = time.time()
+        quote_ts = float((latest_quote or {}).get("timestamp") or 0.0)
+        # For live MARKET orders, refresh if quote is older than 4.0s so slippage checks use real-time bid/ask
+        refresh_threshold = 4.0 if (not is_paper_precheck and order_type_u == "MARKET") else 30.0
+        needs_refresh = (not latest_quote) or (quote_ts <= 0) or (abs(now_check - quote_ts) > refresh_threshold)
+
+        if not is_paper_precheck and needs_refresh and active_broker and hasattr(active_broker, "get_latest_quote"):
+            try:
+                try:
+                    refreshed_q = active_broker.get_latest_quote(self.symbol, max_age=1.5)
+                except TypeError:
+                    refreshed_q = active_broker.get_latest_quote(self.symbol)
+                if refreshed_q and refreshed_q.get("price"):
+                    latest_quote = refreshed_q
+                    quote_ts = float(latest_quote.get("timestamp") or 0.0)
+            except Exception as e_rq:
+                logger.debug(f"[NativeStrategyRunner] Broker quote refresh note: {e_rq}")
+
+        quote_stale = (not latest_quote) or (quote_ts <= 0) or (abs(time.time() - quote_ts) > 30.0)
+        live_bid = float((latest_quote or {}).get("bid") or 0.0)
+        live_ask = float((latest_quote or {}).get("ask") or 0.0)
+
+        if not is_paper_precheck and (quote_stale or live_bid <= 0 or live_ask <= 0 or live_ask < live_bid):
+            age_str = f"{int(abs(time.time() - quote_ts))}s" if quote_ts > 0 else "missing"
+            stale_msg = f"Broker quote unavailable or stale ({age_str}) for {self.symbol}"
+            logger.warning(f"[NativeStrategyRunner] 🛡️ QUOTE FRESHNESS BLOCKED: {stale_msg}. Order suppressed.")
+            sig["status"] = "BLOCKED_STALE_QUOTE"
+            sig["exit_reason"] = f"STALE_OR_MISSING_BROKER_QUOTE ({age_str})"
+            sig["annotation"] = f"Stale Quote ({age_str})"
+            signal_store.add(sig)
+            return
+
         try:
-            latest_quote = self.provider.get_latest_quote() if hasattr(self, "provider") and self.provider else None
-            if latest_quote:
-                live_bid = float(latest_quote.get("bid") or 0.0)
-                live_ask = float(latest_quote.get("ask") or 0.0)
-                if live_bid > 0 and live_ask > 0 and live_ask >= live_bid:
-                    from core.data import get_market_price_precision
-                    price_prec = get_market_price_precision(self.symbol)
-                    current_spread = round(live_ask - live_bid, price_prec)
-                    sig["live_spread"] = current_spread
-                    ref_price = float(sig.get("price") or latest_quote.get("price") or 0.0)
-                    ref_sl = float(sig.get("stop_loss") or 0.0)
-                    max_allowed_spread = _resolve_max_allowed_spread(self.symbol, ref_price, ref_sl, strat_inst)
-                    if current_spread > max_allowed_spread:
-                        spread_msg = f"Live spread (${current_spread:.{price_prec}f}) exceeds maximum threshold (${max_allowed_spread:.{price_prec}f})"
-                        logger.warning(f"[NativeStrategyRunner] 🛡️ SPREAD GUARD BLOCKED: {spread_msg}. Order suppressed.")
-                        sig["status"] = "BLOCKED_SPREAD_SPIKE"
-                        sig["exit_reason"] = f"SPREAD_SPIKE: ${current_spread:.{price_prec}f} > ${max_allowed_spread:.{price_prec}f}"
-                        sig["annotation"] = f"Spread Spike (${current_spread:.{price_prec}f})"
-                        signal_store.add(sig)
-                        return
+            if live_bid > 0 and live_ask > 0 and live_ask >= live_bid:
+                from core.data import get_market_price_precision
+                price_prec = get_market_price_precision(self.symbol)
+                current_spread = round(live_ask - live_bid, price_prec)
+                sig["live_spread"] = current_spread
+                ref_price = float(signal_price or (latest_quote or {}).get("price") or 0.0)
+                ref_sl = float(sig.get("stop_loss") or 0.0)
+                ref_tp = float(sig.get("take_profit") or 0.0)
+                max_allowed_spread = _resolve_max_allowed_spread(self.symbol, ref_price, ref_sl, strat_inst)
+                if current_spread > max_allowed_spread:
+                    spread_msg = f"Live spread (${current_spread:.{price_prec}f}) exceeds maximum threshold (${max_allowed_spread:.{price_prec}f})"
+                    logger.warning(f"[NativeStrategyRunner] 🛡️ SPREAD GUARD BLOCKED: {spread_msg}. Order suppressed.")
+                    sig["status"] = "BLOCKED_SPREAD_SPIKE"
+                    sig["exit_reason"] = f"SPREAD_SPIKE: ${current_spread:.{price_prec}f} > ${max_allowed_spread:.{price_prec}f}"
+                    sig["annotation"] = f"Spread Spike (${current_spread:.{price_prec}f})"
+                    signal_store.add(sig)
+                    return
+
+                # Verify MARKET order SL/TP orientation & Max Adverse Slippage ("No-Chase") against live Ask (BUY) / Bid (SELL)
+                if not is_paper_precheck and order_type_u == "MARKET":
+                    is_long_sig = str(sig.get("action") or "BUY").upper() in ("BUY", "LONG")
+                    exec_px = live_ask if is_long_sig else live_bid
+
+                    if ref_sl > 0 or ref_tp > 0:
+                        sl_bad = (ref_sl > 0) and ((ref_sl >= exec_px) if is_long_sig else (ref_sl <= exec_px))
+                        tp_bad = (ref_tp > 0) and ((ref_tp <= exec_px) if is_long_sig else (ref_tp >= exec_px))
+                        if sl_bad or tp_bad:
+                            move_msg = f"Live price ({exec_px:.{price_prec}f}) already moved past SL ({ref_sl:.{price_prec}f}) / TP ({ref_tp:.{price_prec}f})"
+                            logger.warning(f"[NativeStrategyRunner] 🛡️ PRE-TRADE ORIENTATION BLOCKED: {move_msg}. Order suppressed.")
+                            sig["status"] = "BLOCKED_PRICE_MOVED"
+                            sig["exit_reason"] = f"PRICE_MOVED_PAST_SL_TP (exec={exec_px:.{price_prec}f}, sl={ref_sl:.{price_prec}f}, tp={ref_tp:.{price_prec}f})"
+                            sig["annotation"] = "Blocked: Price Moved Past SL/TP"
+                            signal_store.add(sig)
+                            return
+
+                    # Universal Max Adverse Slippage ("No-Chase") Interlock:
+                    # Never chase a market order if live executable price already ran away from the signal bar close.
+                    if signal_price > 0:
+                        adverse_slip = (exec_px - signal_price) if is_long_sig else (signal_price - exec_px)
+                        strat_slip_cap = getattr(strat_inst, "max_entry_slippage_pts", None) if strat_inst else None
+                        if strat_slip_cap is not None and float(strat_slip_cap) > 0:
+                            max_adverse_slip = float(strat_slip_cap)
+                        else:
+                            caps = []
+                            tp_dist = abs(ref_tp - signal_price) if ref_tp > 0 else 0.0
+                            sl_dist = abs(signal_price - ref_sl) if ref_sl > 0 else 0.0
+                            if tp_dist > 0:
+                                caps.append(max(current_spread * 1.5, tp_dist * 0.20))
+                            if sl_dist > 0:
+                                caps.append(max(current_spread * 1.5, sl_dist * 0.15))
+                            max_adverse_slip = min(caps) if caps else max(current_spread * 2.5, signal_price * 0.0005)
+
+                        if adverse_slip > max_adverse_slip:
+                            slip_msg = (
+                                f"Adverse slippage {adverse_slip:.{price_prec}f} pts > max {max_adverse_slip:.{price_prec}f} pts "
+                                f"(signal={signal_price:.{price_prec}f}, live_exec={exec_px:.{price_prec}f})"
+                            )
+                            logger.warning(f"[NativeStrategyRunner] 🛡️ NO-CHASE SLIPPAGE BLOCKED: {slip_msg}. Order suppressed.")
+                            sig["status"] = "BLOCKED_EXCESSIVE_SLIPPAGE"
+                            sig["live_exec_price"] = exec_px
+                            sig["adverse_slippage_pts"] = round(adverse_slip, price_prec)
+                            sig["max_allowed_slippage_pts"] = round(max_adverse_slip, price_prec)
+                            sig["exit_reason"] = f"EXCESSIVE_SLIPPAGE: {adverse_slip:.{price_prec}f} > {max_adverse_slip:.{price_prec}f}"
+                            sig["annotation"] = f"Blocked: Chased Slippage ({adverse_slip:.{price_prec}f})"
+                            signal_store.add(sig)
+                            return
+
+                    # Pass live executable price so broker sizes lots against actual entry distance to SL
+                    sig["live_exec_price"] = exec_px
         except Exception as e_spread:
-            logger.debug(f"[NativeStrategyRunner] Live spread check bypassed: {e_spread}")
+            logger.debug(f"[NativeStrategyRunner] Live spread/orientation/slippage check bypassed: {e_spread}")
 
         logger.info(f"[NativeStrategyRunner] 🚀 SIGNAL TRIGGERED for {self.strategy_name}: {sig['action']} @ {sig['price']}")
 
@@ -1020,6 +1197,30 @@ class NativeStrategyRunner:
                 sig["status"] = "ACTIVE_IN_POSITION"
                 sig["execution_mode"] = "PAPER_SIMULATED"
                 sig["annotation"] = f"{sig.get('annotation', '')} (Simulated Paper)"
+            elif order_res.get("status") == "PENDING_ORDER":
+                sig["status"] = "PENDING_LIMIT"
+                sig["execution_mode"] = "LIVE_BROKER"
+                sig["placed_at"] = now_ts
+                b_lots = float(order_res.get("filled_lots") or 0.0)
+                if b_lots > 0:
+                    sig["lots"] = b_lots
+                    sig["lot_size"] = b_lots
+                b_details = order_res.get("details", [])
+                if b_details and isinstance(b_details, list):
+                    first_det = b_details[0]
+                    if first_det.get("order_id"):
+                        sig["broker_order_id"] = str(first_det.get("order_id"))
+                    det_lots = float(first_det.get("filled_lots") or 0.0)
+                    if det_lots > 0:
+                        sig["lots"] = det_lots
+                        sig["lot_size"] = det_lots
+                elif order_res.get("order_id"):
+                    sig["broker_order_id"] = str(order_res.get("order_id"))
+                logger.info(
+                    f"[ExecutionAudit] PENDING_LIMIT {self.strategy_name} {sig.get('action')} {self.symbol} "
+                    f"@ {sig.get('price')} (lots={sig.get('lots')}, order_id={sig.get('broker_order_id')}, "
+                    f"expiry={sig.get('limit_expiry_seconds')}s)"
+                )
             elif order_res.get("status") == "FILLED":
                 sig["status"] = "ACTIVE_IN_POSITION"
                 sig["execution_mode"] = "LIVE_BROKER"
@@ -1045,6 +1246,26 @@ class NativeStrategyRunner:
                     if det_lots > 0:
                         sig["lots"] = det_lots
                         sig["lot_size"] = det_lots
+                # Execution audit telemetry (positive slippage = adverse, negative = price improvement)
+                try:
+                    from core.data import get_market_price_precision
+                    p_prec = get_market_price_precision(self.symbol)
+                    fill_px = float(sig.get("price") or 0.0)
+                    ref_sig_px = float(sig.get("signal_price") or fill_px)
+                    is_l_fill = str(sig.get("action") or "BUY").upper() in ("BUY", "LONG")
+                    slip_pts = round((fill_px - ref_sig_px) if is_l_fill else (ref_sig_px - fill_px), p_prec)
+                    sig["entry_slippage_pts"] = slip_pts
+                    close_ts = int(sig.get("signal_bar_close_ts") or 0)
+                    lat_ms = int(max(0.0, (time.time() - close_ts) * 1000.0)) if close_ts > 0 else 0
+                    if close_ts > 0:
+                        sig["execution_latency_ms"] = lat_ms
+                    logger.info(
+                        f"[ExecutionAudit] FILLED {self.strategy_name} {sig.get('action')} {self.symbol} | "
+                        f"signal={ref_sig_px:.{p_prec}f} -> fill={fill_px:.{p_prec}f} (slip={slip_pts:+.{p_prec}f} pts, latency={lat_ms}ms) | "
+                        f"lots={sig.get('lots')} | SL={sig.get('stop_loss')} TP={sig.get('take_profit')}"
+                    )
+                except Exception:
+                    pass
             else:
                 logger.error(f"[NativeStrategyRunner] Unrecognized order status from broker: {order_res.get('status')}")
                 sig["status"] = "REJECTED"
@@ -1112,6 +1333,164 @@ class NativeStrategyRunner:
                 }
             })
 
+    async def _evaluate_pending_order(self, pos: Dict[str, Any], current_price: float, quote: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Tracks a resting PENDING_LIMIT order against real broker truth:
+          1. Promotes to ACTIVE_IN_POSITION (with authentic avgPrice & fresh executed_at) once filled.
+          2. Enforces `limit_expiry_seconds` by cancelling expired resting orders on the broker (zero orphan GTC orders).
+          3. Reconciles if cancelled externally or filled-and-closed between polls.
+        """
+        now_f = time.time()
+        now_ts = int(now_f)
+        placed_at = int(pos.get("placed_at") or pos.get("executed_at") or pos.get("time") or now_ts)
+        elapsed_sec = max(0, now_ts - placed_at)
+        expiry_raw = pos.get("limit_expiry_seconds")
+        expiry_sec = int(expiry_raw) if (expiry_raw is not None and int(expiry_raw) > 0) else None
+
+        side = str(pos.get("action") or "BUY").upper()
+        is_long = side in ("BUY", "LONG")
+        limit_px = float(pos.get("price") or pos.get("entry_price") or 0.0)
+        bid_p = float((quote or {}).get("bid") or current_price)
+        ask_p = float((quote or {}).get("ask") or current_price)
+
+        broker = None
+        is_paper_broker = True
+        try:
+            broker = broker_registry.get_broker()
+            is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
+        except Exception:
+            pass
+
+        # Paper mode simulated limit fill / expiry
+        if is_paper_broker or not broker or not getattr(broker, "is_connected", False):
+            filled_paper = (limit_px > 0) and ((ask_p <= limit_px) if is_long else (bid_p >= limit_px))
+            if filled_paper:
+                updates = {
+                    "status": "ACTIVE_IN_POSITION",
+                    "price": limit_px,
+                    "entry_price": limit_px,
+                    "executed_at": now_f,
+                    "entry_time_ts": now_f,
+                }
+                pos.update(updates)
+                signal_store.update_signal(pos["id"], updates)
+                logger.info(f"[NativeStrategyRunner] ✅ Paper PENDING_LIMIT #{pos['id']} filled @ {limit_px}")
+                if self.broadcast_callback:
+                    await self.broadcast_callback({"event_type": "SIGNAL_UPDATED", "payload": pos})
+                return
+            if expiry_sec is not None and elapsed_sec >= expiry_sec:
+                closed = signal_store.close_position(signal_id=pos["id"], strategy=self.strategy_name, exit_price=0.0, exit_reason="EXPIRED_LIMIT")
+                if closed and self.broadcast_callback:
+                    await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
+            return
+
+        # Live broker mode: reconcile every 8 seconds against broker open positions & pending orders
+        last_chk = getattr(self, "_last_pending_check_ts", 0.0)
+        if (now_f - last_chk) < 8.0:
+            return
+        self._last_pending_check_ts = now_f
+
+        from core.data import resolve_market_symbol
+        my_canon = resolve_market_symbol(self.symbol)
+        broker_order = pos.get("broker_order", {})
+        b_details = broker_order.get("details", [])
+        first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
+        b_ord_id = str(pos.get("broker_order_id") or first_det.get("order_id") or broker_order.get("order_id") or "")
+
+        # 1. Check if resting order has filled into an open position on the broker
+        try:
+            open_positions = broker.get_open_positions(symbol=self.symbol) if hasattr(broker, "get_open_positions") else None
+        except Exception as e_op:
+            logger.debug(f"[NativeStrategyRunner] Pending order position check note: {e_op}")
+            open_positions = None
+
+        if open_positions is not None:
+            pos_matches = [
+                bp for bp in open_positions
+                if bp.get("symbol") == self.symbol
+                or (bp.get("symbol") and resolve_market_symbol(str(bp.get("symbol"))) == my_canon)
+            ]
+            if pos_matches:
+                live_bp = pos_matches[0]
+                fill_px = float(live_bp.get("avg_price") or limit_px)
+                bp_id = str(live_bp.get("id") or "")
+                updates = {
+                    "status": "ACTIVE_IN_POSITION",
+                    "price": fill_px,
+                    "entry_price": fill_px,
+                    "broker_position_id": bp_id,
+                    "executed_at": now_f,
+                    "entry_time_ts": now_f,
+                }
+                pos.update(updates)
+                signal_store.update_signal(pos["id"], updates)
+                logger.info(
+                    f"[NativeStrategyRunner] ✅ Broker PENDING_LIMIT #{pos['id']} ({self.strategy_name}) "
+                    f"FILLED @ {fill_px} (pos_id={bp_id}). Promoted to ACTIVE_IN_POSITION."
+                )
+                if self.broadcast_callback:
+                    await self.broadcast_callback({"event_type": "SIGNAL_UPDATED", "payload": pos})
+                return
+
+        # 2. Check resting pending orders on broker
+        try:
+            pending_orders = broker.get_pending_orders(symbol=self.symbol) if hasattr(broker, "get_pending_orders") else None
+        except Exception as e_po:
+            logger.debug(f"[NativeStrategyRunner] Pending orders query note: {e_po}")
+            pending_orders = None
+
+        if pending_orders is None:
+            return  # API hiccup; wait for next poll instead of assuming order vanished
+
+        ord_matches = [
+            o for o in pending_orders
+            if (b_ord_id and str(o.get("id") or "") == b_ord_id)
+            or (o.get("symbol") and resolve_market_symbol(str(o.get("symbol"))) == my_canon)
+        ]
+
+        if ord_matches:
+            pos["_pending_missing_confirmations"] = 0
+            if expiry_sec is not None and elapsed_sec >= expiry_sec:
+                cancel_oid = str(ord_matches[0].get("id") or b_ord_id)
+                logger.info(
+                    f"[NativeStrategyRunner] ⏱️ Resting LIMIT order #{pos['id']} ({self.strategy_name}, "
+                    f"broker_order={cancel_oid}) expired after {elapsed_sec}s >= {expiry_sec}s. Cancelling on broker..."
+                )
+                cancel_res = broker.cancel_order(order_id=cancel_oid, symbol=self.symbol) if hasattr(broker, "cancel_order") else {"status": "CANCELLED"}
+                if cancel_res.get("status") in ("CANCELLED", "NOT_FOUND", "CANCELLED_PREVIEW"):
+                    closed = signal_store.close_position(
+                        signal_id=pos["id"],
+                        strategy=self.strategy_name,
+                        exit_price=0.0,
+                        exit_reason="EXPIRED_LIMIT",
+                    )
+                    if closed and self.broadcast_callback:
+                        await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
+                else:
+                    logger.warning(f"[NativeStrategyRunner] Failed cancelling expired limit order {cancel_oid}: {cancel_res}")
+            return
+
+        # 3. Neither in open positions nor in pending orders -> confirm twice before finalizing
+        if open_positions is not None:
+            missing = int(pos.get("_pending_missing_confirmations", 0)) + 1
+            pos["_pending_missing_confirmations"] = missing
+            if missing >= 2:
+                exec_data = None
+                if b_ord_id and hasattr(broker, "get_latest_position_execution"):
+                    try:
+                        exec_data = broker.get_latest_position_execution(order_id=b_ord_id)
+                    except Exception:
+                        pass
+                if exec_data and float(exec_data.get("price") or 0.0) > 0:
+                    eff_exit = float(exec_data["price"])
+                    reason = ("STOP_LOSS" if eff_exit < limit_px else "TAKE_PROFIT") if is_long else ("STOP_LOSS" if eff_exit > limit_px else "TAKE_PROFIT")
+                    signal_store.update_signal(pos["id"], {"status": "ACTIVE_IN_POSITION"})
+                    closed = signal_store.close_position(signal_id=pos["id"], strategy=self.strategy_name, exit_price=eff_exit, exit_reason=reason)
+                else:
+                    closed = signal_store.close_position(signal_id=pos["id"], strategy=self.strategy_name, exit_price=0.0, exit_reason="CANCELLED_ORDER")
+                if closed and self.broadcast_callback:
+                    await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
+
     async def _evaluate_position_exit(self, pos: Dict[str, Any], current_price: float, quote: Optional[Dict[str, Any]] = None) -> None:
         """Monitors active trade against Take Profit, Stop Loss, and Holding Rules with bid/ask spread awareness."""
         now_ts = int(time.time())
@@ -1141,13 +1520,16 @@ class NativeStrategyRunner:
         max_hold_raw = pos.get("max_hold_seconds")
         max_hold = int(max_hold_raw) if (max_hold_raw is not None and max_hold_raw != 0) else None
 
-        # Ensure strategy parameters are available
-        strat_inst = None
-        try:
-            from server.backtest_engine import load_strategy_instance
-            strat_inst = load_strategy_instance(self.strategy_name)
-        except Exception:
-            pass
+        # Ensure strategy parameters are available (cached on runner to avoid disk reload on every tick)
+        strat_inst = getattr(self, "_cached_strat_inst", None)
+        if strat_inst is None:
+            try:
+                from server.backtest_engine import load_strategy_instance
+                strat_inst = load_strategy_instance(self.strategy_name)
+                if strat_inst is not None:
+                    self._cached_strat_inst = strat_inst
+            except Exception:
+                pass
 
         # Trailing stop configuration: prioritize signal pos, fallback to strategy definition, fallback to True
         use_trailing = pos.get("trailing_stop")
@@ -1237,6 +1619,7 @@ class NativeStrategyRunner:
 
         exit_reason: Optional[str] = None
         reconciled_exit_price: Optional[float] = None
+        broker_already_closed = False
 
         # 1. Broker Server-Side Execution Reconciliation (Priority 1 if connected):
         # If an active execution broker is connected (e.g. TradeLocker live/demo account),
@@ -1261,6 +1644,7 @@ class NativeStrategyRunner:
                                 empty_count = int(pos.get("_broker_empty_confirmations", 0)) + 1
                                 pos["_broker_empty_confirmations"] = empty_count
                                 if empty_count >= 2:
+                                    broker_already_closed = True
                                     logger.info(f"[NativeStrategyRunner] 🛡️ Confirmed: Broker server closed position #{pos['id']} ({pos['strategy']}). Reconciling authentic broker execution!")
                                     # Attempt to fetch exact execution details from broker
                                     broker_order = pos.get("broker_order", {})
@@ -1284,6 +1668,33 @@ class NativeStrategyRunner:
                                         exit_reason = "STOP_LOSS" if eff_exit_price > entry_price else "TAKE_PROFIT"
                             else:
                                 pos["_broker_empty_confirmations"] = 0
+                                # Synchronize authentic broker entry avg_price & position_id if internal record drifted
+                                live_bp = matches[0]
+                                bp_avg = float(live_bp.get("avg_price") or 0.0)
+                                bp_id = str(live_bp.get("id") or "")
+                                sync_updates: Dict[str, Any] = {}
+                                if bp_id and not pos.get("broker_position_id"):
+                                    pos["broker_position_id"] = bp_id
+                                    sync_updates["broker_position_id"] = bp_id
+                                if bp_avg > 0 and abs(bp_avg - entry_price) > (10.0 ** (-price_prec)):
+                                    if not pos.get("signal_price"):
+                                        pos["signal_price"] = entry_price
+                                        sync_updates["signal_price"] = entry_price
+                                    pos["price"] = bp_avg
+                                    pos["entry_price"] = bp_avg
+                                    entry_price = bp_avg
+                                    sync_updates["price"] = bp_avg
+                                    sync_updates["entry_price"] = bp_avg
+                                    sig_px = float(pos.get("signal_price") or bp_avg)
+                                    sync_updates["entry_slippage_pts"] = round(
+                                        (bp_avg - sig_px) if is_long else (sig_px - bp_avg), price_prec
+                                    )
+                                    logger.info(
+                                        f"[NativeStrategyRunner] 🔄 Reconciled live broker entry price for #{pos['id']}: "
+                                        f"{sig_px:.{price_prec}f} -> {bp_avg:.{price_prec}f} (pos_id={bp_id})"
+                                    )
+                                if sync_updates:
+                                    signal_store.update_signal(pos["id"], sync_updates)
                 except Exception as e_rec:
                     logger.debug(f"[NativeStrategyRunner] Broker reconciliation check note: {e_rec}")
 
@@ -1307,15 +1718,20 @@ class NativeStrategyRunner:
                 exit_reason = "TIME_CUTOFF"
 
         if exit_reason:
-            final_exit_price = reconciled_exit_price if reconciled_exit_price is not None else current_price
+            final_exit_price = reconciled_exit_price if reconciled_exit_price is not None else eval_exit_price
             logger.info(f"[NativeStrategyRunner] 🏁 Closing position #{pos['id']} ({pos['strategy']}): {exit_reason} @ {final_exit_price}")
-            # Route exit through Active Execution Broker
-            try:
-                broker = broker_registry.get_broker()
-                broker_order_id = pos.get("broker_order", {}).get("order_id") or str(pos.get("id"))
-                broker.close_position(broker_order_id, reason=exit_reason, current_price=final_exit_price, symbol=self.symbol)
-            except Exception as e_broker_close:
-                logger.error(f"[NativeStrategyRunner] Error closing position on broker: {e_broker_close}")
+            # Route exit through Active Execution Broker (skip if broker already closed server-side)
+            if not broker_already_closed:
+                try:
+                    broker = broker_registry.get_broker()
+                    broker_pos_or_ord = (
+                        pos.get("broker_position_id")
+                        or pos.get("broker_order", {}).get("order_id")
+                        or str(pos.get("id"))
+                    )
+                    broker.close_position(broker_pos_or_ord, reason=exit_reason, current_price=final_exit_price, symbol=self.symbol)
+                except Exception as e_broker_close:
+                    logger.error(f"[NativeStrategyRunner] Error closing position on broker: {e_broker_close}")
 
             closed = signal_store.close_position(
                 signal_id=pos["id"],

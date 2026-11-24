@@ -189,7 +189,7 @@
               </td>
               <td>
                 <span 
-                  v-if="sig.pnl_pct != null || (sig as any).pnl_usd != null"
+                  v-if="sig.status === 'CLOSED' && (sig.pnl_pct != null || (sig as any).pnl_usd != null)"
                   class="font-bold text-[11px]"
                   :class="((sig as any).pnl_usd || sig.pnl_pct || 0) >= 0 ? 'text-success' : 'text-error'"
                 >

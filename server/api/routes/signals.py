@@ -95,45 +95,83 @@ async def close_signal_position(req: CloseSignalRequest):
     if not active_sig and req.strategy:
         active_sig = signal_store.get_active(req.strategy)
 
-    exit_p = req.exit_price
-    if not exit_p or exit_p <= 0:
+    is_pending_limit = bool(active_sig and active_sig.get("status") == "PENDING_LIMIT")
+
+    exit_p = float(req.exit_price or 0.0)
+    if not is_pending_limit and exit_p <= 0:
         sym = (active_sig.get("pair") or active_sig.get("symbol")) if active_sig else ""
         if sym:
             from server.providers.base import ProviderRegistry
             try:
                 p = ProviderRegistry.get_provider(sym)
-                q = p.get_latest_quote()
-                exit_p = float(q.get("price") or 0.0)
+                q = p.get_latest_quote() or {}
+                is_long = str((active_sig or {}).get("action") or "BUY").upper() in ("BUY", "LONG")
+                exit_p = float((q.get("bid") if is_long else q.get("ask")) or q.get("price") or 0.0)
             except Exception:
                 pass
-        if (not exit_p or exit_p <= 0) and active_sig:
+        if exit_p <= 0 and active_sig:
             exit_p = float(active_sig.get("price") or 0.0)
 
-    # 2. Invoke Active Execution Broker to close live positions across all TradeLocker accounts
+    # 2. Invoke Active Execution Broker to close live position or cancel pending limit order
+    broker_err = None
     try:
         broker = broker_registry.get_broker()
+        is_paper_broker = getattr(broker, "broker_id", "paper") == "paper" if broker else True
         if broker:
             symbol_to_close = (active_sig.get("pair") or active_sig.get("symbol")) if active_sig else ""
-            pos_id = (active_sig.get("broker_order", {}).get("order_id")) if active_sig else None
-            pos_id_to_close = str(pos_id or req.id or req.strategy or "ALL")
-
-            logger.info(f"[Signals] 🚀 Triggering broker position close on {broker.name} for symbol '{symbol_to_close}' (pos_id: {pos_id_to_close})...")
-            broker.close_position(
-                position_id=pos_id_to_close,
-                reason=req.exit_reason or "MANUAL_CLOSE",
-                current_price=exit_p,
-                symbol=symbol_to_close,
-            )
+            if is_pending_limit and hasattr(broker, "cancel_order"):
+                b_details = (active_sig.get("broker_order") or {}).get("details") or []
+                first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
+                ord_id = str(
+                    active_sig.get("broker_order_id")
+                    or first_det.get("order_id")
+                    or (active_sig.get("broker_order") or {}).get("order_id")
+                    or req.id
+                )
+                logger.info(f"[Signals] Triggering broker pending order cancel on {broker.name} for '{symbol_to_close}' (order_id: {ord_id})...")
+                res = broker.cancel_order(order_id=ord_id, symbol=symbol_to_close)
+                if not is_paper_broker and res.get("status") not in ("CANCELLED", "NOT_FOUND", "CANCELLED_PREVIEW"):
+                    broker_err = res.get("error") or f"Broker cancel_order returned {res.get('status')}"
+            else:
+                b_details = (active_sig.get("broker_order") or {}).get("details") or [] if active_sig else []
+                first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
+                pos_id = (
+                    (active_sig.get("broker_position_id") if active_sig else None)
+                    or first_det.get("position_id")
+                    or first_det.get("order_id")
+                    or ((active_sig.get("broker_order") or {}).get("order_id") if active_sig else None)
+                )
+                pos_id_to_close = str(pos_id or req.id or req.strategy or "ALL")
+                logger.info(f"[Signals] 🚀 Triggering broker position close on {broker.name} for symbol '{symbol_to_close}' (pos_id: {pos_id_to_close})...")
+                res = broker.close_position(
+                    position_id=pos_id_to_close,
+                    reason=req.exit_reason or "MANUAL_CLOSE",
+                    current_price=exit_p,
+                    symbol=symbol_to_close,
+                )
+                if not is_paper_broker:
+                    st = str((res or {}).get("status") or "")
+                    details = (res or {}).get("details") or []
+                    all_no_open = bool(details) and all(d.get("status") in ("CLOSED", "NO_OPEN_POSITIONS", "CLOSED_PREVIEW") for d in details)
+                    if st not in ("CLOSED", "CLOSED_PREVIEW", "NO_OPEN_POSITIONS") and not all_no_open:
+                        broker_err = (res or {}).get("error") or f"Broker close_position returned {st}"
     except Exception as e_broker_close:
         logger.error(f"[Signals] Error triggering broker position close: {e_broker_close}")
+        broker_err = str(e_broker_close)
+
+    if broker_err:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Live broker close/cancel failed (internal position kept OPEN for safety): {broker_err}",
+        )
 
     # 3. Close in SignalStore
     closed = signal_store.close_position(
         signal_id=req.id,
         strategy=req.strategy,
-        exit_price=exit_p,
-        exit_reason=req.exit_reason or "MANUAL_CLOSE",
-        pnl_pct=req.pnl_pct,
+        exit_price=0.0 if is_pending_limit else exit_p,
+        exit_reason="CANCELLED_ORDER" if is_pending_limit else (req.exit_reason or "MANUAL_CLOSE"),
+        pnl_pct=0.0 if is_pending_limit else req.pnl_pct,
     )
     if not closed:
         raise HTTPException(status_code=404, detail="No active position found matching criteria")
