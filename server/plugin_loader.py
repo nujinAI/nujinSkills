@@ -38,10 +38,15 @@ class PluginManager:
             return plugins
 
         try:
+            seen_realpaths = set()
             for entry in sorted(os.listdir(PLUGINS_DIR)):
                 plugin_path = os.path.join(PLUGINS_DIR, entry)
                 if not os.path.isdir(plugin_path):
                     continue
+                real_plugin_path = os.path.realpath(plugin_path)
+                if real_plugin_path in seen_realpaths:
+                    continue
+                seen_realpaths.add(real_plugin_path)
 
                 manifest_file = os.path.join(plugin_path, "plugin.json")
                 strat_dir = os.path.join(plugin_path, "strategies")

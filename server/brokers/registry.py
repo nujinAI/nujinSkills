@@ -48,10 +48,15 @@ class BrokerRegistry:
             cls._plugins_scanned = True
             return
 
-        for pentry in os.listdir(plugins_dir):
+        seen_realpaths = set()
+        for pentry in sorted(os.listdir(plugins_dir)):
             pdir = os.path.join(plugins_dir, pentry)
             if not os.path.isdir(pdir):
                 continue
+            real_pdir = os.path.realpath(pdir)
+            if real_pdir in seen_realpaths:
+                continue
+            seen_realpaths.add(real_pdir)
             if pdir not in sys.path:
                 sys.path.insert(0, pdir)
             bdir = os.path.join(pdir, "brokers")

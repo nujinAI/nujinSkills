@@ -396,7 +396,34 @@ class SignalStore:
         entry_p = float(target.get("price") or target.get("entry_price") or 0.0)
         lots = float(target.get("lots") or target.get("lot_size") or 0.01)
         pair = target.get("pair") or target.get("symbol") or "XAU/USD"
-        contract_val = 100.0 if ("XAU" in pair.upper() or "GOLD" in pair.upper()) else 1.0
+        contract_val = None
+        try:
+            from server.brokers.registry import broker_registry
+            broker = broker_registry.get_broker(connect=False)
+            if broker and getattr(broker, "is_connected", False) and hasattr(broker, "get_contract_size"):
+                cv = float(broker.get_contract_size(pair) or 0.0)
+                if cv > 0:
+                    contract_val = cv
+        except Exception:
+            pass
+        if contract_val is None:
+            try:
+                from core.data import resolve_market_symbol
+                resolved_pair = resolve_market_symbol(pair)
+            except Exception:
+                resolved_pair = str(pair or "").upper()
+            if resolved_pair in ("OANDA:XAUUSD", "COMEX:GC1!"):
+                contract_val = 100.0
+            elif resolved_pair in ("CME_MINI:NQ1!", "CME_MINI:ES1!"):
+                contract_val = 10.0
+            else:
+                ticker = resolved_pair.split(":", 1)[1] if ":" in resolved_pair else resolved_pair
+                alpha = re.sub(r"[^A-Z]", "", ticker.upper())
+                iso_fx = {"EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "USD", "JPY", "SEK", "NOK", "SGD", "HKD"}
+                if len(alpha) == 6 and alpha[:3] in iso_fx and alpha[3:] in iso_fx:
+                    contract_val = 100000.0
+                else:
+                    contract_val = 1.0
         is_long = target.get("action") in ("BUY", "LONG") or target.get("side") == "LONG"
         if entry_p > 0 and exit_price > 0:
             diff = (exit_price - entry_p) if is_long else (entry_p - exit_price)
@@ -439,7 +466,7 @@ class SignalStore:
         signals = self.get_all(strategy)
         closed = [
             s for s in signals
-            if s.get("exit_reason") and s.get("pnl_pct") is not None
+            if s.get("status") == "CLOSED" and s.get("pnl_pct") is not None
         ]
         open_trades = [s for s in signals if s.get("status") == "ACTIVE_IN_POSITION"]
 

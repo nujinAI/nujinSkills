@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from server.api.deps import (
     manager,
     strategy_registry,
@@ -175,6 +176,8 @@ async def strategy_runner_auto_healer():
             active_strats = [s["name"] for s in strategy_registry.get_all(sync=False) if s.get("status") == "ACTIVE_LIVE"]
             for s_name in active_strats:
                 r_info = bot_supervisor.runners.get(s_name)
+                if r_info and (time.time() - float(r_info.get("started_ts") or 0.0)) < 20.0:
+                    continue
                 native_runner = r_info.get("native_runner") if r_info else None
                 is_active = bool(native_runner and native_runner.is_running)
                 if not is_active:

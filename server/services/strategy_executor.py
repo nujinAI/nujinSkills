@@ -4,6 +4,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Callable
@@ -18,6 +19,55 @@ from server.providers.base import BaseMarketDataProvider, ProviderRegistry
 from server.brokers.registry import broker_registry
 
 logger = logging.getLogger("StrategyExecutor")
+
+_ISO_FX_CCYS = {"EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "USD", "JPY", "SEK", "NOK", "SGD", "HKD"}
+
+
+def _fallback_contract_size(symbol: str) -> float:
+    from core.data import resolve_market_symbol
+    resolved = resolve_market_symbol(symbol)
+    if resolved in ("OANDA:XAUUSD", "COMEX:GC1!"):
+        return 100.0
+    if resolved in ("CME_MINI:NQ1!", "CME_MINI:ES1!"):
+        return 10.0
+    ticker = resolved.split(":", 1)[1] if ":" in resolved else resolved
+    alpha = re.sub(r"[^A-Z]", "", ticker.upper())
+    if len(alpha) == 6 and alpha[:3] in _ISO_FX_CCYS and alpha[3:] in _ISO_FX_CCYS:
+        return 100000.0
+    return 1.0
+
+
+def _resolve_contract_size(symbol: str) -> float:
+    try:
+        broker = broker_registry.get_broker(connect=False)
+        if broker and getattr(broker, "is_connected", False) and hasattr(broker, "get_contract_size"):
+            val = float(broker.get_contract_size(symbol) or 0.0)
+            if val > 0:
+                return val
+    except Exception:
+        pass
+    return _fallback_contract_size(symbol)
+
+
+def _resolve_max_allowed_spread(symbol: str, price: float, stop_loss: float, strat_inst: Any) -> float:
+    if strat_inst is not None:
+        explicit = getattr(strat_inst, "max_allowed_spread", None)
+        if explicit is not None and float(explicit) > 0:
+            return float(explicit)
+    from core.data import resolve_market_symbol
+    from core.friction import resolve_asset_friction
+    resolved = resolve_market_symbol(symbol)
+    if resolved == "OANDA:XAUUSD":
+        return 0.70
+    px = max(float(price or 0.0), 1e-9)
+    baseline_spread, _, _ = resolve_asset_friction(symbol, px)
+    base_cap = max(baseline_spread * 4.0, px * 0.0002)
+    stop_dist = abs(px - float(stop_loss)) if (price and stop_loss and float(stop_loss) > 0) else 0.0
+    if stop_dist > 0:
+        stop_cap = stop_dist * 0.15
+        if stop_cap > baseline_spread * 1.5:
+            base_cap = min(base_cap, stop_cap)
+    return float(base_cap)
 
 class StrategyEvaluator:
     """
@@ -144,12 +194,14 @@ class StrategyEvaluator:
                 sig_order_t = str(last_sig.get("order_type", "")).upper()
                 is_limit_order = (sig_order_t == "LIMIT") or (limit_p is not None and limit_p > 0)
 
-                atr_v = curr_p * 0.005
+                atr_v = curr_atr if (curr_atr and not np.isnan(curr_atr) and curr_atr > 0) else (curr_p * 0.005)
                 if hasattr(strat_inst, "compute_indicators"):
                     try:
                         ind_df = strat_inst.compute_indicators(df_idx)
-                        if "atr" in ind_df.columns and not np.isnan(ind_df["atr"].iloc[-1]):
-                            atr_v = float(ind_df["atr"].iloc[-1])
+                        for atr_col in ("atr", "atr_14", "ATR", "ATR_14"):
+                            if atr_col in ind_df.columns and not np.isnan(ind_df[atr_col].iloc[-1]):
+                                atr_v = float(ind_df[atr_col].iloc[-1])
+                                break
                     except Exception:
                         pass
                 last_row = last_sig
@@ -321,7 +373,7 @@ class StrategyEvaluator:
                 dollar_risk_1r = target_equity * float(getattr(strat_inst, "risk_pct_1r", 0.0035))
                 stop_dist = abs(ref_entry - sl) if sl > 0 else (atr_v * 1.5 if atr_v > 0 else ref_entry * 0.005)
                 if stop_dist > 0:
-                    multiplier = 100.0 if is_xau else 1.0
+                    multiplier = _resolve_contract_size(symbol)
                     lots = dollar_risk_1r / (stop_dist * multiplier)
                 else:
                     lots = 0.01
@@ -389,9 +441,12 @@ class NativeStrategyRunner:
 
         self.provider: BaseMarketDataProvider = ProviderRegistry.get_provider(self.symbol, self.timeframe)
         self._last_evaluated_bar_time: int = 0
+        self._stopped: bool = False
+        self._supports_structural_sl: Optional[bool] = None
+        self._last_struct_sl_bar_ts: int = 0
 
     async def start(self) -> None:
-        if self.is_running:
+        if self._stopped or self.is_running:
             return
         self.is_running = True
 
@@ -399,12 +454,17 @@ class NativeStrategyRunner:
         if not self.provider.is_running:
             await self.provider.start()
 
+        if self._stopped or not self.is_running:
+            self.is_running = False
+            return
+
         # Subscribe callbacks
         self.provider.subscribe_tick(self._on_market_tick)
         self.provider.subscribe_bar(self._on_market_bar)
         logger.info(f"[NativeStrategyRunner] Active for '{self.strategy_name}' on {self.symbol} ({self.timeframe})")
 
     async def stop(self) -> None:
+        self._stopped = True
         self.is_running = False
         self.provider.unsubscribe_tick(self._on_market_tick)
         self.provider.unsubscribe_bar(self._on_market_bar)
@@ -545,7 +605,7 @@ class NativeStrategyRunner:
                         exit_p = float(s.get("exit_price") or 0.0)
                         lots = float(s.get("lots") or s.get("lot_size") or 0.01)
                         pair = s.get("pair") or s.get("symbol") or "XAU/USD"
-                        c_mult = 100.0 if ("XAU" in pair.upper() or "GOLD" in pair.upper()) else 1.0
+                        c_mult = _resolve_contract_size(pair)
                         action = (s.get("action") or "BUY").upper()
                         if entry_p > 0 and exit_p > 0:
                             diff = (exit_p - entry_p) if action in ("BUY", "LONG") else (entry_p - exit_p)
@@ -848,29 +908,32 @@ class NativeStrategyRunner:
             self._send_drawdown_alert(reason, dd_details)
             return
 
-        # Triple defense: Live Spread Guard (Protects TradeLocker / MetaTrader accounts from abnormal spread spikes)
-        # Gold standard normal spread: $0.20 - $0.40/oz. Maximum permissible spread threshold: $0.70/oz (7 pips).
+        # Triple defense: Live Spread Guard (asset-aware threshold with stop-distance cap)
         strat_inst = None
         try:
             from server.backtest_engine import load_strategy_instance
             strat_inst = load_strategy_instance(self.strategy_name)
         except Exception:
             pass
-        max_allowed_spread = float(getattr(strat_inst, "max_allowed_spread", 0.70)) if strat_inst else 0.70
         try:
             latest_quote = self.provider.get_latest_quote() if hasattr(self, "provider") and self.provider else None
             if latest_quote:
                 live_bid = float(latest_quote.get("bid") or 0.0)
                 live_ask = float(latest_quote.get("ask") or 0.0)
                 if live_bid > 0 and live_ask > 0 and live_ask >= live_bid:
-                    current_spread = round(live_ask - live_bid, 2)
+                    from core.data import get_market_price_precision
+                    price_prec = get_market_price_precision(self.symbol)
+                    current_spread = round(live_ask - live_bid, price_prec)
                     sig["live_spread"] = current_spread
+                    ref_price = float(sig.get("price") or latest_quote.get("price") or 0.0)
+                    ref_sl = float(sig.get("stop_loss") or 0.0)
+                    max_allowed_spread = _resolve_max_allowed_spread(self.symbol, ref_price, ref_sl, strat_inst)
                     if current_spread > max_allowed_spread:
-                        spread_msg = f"Live spread (${current_spread:.2f}) exceeds maximum threshold (${max_allowed_spread:.2f})"
+                        spread_msg = f"Live spread (${current_spread:.{price_prec}f}) exceeds maximum threshold (${max_allowed_spread:.{price_prec}f})"
                         logger.warning(f"[NativeStrategyRunner] 🛡️ SPREAD GUARD BLOCKED: {spread_msg}. Order suppressed.")
                         sig["status"] = "BLOCKED_SPREAD_SPIKE"
-                        sig["exit_reason"] = f"SPREAD_SPIKE: ${current_spread:.2f} > ${max_allowed_spread:.2f}"
-                        sig["annotation"] = f"Spread Spike (${current_spread:.2f})"
+                        sig["exit_reason"] = f"SPREAD_SPIKE: ${current_spread:.{price_prec}f} > ${max_allowed_spread:.{price_prec}f}"
+                        sig["annotation"] = f"Spread Spike (${current_spread:.{price_prec}f})"
                         signal_store.add(sig)
                         return
         except Exception as e_spread:
@@ -960,11 +1023,15 @@ class NativeStrategyRunner:
             elif order_res.get("status") == "FILLED":
                 sig["status"] = "ACTIVE_IN_POSITION"
                 sig["execution_mode"] = "LIVE_BROKER"
-                # If broker returned an authentic fill price, synchronize entry price with broker truth
+                # If broker returned an authentic fill price/lots, synchronize with broker truth
                 b_price = float(order_res.get("filled_price") or 0.0)
                 if b_price > 0:
                     sig["price"] = b_price
                     sig["entry_price"] = b_price
+                b_lots = float(order_res.get("filled_lots") or 0.0)
+                if b_lots > 0:
+                    sig["lots"] = b_lots
+                    sig["lot_size"] = b_lots
                 b_details = order_res.get("details", [])
                 if b_details and isinstance(b_details, list):
                     first_det = b_details[0]
@@ -974,6 +1041,10 @@ class NativeStrategyRunner:
                     if det_price > 0:
                         sig["price"] = det_price
                         sig["entry_price"] = det_price
+                    det_lots = float(first_det.get("filled_lots") or 0.0)
+                    if det_lots > 0:
+                        sig["lots"] = det_lots
+                        sig["lot_size"] = det_lots
             else:
                 logger.error(f"[NativeStrategyRunner] Unrecognized order status from broker: {order_res.get('status')}")
                 sig["status"] = "REJECTED"
@@ -1092,6 +1163,8 @@ class NativeStrategyRunner:
         lowest_price = float(pos.get("lowest_price") or entry_price)
 
         new_sl = None
+        from core.data import get_market_price_precision, resolve_market_symbol
+        price_prec = get_market_price_precision(self.symbol)
 
         if is_long:
             if bid_price > highest_price:
@@ -1099,7 +1172,7 @@ class NativeStrategyRunner:
                 highest_price = bid_price
             gain_pct = (highest_price - entry_price) / entry_price
             if use_trailing and gain_pct >= trail_offset:
-                candidate_sl = round(highest_price * (1.0 - trail_buffer), 2)
+                candidate_sl = round(highest_price * (1.0 - trail_buffer), price_prec)
                 if candidate_sl > sl:
                     new_sl = candidate_sl
         else:
@@ -1108,29 +1181,41 @@ class NativeStrategyRunner:
                 lowest_price = ask_price
             gain_pct = (entry_price - lowest_price) / entry_price
             if use_trailing and gain_pct >= trail_offset:
-                candidate_sl = round(lowest_price * (1.0 + trail_buffer), 2)
+                candidate_sl = round(lowest_price * (1.0 + trail_buffer), price_prec)
                 if sl == 0.0 or candidate_sl < sl:
                     new_sl = candidate_sl
 
-        # Dynamic Structural SL Ratchet: also ratchet SL with strategy structural indicator line
-        if strat_inst and hasattr(self, "provider") and self.provider:
+        # Dynamic Structural SL Ratchet: evaluate at most once per newly closed bar (never on every tick)
+        if strat_inst and hasattr(self, "provider") and self.provider and self._supports_structural_sl is not False:
             try:
                 calc_fn = getattr(strat_inst, "compute_indicators", getattr(strat_inst, "populate_indicators", None))
                 if calc_fn and callable(calc_fn):
                     candles = self.provider.get_candles(count=50)
                     if candles:
-                        import pandas as pd
-                        df_c = pd.DataFrame(candles)
-                        df_c = calc_fn(df_c)
-                        last_c = df_c.iloc[-1]
-                        if is_long:
-                            struct_sl = float(last_c.get("structural_sl_long", 0.0))
-                            if struct_sl > 0 and struct_sl > sl and struct_sl < bid_price:
-                                new_sl = max(new_sl or sl, round(struct_sl, 2))
-                        else:
-                            struct_sl = float(last_c.get("structural_sl_short", 0.0))
-                            if struct_sl > 0 and (sl == 0.0 or struct_sl < sl) and struct_sl > ask_price:
-                                new_sl = min(new_sl or sl, round(struct_sl, 2))
+                        latest_bar_ts = int(candles[-1].get("timestamp") or candles[-1].get("time") or 0)
+                        if latest_bar_ts != self._last_struct_sl_bar_ts:
+                            self._last_struct_sl_bar_ts = latest_bar_ts
+                            df_c = pd.DataFrame(candles)
+                            if "time" in df_c.columns:
+                                df_c["dt"] = pd.to_datetime(df_c["time"], unit="s", utc=True)
+                            elif "timestamp" in df_c.columns:
+                                df_c["dt"] = pd.to_datetime(df_c["timestamp"], unit="s", utc=True)
+                            else:
+                                df_c["dt"] = pd.to_datetime(df_c.index, utc=True)
+                            df_c = df_c.set_index("dt")
+                            df_c = calc_fn(df_c)
+                            has_struct = ("structural_sl_long" in df_c.columns) or ("structural_sl_short" in df_c.columns)
+                            self._supports_structural_sl = has_struct
+                            if has_struct:
+                                last_c = df_c.iloc[-1]
+                                if is_long:
+                                    struct_sl = float(last_c.get("structural_sl_long", 0.0))
+                                    if struct_sl > 0 and struct_sl > sl and struct_sl < bid_price:
+                                        new_sl = max(new_sl or sl, round(struct_sl, price_prec))
+                                else:
+                                    struct_sl = float(last_c.get("structural_sl_short", 0.0))
+                                    if struct_sl > 0 and (sl == 0.0 or struct_sl < sl) and struct_sl > ask_price:
+                                        new_sl = min(new_sl or sl, round(struct_sl, price_prec))
             except Exception as e_struct:
                 logger.debug(f"[NativeStrategyRunner] Structural SL ratchet error: {e_struct}")
 
@@ -1166,9 +1251,11 @@ class NativeStrategyRunner:
                     if broker and getattr(broker, "is_connected", False) and not is_paper_broker and hasattr(broker, "get_open_positions"):
                         broker_positions = broker.get_open_positions(symbol=self.symbol)
                         if broker_positions is not None:
+                            my_canon = resolve_market_symbol(self.symbol)
                             matches = [
                                 bp for bp in broker_positions
-                                if bp.get("symbol") == self.symbol or ("XAU" in str(bp.get("symbol", "")).upper() and "XAU" in self.symbol.upper())
+                                if bp.get("symbol") == self.symbol
+                                or (bp.get("symbol") and resolve_market_symbol(str(bp.get("symbol"))) == my_canon)
                             ]
                             if len(matches) == 0:
                                 empty_count = int(pos.get("_broker_empty_confirmations", 0)) + 1

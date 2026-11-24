@@ -109,6 +109,10 @@ class BaseMarketDataProvider(abc.ABC):
             except Exception as e:
                 logger.error(f"[{self.symbol}] Bar callback error: {e}")
 
+    async def _on_bar_closing(self, closed_bar: Dict[str, Any]) -> Dict[str, Any]:
+        """Optional hook called on bar rollover before notifying bar subscribers."""
+        return closed_bar
+
     @property
     def bar_step_seconds(self) -> int:
         tf = (self.timeframe or "1m").lower().strip()
@@ -159,9 +163,10 @@ class BaseMarketDataProvider(abc.ABC):
         last_bar = self._candles[-1]
         last_bar_t = int(last_bar.get("timestamp") or last_bar.get("time") or 0)
 
-        # Outlier price guard: reject single anomalous tick spike > 2% from previous close
+        # Outlier price guard: reject anomalous tick spikes (>2% contiguous, >15% after >=1h gap)
         prev_close = float(last_bar.get("close") or price)
-        if prev_close > 0 and abs(price - prev_close) / prev_close > 0.02:
+        max_dev = 0.15 if (bar_time - last_bar_t) >= 3600 else 0.02
+        if prev_close > 0 and abs(price - prev_close) / prev_close > max_dev:
             logger.warning(f"[{self.symbol}] Outlier tick rejected: {price} vs prev close {prev_close}")
             return self._latest_quote or {}
 
@@ -169,7 +174,7 @@ class BaseMarketDataProvider(abc.ABC):
 
         # 1. Bar Rollover Detection
         if bar_time > last_bar_t:
-            closed_bar = dict(last_bar)
+            closed_bar = await self._on_bar_closing(dict(last_bar))
             await self._notify_bar(closed_bar)
 
             # Check if there is a multi-bar gap (e.g. overnight or feed interruption)
@@ -177,22 +182,31 @@ class BaseMarketDataProvider(abc.ABC):
                 # For a new bar after a gap, open starts at the new tick price
                 new_open = price
             else:
-                new_open = last_bar["close"]
+                new_open = closed_bar["close"]
 
             init_vol = safe_vol_inc
-            new_bar = {
-                "time": bar_time,
-                "timestamp": bar_time,
-                "open": new_open,
-                "high": max(new_open, price),
-                "low": min(new_open, price),
-                "close": price,
-                "volume": init_vol
-            }
-            self._candles.append(new_bar)
-            if len(self._candles) > 20000:
-                self._candles.pop(0)
-            last_bar = new_bar
+            tail_ts = int(self._candles[-1].get("timestamp") or self._candles[-1].get("time") or 0) if self._candles else 0
+            if tail_ts == bar_time:
+                existing = self._candles[-1]
+                existing["close"] = price
+                existing["high"] = max(float(existing.get("high", price)), price)
+                existing["low"] = min(float(existing.get("low", price)), price)
+                existing["volume"] = round(float(existing.get("volume", 0.0)) + safe_vol_inc, 2)
+                last_bar = existing
+            else:
+                new_bar = {
+                    "time": bar_time,
+                    "timestamp": bar_time,
+                    "open": new_open,
+                    "high": max(new_open, price),
+                    "low": min(new_open, price),
+                    "close": price,
+                    "volume": init_vol
+                }
+                self._candles.append(new_bar)
+                if len(self._candles) > 20000:
+                    self._candles.pop(0)
+                last_bar = new_bar
         else:
             # In-place candle development
             last_bar["close"] = price
@@ -200,12 +214,14 @@ class BaseMarketDataProvider(abc.ABC):
             last_bar["low"] = min(float(last_bar["low"]), price)
             last_bar["volume"] = round(float(last_bar.get("volume", 0.0)) + safe_vol_inc, 2)
 
+        from core.data import get_market_price_precision
+        prec = get_market_price_precision(self.symbol)
         spread = abs(price * 0.0001)
         quote = {
             "symbol": self.symbol,
             "price": price,
-            "bid": bid if bid is not None else round(price - spread, 2),
-            "ask": ask if ask is not None else round(price + spread, 2),
+            "bid": bid if bid is not None else round(price - spread, prec),
+            "ask": ask if ask is not None else round(price + spread, prec),
             "open": last_bar["open"],
             "high": last_bar["high"],
             "low": last_bar["low"],

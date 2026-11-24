@@ -3,6 +3,7 @@ import os
 import signal
 import logging
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Callable
 
@@ -69,6 +70,7 @@ class BotSupervisor:
                 "process": proc,
                 "mode": mode,
                 "started_at": now_iso,
+                "started_ts": time.time(),
                 "config_path": config_path,
                 "native_runner": None
             }
@@ -102,6 +104,7 @@ class BotSupervisor:
                 "process": None,
                 "mode": "python-telemetry",
                 "started_at": now_iso,
+                "started_ts": time.time(),
                 "config_path": config_path,
                 "native_runner": runner
             }
@@ -129,7 +132,15 @@ class BotSupervisor:
                 proc.kill()
 
         native_runner = runner_info.get("native_runner")
-        if native_runner and native_runner.is_running:
+        if native_runner:
+            native_runner._stopped = True
+            native_runner.is_running = False
+            try:
+                if getattr(native_runner, "provider", None):
+                    native_runner.provider.unsubscribe_tick(native_runner._on_market_tick)
+                    native_runner.provider.unsubscribe_bar(native_runner._on_market_bar)
+            except Exception:
+                pass
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(native_runner.stop())
