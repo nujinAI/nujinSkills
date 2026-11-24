@@ -662,6 +662,18 @@ class NativeStrategyRunner:
         signals_daily_loss_usd = (abs(today_realized_usd) if today_realized_usd < 0 else 0.0) + floating_loss_usd
         today_loss_usd = round(max(broker_daily_loss_usd, signals_daily_loss_usd), 2)
         remaining_budget_usd = round(max(0.0, max_daily_loss_usd - today_loss_usd), 2)
+
+        # Single-source-of-truth daily realized PnL: MUST match the exact basis driving today_loss_usd
+        # and remaining_budget_usd (prevents UI contradiction when broker server resets todayNet on a different timezone).
+        if broker_today_net is not None and broker_daily_loss_usd > signals_daily_loss_usd:
+            effective_today_realized_pnl = round(broker_today_net, 2)
+        elif today_losses_count > 0 or today_realized_usd != 0.0:
+            effective_today_realized_pnl = round(today_realized_usd, 2)
+        elif broker_today_net is not None:
+            effective_today_realized_pnl = round(broker_today_net, 2)
+        else:
+            effective_today_realized_pnl = 0.0
+
         # Dynamically calculate required safety buffer strictly from 1R trade risk (2.5x safety buffer):
         buffer_required_usd = round(single_trade_risk_usd * 2.5, 2)
 
@@ -675,7 +687,8 @@ class NativeStrategyRunner:
             "max_total_loss_usd": max_total_loss_usd,
             "max_total_dd_pct": max_total_dd_pct,
             "today_loss_usd": today_loss_usd,
-            "today_realized_pnl_usd": round(broker_today_net if broker_today_net is not None else today_realized_usd, 2),
+            "today_realized_pnl_usd": effective_today_realized_pnl,
+            "broker_today_net_usd": round(broker_today_net, 2) if broker_today_net is not None else None,
             "today_losses_count": today_losses_count,
             "strategy_today_losses_count": strategy_today_losses_count,
             "max_daily_losses": strat_max_daily_losses,
@@ -1657,9 +1670,12 @@ class NativeStrategyRunner:
                                     if hasattr(broker, "get_latest_position_execution"):
                                         exec_data = broker.get_latest_position_execution(position_id=b_pos_id, order_id=b_ord_id)
 
-                                    if exec_data and exec_data.get("price"):
-                                        reconciled_exit_price = float(exec_data["price"])
-                                        logger.info(f"[NativeStrategyRunner] 🎯 Matched broker execution fill price: {reconciled_exit_price} (order: {b_ord_id}, position: {b_pos_id})")
+                                    expected_close_s = "SELL" if is_long else "BUY"
+                                    if exec_data and float(exec_data.get("price") or 0.0) > 0:
+                                        ex_s = str(exec_data.get("side") or "").upper()
+                                        if not ex_s or ex_s == expected_close_s:
+                                            reconciled_exit_price = float(exec_data["price"])
+                                            logger.info(f"[NativeStrategyRunner] 🎯 Matched broker execution fill price: {reconciled_exit_price} (order: {b_ord_id}, position: {b_pos_id})")
 
                                     eff_exit_price = reconciled_exit_price or eval_exit_price
                                     if is_long:
@@ -1719,11 +1735,18 @@ class NativeStrategyRunner:
 
         if exit_reason:
             final_exit_price = reconciled_exit_price if reconciled_exit_price is not None else eval_exit_price
-            logger.info(f"[NativeStrategyRunner] 🏁 Closing position #{pos['id']} ({pos['strategy']}): {exit_reason} @ {final_exit_price}")
+            expected_close_side = "SELL" if is_long else "BUY"
+            broker = None
+            is_paper_broker = True
+            try:
+                broker = broker_registry.get_broker()
+                is_paper_broker = getattr(broker, "broker_id", "paper") == "paper" if broker else True
+            except Exception:
+                pass
+
             # Route exit through Active Execution Broker (skip if broker already closed server-side)
-            if not broker_already_closed:
+            if not broker_already_closed and broker:
                 try:
-                    broker = broker_registry.get_broker()
                     broker_pos_or_ord = (
                         pos.get("broker_position_id")
                         or pos.get("broker_order", {}).get("order_id")
@@ -1732,6 +1755,30 @@ class NativeStrategyRunner:
                     broker.close_position(broker_pos_or_ord, reason=exit_reason, current_price=final_exit_price, symbol=self.symbol)
                 except Exception as e_broker_close:
                     logger.error(f"[NativeStrategyRunner] Error closing position on broker: {e_broker_close}")
+
+            # Always reconcile authentic broker closing fill price on live brokers (whether server SL/TP or local close)
+            if reconciled_exit_price is None and broker and not is_paper_broker and hasattr(broker, "get_latest_position_execution"):
+                try:
+                    await asyncio.sleep(0.35)
+                    broker_order = pos.get("broker_order", {})
+                    b_details = broker_order.get("details", [])
+                    first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
+                    b_ord_id = first_det.get("order_id") or broker_order.get("order_id")
+                    b_pos_id = pos.get("broker_position_id") or first_det.get("position_id") or pos.get("position_id")
+                    exec_data = broker.get_latest_position_execution(position_id=b_pos_id, order_id=b_ord_id)
+                    if exec_data and float(exec_data.get("price") or 0.0) > 0:
+                        ex_side = str(exec_data.get("side") or "").upper()
+                        if not ex_side or ex_side == expected_close_side:
+                            real_ex = float(exec_data["price"])
+                            logger.info(
+                                f"[NativeStrategyRunner] 🎯 Reconciled authentic broker exit fill for #{pos['id']}: "
+                                f"local={final_exit_price} -> broker={real_ex} (pos_id={b_pos_id})"
+                            )
+                            final_exit_price = real_ex
+                except Exception as e_ex_rec:
+                    logger.debug(f"[NativeStrategyRunner] Post-close broker execution lookup note: {e_ex_rec}")
+
+            logger.info(f"[NativeStrategyRunner] 🏁 Closing position #{pos['id']} ({pos['strategy']}): {exit_reason} @ {final_exit_price}")
 
             closed = signal_store.close_position(
                 signal_id=pos["id"],
