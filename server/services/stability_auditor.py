@@ -13,6 +13,7 @@ import pandas as pd
 from server.constants import trade_annualization_factor
 from core.data import resolve_market_symbol
 from core.simulation import run_discrete_simulation as run_discrete_backtest, resolve_strategy_close_eod
+from core.execution_engine import StrategyContract
 
 logger = logging.getLogger("StabilityAuditor")
 
@@ -26,12 +27,14 @@ def _clone_with_perturbed_params(strat_inst: Any, sl_mult: float, tp_mult: float
         sig = inspect.signature(strat_inst.__class__.__init__)
         params = sig.parameters
         has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        contract = StrategyContract.from_strategy(strat_inst)
         candidate_kwargs = {
-            "risk_pct_1r": getattr(strat_inst, "risk_pct_1r", 0.0035),
+            "risk_pct_1r": contract.risk_pct_1r,
             "sl_atr_mult": sl_mult,
             "tp_atr_mult": tp_mult,
-            "max_hold_bars": getattr(strat_inst, "max_hold_bars", 6),
         }
+        if contract.max_hold_bars is not None:
+            candidate_kwargs["max_hold_bars"] = contract.max_hold_bars
         if hasattr(strat_inst, "max_daily_losses"):
             candidate_kwargs["max_daily_losses"] = getattr(strat_inst, "max_daily_losses")
         if hasattr(strat_inst, "daily_profit_cap_pct"):
@@ -99,15 +102,16 @@ def compute_strategy_parameter_stability_matrix(
                         sig = strat_copy.generate_signals(df_idx)
                         test_dollar_risk = test_acct_size * float(getattr(strat_copy, "risk_pct_1r", getattr(strat_copy, "risk_per_trade_pct", 0.0035)))
                         test_daily_cap = (test_acct_size * strat_copy.daily_profit_cap_pct) if getattr(strat_copy, "daily_profit_cap_pct", None) else getattr(strat_copy, "daily_profit_cap", None)
+                        copy_contract = StrategyContract.from_strategy(strat_copy)
                         res = run_discrete_backtest(
                             df=df_idx,
                             signals=sig,
                             symbol=canon_sym,
                             account_size=test_acct_size,
                             dollar_risk_1r=test_dollar_risk,
-                            max_daily_losses=int(getattr(strat_copy, "max_daily_losses", 1)),
+                            max_daily_losses=copy_contract.max_daily_losses,
                             daily_profit_cap=test_daily_cap,
-                            max_hold_bars=int(getattr(strat_copy, "max_hold_bars", 6)),
+                            max_hold_bars=copy_contract.max_hold_bars,
                             close_eod=eff_close_eod,
                             eod_close_hour_utc=eod_close_hour_utc,
                             daily_carry_bps=daily_carry_bps,

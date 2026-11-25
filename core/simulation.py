@@ -9,20 +9,18 @@ import numpy as np
 import pandas as pd
 from core.friction import get_roundtrip_friction, compute_carry_cost
 from core.analytics import compute_trade_records_summary
+from core.execution_engine import (
+    StrategyContract,
+    evaluate_bar_exit,
+    can_open_new_trade,
+)
 
 
 def resolve_strategy_close_eod(strat_inst: Any = None, symbol: Optional[str] = None, timeframe: Optional[str] = None) -> bool:
     """
-    Universal, unbiased EOD exit resolver:
-      - If the strategy explicitly declares `close_eod`, honor it verbatim.
-      - Otherwise default to False (never silently force a 21:00 UTC exit on 24/7 crypto,
-        swing strategies, or traders who did not opt into intraday EOD flattening).
+    Universal, unbiased EOD exit resolver (delegates to StrategyContract SSOT).
     """
-    if strat_inst is not None and hasattr(strat_inst, "close_eod"):
-        val = getattr(strat_inst, "close_eod")
-        if val is not None:
-            return bool(val)
-    return False
+    return StrategyContract.from_strategy(strat_inst).close_eod
 
 
 @dataclass
@@ -47,9 +45,9 @@ def run_discrete_simulation(
     symbol: Optional[str] = None,
     account_size: float = 5_000.0,
     dollar_risk_1r: Optional[float] = None,
-    max_daily_losses: int = 2,
+    max_daily_losses: Optional[int] = None,
     daily_profit_cap: Optional[float] = None,
-    max_hold_bars: int = 24,
+    max_hold_bars: Optional[int] = None,
     close_eod: bool = False,
     eod_close_hour_utc: int = 21,
     daily_carry_bps: float = 0.0,
@@ -112,36 +110,23 @@ def run_discrete_simulation(
             sl = pos['stop_loss']
             tp = pos['target']
 
-            sl_hit = (l <= sl) if direction == 1 else (h >= sl)
-            tp_hit = (h >= tp) if direction == 1 else (l <= tp)
+            decision = evaluate_bar_exit(
+                direction=direction,
+                stop_loss=sl,
+                target=tp,
+                bars_held=pos['bars_held'],
+                bar_high=h,
+                bar_low=l,
+                bar_close=c,
+                bar_time=bar_time,
+                max_hold_bars=max_hold_bars,
+                close_eod=close_eod,
+                eod_close_hour_utc=eod_close_hour_utc,
+            )
 
-            exit_triggered = False
-            exit_price = 0.0
-            exit_reason = ""
-
-            # Pessimistic Resolution: SL always triggers first on same-bar collision
-            if sl_hit and tp_hit:
-                exit_triggered = True
-                exit_price = sl
-                exit_reason = "SL"
-            elif sl_hit:
-                exit_triggered = True
-                exit_price = sl
-                exit_reason = "SL"
-            elif tp_hit:
-                exit_triggered = True
-                exit_price = tp
-                exit_reason = "TP"
-            elif pos['bars_held'] >= max_hold_bars:
-                exit_triggered = True
-                exit_price = c
-                exit_reason = "TIME_STOP"
-            elif close_eod and hasattr(bar_time, 'hour') and bar_time.hour >= eod_close_hour_utc:
-                exit_triggered = True
-                exit_price = c
-                exit_reason = "EOD"
-
-            if exit_triggered:
+            if decision is not None:
+                exit_price = decision.exit_price
+                exit_reason = decision.exit_reason
                 gross_diff = (exit_price - pos['entry_price']) * direction
                 friction = get_roundtrip_friction(symbol, exit_price, atr, friction_override=friction_override)
                 carry = 0.0
@@ -180,7 +165,8 @@ def run_discrete_simulation(
         # -------------------------------------------------------------
         if current_position is None and pending_order is not None:
             # Check circuit breakers before filling pending order
-            if daily_losses >= max_daily_losses or (daily_profit_cap and daily_pnl >= daily_profit_cap):
+            allowed, _ = can_open_new_trade(daily_losses, daily_pnl, max_daily_losses, daily_profit_cap)
+            if not allowed:
                 pending_order = None
             else:
                 p_dir = pending_order['direction']
@@ -275,9 +261,8 @@ def run_discrete_simulation(
         # 3. New Signal Generation (At Bar Close i, targeting bar i+1)
         # -------------------------------------------------------------
         if current_position is None and pending_order is None and i < len(df) - 1:
-            if daily_losses >= max_daily_losses:
-                continue
-            if daily_profit_cap and daily_pnl >= daily_profit_cap:
+            allowed, _ = can_open_new_trade(daily_losses, daily_pnl, max_daily_losses, daily_profit_cap)
+            if not allowed:
                 continue
 
             signal = sig_entry[i]

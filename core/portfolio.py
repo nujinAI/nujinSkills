@@ -15,6 +15,7 @@ from scipy.cluster.hierarchy import linkage, leaves_list
 
 from core.data import fetch_ohlcv, resolve_market_symbol, bars_for_days
 from core.simulation import run_discrete_simulation, resolve_strategy_close_eod
+from core.execution_engine import StrategyContract
 from server.constants import TRADE_PERIODS_PER_YEAR
 
 logger = logging.getLogger("CorePortfolio")
@@ -114,15 +115,16 @@ def simulate_strategy_bar_returns(
 
         if hasattr(strat_inst, "generate_signals"):
             sig_df = strat_inst.generate_signals(df_eval)
+            contract = StrategyContract.from_strategy(strat_inst)
             # Unit-normalized capital (account_size = 1.0 -> pnl_dollars == fractional return, zero hardcoded capital)
-            risk_pct = float(getattr(strat_inst, "risk_pct_1r", getattr(strat_inst, "risk_per_trade_pct", 0.0038)))
-            max_daily_l = int(getattr(strat_inst, "max_daily_losses", 2))
-            daily_cap_pct = getattr(strat_inst, "daily_profit_cap_pct", None)
-            max_hold_b = int(getattr(strat_inst, "max_hold_bars", 24))
-            eff_close_eod = resolve_strategy_close_eod(strat_inst, canon_sym, tf)
-            eod_hour = int(getattr(strat_inst, "eod_close_hour_utc", 21))
-            daily_carry_bps = float(getattr(strat_inst, "daily_carry_bps", 0.0) or 0.0)
-            friction_override = getattr(strat_inst, "friction_override", None)
+            risk_pct = contract.risk_pct_1r
+            max_daily_l = contract.max_daily_losses
+            daily_cap_pct = contract.daily_profit_cap_pct
+            max_hold_b = contract.max_hold_bars
+            eff_close_eod = contract.close_eod
+            eod_hour = contract.eod_close_hour_utc
+            daily_carry_bps = contract.daily_carry_bps
+            friction_override = contract.friction_override
 
             sim_res = run_discrete_simulation(
                 df=df_eval,

@@ -21,6 +21,7 @@ from server.trial_ledger import record_trial, n_trials_for_dsr
 from server.constants import trade_annualization_factor, MAX_MDD_99
 from core.friction import get_roundtrip_friction
 from core.simulation import run_discrete_simulation, resolve_strategy_close_eod
+from core.execution_engine import StrategyContract
 from core.data import bars_for_days, get_market_price_precision
 from core.regimes import classify_market_regimes, compute_regime_breakdown
 from core.analytics import (
@@ -283,14 +284,14 @@ def _run_real_backtest_impl(
         df_idx = df_idx.set_index('dt')
         signals = strat_inst.generate_signals(df_idx)
 
+        contract = StrategyContract.from_strategy(strat_inst)
         target_acct_size = resolve_default_account_size(account_size)
         acct_size = float(getattr(strat_inst, "account_size", target_acct_size))
-        risk_pct = float(getattr(strat_inst, "risk_pct_1r", getattr(strat_inst, "risk_per_trade_pct", 0.0038)))
+        risk_pct = contract.risk_pct_1r
         dollar_risk = acct_size * risk_pct
-        max_daily_l = int(getattr(strat_inst, "max_daily_losses", 1))
-        daily_cap_pct = getattr(strat_inst, "daily_profit_cap_pct", None)
-        daily_cap = (acct_size * daily_cap_pct) if daily_cap_pct else getattr(strat_inst, "daily_profit_cap", None)
-        max_hold_b = int(getattr(strat_inst, "max_hold_bars", 6))
+        max_daily_l = contract.max_daily_losses
+        daily_cap = contract.resolve_daily_profit_cap_dollars(acct_size)
+        max_hold_b = contract.max_hold_bars
 
         res_disc = run_discrete_simulation(
             df=df_idx,

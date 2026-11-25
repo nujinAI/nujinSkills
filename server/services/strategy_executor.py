@@ -173,45 +173,40 @@ class StrategyEvaluator:
                 logger.warning(f"[StrategyEvaluator] Strategy '{clean_name}' class could not be loaded from strategies/{clean_name}.py. No signal.")
                 return None
 
+            from core.execution_engine import StrategyContract, extract_latest_signal
+            contract = StrategyContract.from_strategy(strat_inst)
+
             if hasattr(strat_inst, "generate_signals"):
-                df_idx = df.copy()
-                if "time" in df_idx.columns:
-                    df_idx["dt"] = pd.to_datetime(df_idx["time"], unit="s", utc=True)
-                elif "timestamp" in df_idx.columns:
-                    df_idx["dt"] = pd.to_datetime(df_idx["timestamp"], unit="s", utc=True)
-                else:
-                    df_idx["dt"] = pd.to_datetime(df_idx.index, utc=True)
-                df_idx = df_idx.set_index("dt")
-
-                sig_df = strat_inst.generate_signals(df_idx)
-                last_sig = sig_df.iloc[-1]
-                sig_val = int(last_sig.get("entry_signal", 0))
-
-                is_l = bool(sig_val == 1)
-                is_s = bool(sig_val == -1) if getattr(strat_inst, "can_short", True) else False
-
-                if not is_l and not is_s:
+                intent, sig_df, last_sig = extract_latest_signal(strat_inst, df, price_prec=price_prec)
+                if intent is None or last_sig is None:
                     return None
 
+                is_l = bool(intent.direction == 1)
+                is_s = bool(intent.direction == -1)
                 side = "BUY" if is_l else "SELL"
-                sl = round(float(last_sig.get("stop_loss", 0.0)), price_prec)
-                tp = round(float(last_sig.get("target", 0.0)), price_prec)
-
-                raw_limit_p = last_sig.get("limit_price", 0.0)
-                limit_p = round(float(raw_limit_p), price_prec) if (raw_limit_p is not None and not np.isnan(raw_limit_p) and float(raw_limit_p) > 0) else None
-                sig_order_t = str(last_sig.get("order_type", "")).upper()
-                is_limit_order = (sig_order_t == "LIMIT") or (limit_p is not None and limit_p > 0)
+                sl = intent.stop_loss
+                tp = intent.target
+                limit_p = intent.limit_price
+                is_limit_order = (intent.order_type == "LIMIT")
 
                 atr_v = curr_atr if (curr_atr and not np.isnan(curr_atr) and curr_atr > 0) else (curr_p * 0.005)
                 found_sig_atr = False
                 for atr_col in ("atr", "atr_14", "ATR", "ATR_14"):
-                    if atr_col in sig_df.columns and not np.isnan(sig_df[atr_col].iloc[-1]):
+                    if sig_df is not None and atr_col in sig_df.columns and not np.isnan(sig_df[atr_col].iloc[-1]):
                         atr_v = float(sig_df[atr_col].iloc[-1])
                         found_sig_atr = True
                         break
                 # Only recompute compute_indicators if ATR wasn't already available on df/sig_df
                 if not found_sig_atr and (not curr_atr or np.isnan(curr_atr) or curr_atr <= 0) and hasattr(strat_inst, "compute_indicators"):
                     try:
+                        df_idx = df.copy()
+                        if "time" in df_idx.columns:
+                            df_idx["dt"] = pd.to_datetime(df_idx["time"], unit="s", utc=True)
+                        elif "timestamp" in df_idx.columns:
+                            df_idx["dt"] = pd.to_datetime(df_idx["timestamp"], unit="s", utc=True)
+                        else:
+                            df_idx["dt"] = pd.to_datetime(df_idx.index, utc=True)
+                        df_idx = df_idx.set_index("dt")
                         ind_df = strat_inst.compute_indicators(df_idx)
                         for atr_col in ("atr", "atr_14", "ATR", "ATR_14"):
                             if atr_col in ind_df.columns and not np.isnan(ind_df[atr_col].iloc[-1]):
@@ -395,7 +390,7 @@ class StrategyEvaluator:
 
             lots = max(0.01, round(lots, 2))
 
-            strat_max_bars = getattr(strat_inst, "time_invalidation_bars", getattr(strat_inst, "max_bars", getattr(strat_inst, "max_hold_bars", None)))
+            strat_max_bars = contract.max_hold_bars
             max_hold_seconds = (strat_max_bars * bar_sec) if strat_max_bars is not None else None
 
             raw_lim_exp = last_row.get("limit_expiry_bars", None) if hasattr(last_row, "get") else None
@@ -585,8 +580,8 @@ class NativeStrategyRunner:
         max_daily_dd_pct = float(risk_profile.get("max_daily_drawdown_pct") or getattr(strat_inst, "max_daily_drawdown_pct", 0.03))
         max_total_dd_pct = float(risk_profile.get("max_total_drawdown_pct") or getattr(strat_inst, "max_total_drawdown_pct", 0.05))
         trade_risk_pct = float(risk_profile.get("risk_per_trade_pct") or getattr(strat_inst, "max_risk_pct", getattr(strat_inst, "risk_per_trade_pct", getattr(strat_inst, "risk_pct_1r", 0.0060))))
-        strat_max_daily_losses_raw = getattr(strat_inst, "max_daily_losses", None) if strat_inst else None
-        strat_max_daily_losses = int(strat_max_daily_losses_raw) if (strat_max_daily_losses_raw is not None and int(strat_max_daily_losses_raw) > 0) else None
+        from core.execution_engine import StrategyContract
+        strat_max_daily_losses = StrategyContract.from_strategy(strat_inst).max_daily_losses
 
         # 2. Check live broker equity/balance (ONLY IF not in paper mode, avoiding $100k paper mismatch)
         broker_equity = None
@@ -1544,15 +1539,15 @@ class NativeStrategyRunner:
             except Exception:
                 pass
 
-        # Trailing stop configuration: prioritize signal pos, fallback to strategy definition, fallback to True
+        # Trailing stop configuration: strictly from StrategyContract SSOT (False unless strategy opts in)
+        from core.execution_engine import StrategyContract
+        contract = StrategyContract.from_strategy(strat_inst)
         use_trailing = pos.get("trailing_stop")
-        if use_trailing is None and strat_inst:
-            use_trailing = getattr(strat_inst, "trailing_stop", True)
         if use_trailing is None:
-            use_trailing = True
+            use_trailing = contract.trailing_stop
 
-        trail_offset = float(pos.get("trailing_offset") or (getattr(strat_inst, "trailing_stop_positive_offset", 0.0004) if strat_inst else 0.0004))
-        trail_buffer = float(pos.get("trailing_buffer") or (getattr(strat_inst, "trailing_stop_positive", 0.0002) if strat_inst else 0.0002))
+        trail_offset = float(pos.get("trailing_offset") or contract.trailing_stop_positive_offset)
+        trail_buffer = float(pos.get("trailing_buffer") or contract.trailing_stop_positive)
 
         highest_price = float(pos.get("highest_price") or entry_price)
         lowest_price = float(pos.get("lowest_price") or entry_price)
