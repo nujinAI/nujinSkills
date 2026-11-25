@@ -224,10 +224,39 @@ def _run_real_backtest_impl(
     needed_count = bars_for_days(timeframe, days_req, buffer=1.15, min_bars=500, max_bars=15000)
 
     period_str = f"{max(days_req, 30)}d"
-    logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}, count={needed_count}, days={days_req}) via core.data...")
+    df_dynamic = None
+
+    # 1a. Active Broker Plugin Provider (Single Source of Truth with Live Execution):
+    # If a broker plugin is connected and supplies market data via ProviderRegistry,
+    # Backtest MUST use that exact same candle feed as Live.
     try:
-        df_dynamic = fetch_ohlcv(symbol=canon_sym, timeframe=timeframe, count=needed_count, period=period_str, use_cache=True)
-        if df_dynamic is not None and not df_dynamic.empty:
+        from server.brokers.registry import broker_registry
+        from server.providers.base import ProviderRegistry
+        active_broker = broker_registry.get_broker()
+        is_paper_broker = getattr(active_broker, "broker_id", "paper") == "paper"
+        if active_broker and getattr(active_broker, "is_connected", False) and not is_paper_broker and hasattr(active_broker, "get_market_data_provider"):
+            live_provider = ProviderRegistry.get_provider(canon_sym, timeframe)
+            if live_provider and hasattr(live_provider, "get_candles"):
+                provider_candles = live_provider.get_candles(count=needed_count)
+                if provider_candles and len(provider_candles) >= 50:
+                    df_dynamic = pd.DataFrame(provider_candles)
+                    logger.info(
+                        f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}): "
+                        f"{len(df_dynamic)} candles from active broker provider ({type(live_provider).__name__})"
+                    )
+    except Exception as e_bp:
+        logger.warning(f"[BacktestEngine] Active broker provider fetch note: {e_bp}")
+
+    # 1b. Default Universal Feed (when in Paper mode or no broker data provider is active)
+    if df_dynamic is None or df_dynamic.empty:
+        logger.info(f"[BacktestEngine] Single Source of Truth fetch for {canon_sym} ({timeframe}, count={needed_count}, days={days_req}) via core.data...")
+        try:
+            df_dynamic = fetch_ohlcv(symbol=canon_sym, timeframe=timeframe, count=needed_count, period=period_str, use_cache=True)
+        except Exception as e_dyn:
+            logger.warning(f"[BacktestEngine] core.data fetch note: {e_dyn}, checking existing dataset on disk")
+
+    if df_dynamic is not None and not df_dynamic.empty:
+        try:
             df_dynamic_reset = df_dynamic.copy()
             if not isinstance(df_dynamic_reset.index, pd.RangeIndex):
                 df_dynamic_reset = df_dynamic_reset.reset_index(drop=True)
@@ -237,8 +266,8 @@ def _run_real_backtest_impl(
                 df_dynamic_reset["time"] = df_dynamic_reset["timestamp"]
 
             data_manager._save_canonical_and_legacy(canon_sym, timeframe, df_dynamic_reset, legacy_path=candles_file, source="data_tool_backtest")
-    except Exception as e_dyn:
-        logger.warning(f"[BacktestEngine] core.data fetch note: {e_dyn}, checking existing dataset on disk")
+        except Exception as e_save:
+            logger.warning(f"[BacktestEngine] Dataset save note: {e_save}")
 
     if not os.path.exists(candles_file):
         raise FileNotFoundError(f"[BacktestEngine] Candle dataset file not found: {candles_file}")

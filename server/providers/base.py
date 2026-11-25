@@ -339,9 +339,9 @@ class ProviderRegistry:
         if key in cls._providers:
             return cls._providers[key]
 
-        # 1. Broker-First Dynamic Routing:
-        # If an active execution broker is connected (e.g. TradeLocker live/demo account),
-        # query the broker adapter for its native market data provider first.
+        # 1. Broker-First Plugin Routing (Single Source of Truth):
+        # If an active broker plugin is connected and supplies a native market data provider,
+        # BOTH Backtest and Live use that exact same provider.
         try:
             from server.brokers.registry import broker_registry
             broker = broker_registry.get_broker()
@@ -353,8 +353,7 @@ class ProviderRegistry:
         except Exception as e_bp:
             logger.debug(f"[ProviderRegistry] Broker provider query note: {e_bp}")
 
-        # 2. Unified institutional market data feed via TradingView WebSocket
-        # Single source of truth for all global markets (Gold Spot, Bitcoin, Equities, FX)
+        # 2. Default universal market data feed via TradingView WebSocket
         from server.providers.tradingview_provider import TradingViewMarketDataProvider
         provider = TradingViewMarketDataProvider(symbol=canon, timeframe=timeframe)
 
