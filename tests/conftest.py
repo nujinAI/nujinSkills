@@ -9,7 +9,7 @@ machine happened to hold.
   * It added and deleted accounts in the live data/broker_accounts.json.
   * It appended a signal to the live data/signals.json and then called
     signal_store.clear("GoldPropSniperPro"), which deletes that strategy's real signals.
-  * The TradeLocker tests constructed providers that performed live candle fetches on
+  * Broker provider tests used to construct providers that performed live candle fetches on
     init, so they passed or failed depending on where the market happened to be.
   * broker.execute_order() places an order for every *active* account in the store, so
     test_concurrent_multi_account_execution was one funded account away from trading real

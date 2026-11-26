@@ -33,7 +33,7 @@ def run_copilot_analysis(
     Unified entry point for AI Chart Copilot market analysis.
     """
     # 1. Fetch live historical candles
-    candles = data_manager.fetch_real_binance_klines(symbol, timeframe)
+    candles = data_manager.fetch_ohlcv(symbol, timeframe, use_cache=False)
     if not candles:
         return CopilotResponse(
             status="ERROR",

@@ -205,7 +205,7 @@ def test_docs_describe_the_canonical_gate_count():
 
 # Names in server/data_manager.py that reach the network. Pure helpers such as
 # `_timeframe_to_seconds` and `resample_candles` may still be imported directly.
-NETWORK_FETCHERS = ("fetch_", "sync_", "get_oanda_spot_quote")
+NETWORK_FETCHERS = ("fetch_", "sync_")
 
 
 def _module_level_data_manager_binds(path):

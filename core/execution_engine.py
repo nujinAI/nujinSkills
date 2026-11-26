@@ -3,7 +3,7 @@ core/execution_engine.py - Unified Single Source of Truth Execution Engine.
 
 Both Historical Backtesting and Live Paper/Broker Execution run through this
 exact same state machine and StrategyContract. Broker adapters (Backtest,
-Paper, TradeLocker) only execute orders at the edge and never alter strategy
+Paper, or any registered plugin) only execute orders at the edge and never alter strategy
 or engine rules.
 
 Core Principles:

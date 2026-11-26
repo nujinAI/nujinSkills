@@ -321,9 +321,10 @@ class StrategyEvaluator:
                     eq = float(acc_info.get("equity") or bal or 0.0)
                     if eq > 0:
                         target_equity = eq
-                    if bal > 0 and accounts_store and hasattr(accounts_store, "update_account_balance"):
+                    active_broker_id = getattr(broker, "broker_id", "")
+                    if bal > 0 and active_broker_id and accounts_store and hasattr(accounts_store, "update_account_balance"):
                         accounts_store.update_account_balance(
-                            broker_id=getattr(broker, "broker_id", "tradelocker"),
+                            broker_id=active_broker_id,
                             balance=bal,
                             equity=eq,
                         )
@@ -599,9 +600,10 @@ class NativeStrategyRunner:
                     broker_balance = bal if bal > 0 else eq
                 if info.get("today_net_usd") is not None:
                     broker_today_net = float(info["today_net_usd"])
-                if bal > 0 and accounts_store and hasattr(accounts_store, "update_account_balance"):
+                active_broker_id = getattr(broker, "broker_id", "")
+                if bal > 0 and active_broker_id and accounts_store and hasattr(accounts_store, "update_account_balance"):
                     accounts_store.update_account_balance(
-                        broker_id=getattr(broker, "broker_id", "tradelocker"),
+                        broker_id=active_broker_id,
                         balance=bal,
                         equity=eq if eq > 0 else bal,
                     )
@@ -1130,7 +1132,7 @@ class NativeStrategyRunner:
 
         logger.info(f"[NativeStrategyRunner] 🚀 SIGNAL TRIGGERED for {self.strategy_name}: {sig['action']} @ {sig['price']}")
 
-        # 1. Execute order via Active Execution Broker (Paper, TradeLocker, etc.)
+        # 1. Execute order via Active Execution Broker (Paper or any registered broker plugin)
         now_ts = time.time()
         sig["executed_at"] = now_ts
         sig["entry_time_ts"] = now_ts
@@ -1634,7 +1636,7 @@ class NativeStrategyRunner:
         broker_already_closed = False
 
         # 1. Broker Server-Side Execution Reconciliation (Priority 1 if connected):
-        # If an active execution broker is connected (e.g. TradeLocker live/demo account),
+        # If an active execution broker plugin is connected,
         # verify whether the position was already filled/closed server-side (e.g. SL or TP execution).
         if elapsed_sec >= 15:
             last_reconcile = getattr(self, "_last_broker_reconcile_ts", 0)

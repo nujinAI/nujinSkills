@@ -52,13 +52,13 @@ class TestDrawdownCircuitBreaker(unittest.TestCase):
     def _evaluate(self, signals, balance: float = BALANCE):
         """
         Runs check_drawdown_safety() against a fully controlled environment:
-          - a single TradeLocker account with a known balance and no risk-profile overrides
+          - a single broker account with a known balance and no risk-profile overrides
           - a paper (disconnected) broker, so broker equity never masks the signal-based P&L
           - an explicit signal book
           - no loadable strategy instance, so the documented default risk percentages apply
         """
         account = {
-            "broker_id": "tradelocker",
+            "broker_id": "custom_broker",
             "is_active": True,
             "initial_balance": balance,
             "risk_profile": {},
@@ -133,7 +133,7 @@ class TestDrawdownCircuitBreaker(unittest.TestCase):
     def test_circuit_breaker_adds_live_broker_floating_loss_without_double_counting(self):
         """A connected live broker adds unrealized floating loss (balance - equity) without double-counting closed realized losses."""
         account = {
-            "broker_id": "tradelocker",
+            "broker_id": "custom_broker",
             "is_active": True,
             "initial_balance": BALANCE,
             "risk_profile": {},
@@ -142,7 +142,7 @@ class TestDrawdownCircuitBreaker(unittest.TestCase):
         accounts.get_all_active_accounts.return_value = [account]
 
         live_broker = MagicMock()
-        live_broker.broker_id = "tradelocker"
+        live_broker.broker_id = "custom_broker"
         live_broker.is_connected = True
         live_broker.get_account_info.return_value = {
             "balance": 4950.0,

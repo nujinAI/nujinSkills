@@ -4,12 +4,12 @@ server/telegram_listener.py
 Asynchronous Telegram Listener & Interactive Command Bot.
 
 Enables multi-user, multi-broker account onboarding directly via Telegram.
-Allows users to link their trading accounts (e.g. TradeLocker Pro),
+Allows users to link their trading accounts across installed broker plugins,
 adjust position sizing / risk, and pause or resume automated execution.
 
 Maintains strict separation:
 - Generic broker command interface lives here in open-source nujinSkills.
-- TradeLocker credentials validation and execution live in proprietary nujinPro.
+- Broker-specific credential validation and execution live in broker plugins.
 """
 
 from __future__ import annotations
@@ -187,7 +187,7 @@ class TelegramListener:
             await self._cmd_brokers(chat_id)
         elif cmd == "/accounts":
             await self._cmd_accounts(chat_id, user_id)
-        elif cmd in ("/connect", "/connect_tradelocker"):
+        elif cmd == "/connect":
             await self._cmd_connect(chat_id, user_id, msg_id, cmd_parts[1:])
         elif cmd == "/risk":
             await self._cmd_risk(chat_id, user_id, cmd_parts[1:])
@@ -241,10 +241,9 @@ class TelegramListener:
             pro_badge = " [PRO PLUGIN]" if is_pro else " [OPEN SOURCE]"
             lines.append(f"• <b>{b_id}</b>{pro_badge}{active}\n  <i>{name}</i>")
 
-        # Check if tradelocker is registered
-        has_tl = any(b.get("broker_id") == "tradelocker" for b in brokers)
-        if not has_tl:
-            lines.append("\n💡 <i>TradeLocker live execution is part of the <b>Nujin Pro</b> plugin.</i>")
+        has_live_plugin = any(b.get("broker_id") != "paper" for b in brokers)
+        if not has_live_plugin:
+            lines.append("\n💡 <i>Install a broker plugin into <code>plugins/</code> to enable live execution.</i>")
 
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         telegram_gateway.send_message("\n".join(lines), target_chat_id=str(chat_id))
@@ -254,7 +253,7 @@ class TelegramListener:
         if not accs:
             msg = (
                 "ℹ️ <b>No accounts connected yet.</b>\n\n"
-                "Use <code>/connect</code> to link your TradeLocker account."
+                "Use <code>/connect</code> to link a broker account."
             )
             telegram_gateway.send_message(msg, target_chat_id=str(chat_id))
             return
@@ -290,20 +289,29 @@ class TelegramListener:
 
     async def _cmd_connect(self, chat_id: int | str, user_id: str, msg_id: int, args: list[str]) -> None:
         """Handles /connect wizard or fast one-line input."""
-        # Default target broker is tradelocker
-        target_broker = "tradelocker"
-        if args and args[0].lower() in ("tradelocker", "paper"):
+        available = [b.get("broker_id") for b in broker_registry.list_available_brokers(connect=False) if b.get("broker_id")]
+        live_brokers = [bid for bid in available if bid != "paper"]
+
+        target_broker = ""
+        if args and args[0].lower() in available:
             target_broker = args[0].lower()
             args = args[1:]
-
-        # Check if broker is registered
-        available = [b.get("broker_id") for b in broker_registry.list_available_brokers(connect=False)]
-        if target_broker not in available:
+        elif len(live_brokers) == 1:
+            target_broker = live_brokers[0]
+        elif len(live_brokers) > 1:
+            choices = ", ".join(f"<code>{html.escape(b)}</code>" for b in live_brokers)
             msg = (
-                "🔒 <b>Nujin Pro Plugin Required</b>\n\n"
-                f"The <b>{target_broker.upper()}</b> broker adapter requires the commercial <b>Nujin Pro</b> plugin.\n\n"
-                "To unlock live multi-account execution, place your licensed <code>nujinPro</code> repository "
-                "into the <code>plugins/pro/</code> directory."
+                "🔌 <b>Multiple Broker Plugins Installed</b>\n\n"
+                f"Specify which broker to connect: <code>/connect &lt;broker_id&gt;</code>\n"
+                f"Available live brokers: {choices}"
+            )
+            telegram_gateway.send_message(msg, target_chat_id=str(chat_id))
+            return
+        else:
+            msg = (
+                "🔌 <b>No Live Broker Plugin Installed</b>\n\n"
+                "To unlock live multi-account execution, install a broker plugin "
+                "into the <code>plugins/</code> directory."
             )
             telegram_gateway.send_message(msg, target_chat_id=str(chat_id))
             return
@@ -353,7 +361,14 @@ class TelegramListener:
 
         step = session.get("step")
         data = session.setdefault("data", {})
-        broker_id = session.get("broker_id", "tradelocker")
+        broker_id = session.get("broker_id", "")
+        if not broker_id:
+            _USER_SESSIONS.pop(user_id, None)
+            telegram_gateway.send_message(
+                "❌ Session expired or missing broker selection. Please run <code>/connect</code> again.",
+                target_chat_id=str(chat_id),
+            )
+            return
 
         if step == "AWAIT_SERVER":
             data["server"] = text.strip()
@@ -437,7 +452,10 @@ class TelegramListener:
             telegram_gateway.send_message(f"❌ Broker '{broker_id}' not found.", target_chat_id=str(chat_id))
             return
 
-        telegram_gateway.send_message("⏳ Verifying broker credentials with TradeLocker...", target_chat_id=str(chat_id))
+        telegram_gateway.send_message(
+            f"⏳ Verifying broker credentials with {html.escape(broker_id.upper())}...",
+            target_chat_id=str(chat_id),
+        )
 
         env_clean = environment.strip().lower() or "demo"
         is_valid, message_or_err = broker.validate_credentials({
@@ -551,7 +569,10 @@ class TelegramListener:
         telegram_gateway.send_message("⏳ Testing live broker gateway connections...", target_chat_id=str(chat_id))
         lines = ["🔍 <b>Broker Connection Audit:</b>", "━━━━━━━━━━━━━━━━━━━━━━━━━━"]
         for a in target_accs:
-            broker_id = a.get("broker_id", "tradelocker")
+            broker_id = a.get("broker_id") or ""
+            if not broker_id:
+                lines.append(f"• <code>{a['id']}</code>: ❌ Missing broker_id")
+                continue
             broker = broker_registry.get_broker(broker_id)
             if not broker:
                 lines.append(f"• <code>{a['id']}</code>: ❌ Broker '{broker_id}' not found")

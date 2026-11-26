@@ -37,8 +37,9 @@ sys.path.insert(0, os.getcwd())
 
 # Credentials are cleared so a broker connect() cannot attempt a real gateway login, whatever
 # the developer has exported in their shell.
-for _key in ("TRADELOCKER_EMAIL", "TRADELOCKER_PASSWORD", "TRADELOCKER_SERVER", "TRADELOCKER_ACCOUNT_ID"):
-    os.environ[_key] = ""
+for _key in list(os.environ):
+    if _key.endswith(("_EMAIL", "_PASSWORD", "_SERVER", "_ACCOUNT_ID", "_API_KEY", "_API_SECRET")):
+        os.environ[_key] = ""
 
 try:
     from server.state.accounts_store import accounts_store

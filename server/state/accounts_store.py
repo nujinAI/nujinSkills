@@ -5,7 +5,7 @@ Secure, multi-broker account storage manager.
 Persists registered broker accounts to data/broker_accounts.json
 with local encryption, file locking (fcntl.flock), and thread safety.
 
-Broker agnostic: works for TradeLocker, Binance, Bybit, etc.
+Broker agnostic: works for any registered broker or exchange plugin.
 """
 
 from __future__ import annotations

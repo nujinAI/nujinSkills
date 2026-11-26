@@ -23,13 +23,10 @@ from unittest.mock import patch
 # Target -> value the stub returns. Every caller already treats an empty result as its
 # offline path; no test in this suite asserts on live market data.
 _STUBBED: Dict[str, Any] = {
-    "server.data_manager.fetch_real_oanda_candles": [],
-    "server.data_manager.fetch_real_sp500_candles": [],
-    "server.data_manager.fetch_real_binance_klines": [],
     "server.data_manager.fetch_candles_via_tv": [],
-    "server.data_manager.get_oanda_spot_quote": {},
+    "server.data_manager._fetch_binance_rest_klines": [],
+    "server.data_manager.fetch_ohlcv": [],
     "server.data_manager.sync_30d_candles": "",
-    "server.data_manager.sync_xauusd_scalp_candles": "",
 }
 
 @contextmanager

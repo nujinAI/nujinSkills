@@ -4,7 +4,7 @@ server/brokers/base.py
 Abstract Base Class for Execution Broker & Exchange Adapters.
 
 Enables Nujin to deploy automated execution across any broker, prop firm,
-or exchange (e.g. TradeLocker, Binance, Bybit, Interactive Brokers, OANDA)
+or exchange plugin (e.g. Binance, Bybit, Interactive Brokers, OANDA)
 without modifying strategy logic.
 """
 
