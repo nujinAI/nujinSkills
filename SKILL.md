@@ -76,7 +76,7 @@ metadata:
    # Optional unbiased ML basis radar:
    python tools/scan_edge.py --symbol <SYMBOL> --tf <TF> --days <DAYS> --style <auto|scalp|day|swing|invest>
    ```
-2. **Author Strategy** in `../zillionsAlpha/strategies/<Name>.py` and symlink into `strategies/<Name>.py` (or synthesize from scan via `python tools/build_strategy.py --name <Name> --from-scan-rank 1`).
+2. **Author Strategy** in `strategies/<Name>.py` (or synthesize from scan via `python tools/build_strategy.py --name <Name> --from-scan-rank 1`).
 3. **Pre-Validate Strictly In-Sample (Zero-Lookahead + Sub-Era + 4-Layer Telemetry):**
    ```bash
    python tools/validate_hypothesis.py --strategy <Name>.py --days <DAYS>
