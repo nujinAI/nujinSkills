@@ -14,6 +14,7 @@ from core.data import (
     parse_period_to_days,
     bars_for_days,
     resample_candles,
+    fetch_candles_via_tv,
 )
 from core.friction import resolve_asset_friction, get_roundtrip_friction, compute_carry_cost
 from core.simulation import run_discrete_simulation, resolve_strategy_close_eod
@@ -88,6 +89,11 @@ class TestUniversalEngineFixes(unittest.TestCase):
         self.assertEqual(_timeframe_to_seconds("1w"), 604800)
         self.assertEqual(_tf_to_tv_resolution("2h"), "120")
         self.assertEqual(_tf_to_tv_resolution("1w"), "1W")
+        for bad_tf in ("banana", ""):
+            with self.assertRaises(ValueError):
+                _timeframe_to_seconds(bad_tf)
+            with self.assertRaises(ValueError):
+                _tf_to_tv_resolution(bad_tf)
         self.assertEqual(parse_period_to_days("90d"), 90)
         self.assertEqual(parse_period_to_days("6mo"), 180)
         self.assertEqual(parse_period_to_days("1y"), 365)
@@ -198,6 +204,25 @@ class TestUniversalEngineFixes(unittest.TestCase):
         m = calculate_metrics(rets, periods_per_year=252.0)
         self.assertGreater(m["sharpe"], 0.0)
         self.assertGreater(m["total_return_pct"], 0.0)
+
+    def test_fetch_candles_via_tv_handles_5_element_bars(self):
+        class _FakeWS:
+            def __init__(self, sym, tf, count):
+                self.result_data = [{"v": [1700000100, 100.0, 102.0, 99.0, 101.0]}]
+
+            def connect(self):
+                pass
+
+            def run(self):
+                pass
+
+        with patch("core.data.HAS_TV_WS", True), \
+             patch("core.data.TradingViewWebSocket", _FakeWS):
+            candles = fetch_candles_via_tv("OANDA:XAUUSD", "5m", count=1)
+
+        self.assertEqual(len(candles), 1)
+        self.assertEqual(candles[0]["close"], 101.0)
+        self.assertEqual(candles[0]["volume"], 0.0)
 
 
 if __name__ == "__main__":

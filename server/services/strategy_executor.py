@@ -649,10 +649,14 @@ class NativeStrategyRunner:
 
         max_daily_loss_usd = round(daily_ref_balance * max_daily_dd_pct, 2)
         max_total_loss_usd = round(account_initial_balance * max_total_dd_pct, 2)
-        single_trade_risk_usd = round(current_equity * trade_risk_pct, 2)
+        single_trade_risk_usd = round(daily_ref_balance * trade_risk_pct, 2)
 
         total_drawdown_usd = round(max(0.0, account_initial_balance - current_equity), 2)
-        floating_loss_usd = max(0.0, current_balance - current_equity)
+        floating_loss_usd = (
+            max(0.0, broker_balance - broker_equity)
+            if (broker_balance and broker_balance > 0 and broker_equity and broker_equity > 0)
+            else 0.0
+        )
         broker_daily_loss_usd = (abs(broker_today_net) if (broker_today_net is not None and broker_today_net < 0) else 0.0) + floating_loss_usd
         signals_daily_loss_usd = (abs(today_realized_usd) if today_realized_usd < 0 else 0.0) + floating_loss_usd
         today_loss_usd = round(max(broker_daily_loss_usd, signals_daily_loss_usd), 2)

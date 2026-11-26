@@ -326,7 +326,9 @@ def get_oanda_spot_quote() -> Dict[str, Any]:
 
 def _tf_to_tv_resolution(timeframe: str) -> str:
     """Dynamically converts any timeframe string (1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w) to TradingView resolution code."""
-    tf = (timeframe or "15m").lower().strip()
+    if not isinstance(timeframe, str) or not timeframe.strip():
+        raise ValueError(f"Unsupported timeframe: {timeframe!r}")
+    tf = timeframe.lower().strip()
     if tf in ("d", "1d", "daily", "d1"):
         return "1D"
     if tf in ("w", "1w", "weekly", "w1"):
@@ -356,12 +358,14 @@ def _tf_to_tv_resolution(timeframe: str) -> str:
             return f"{max(1, val)}W"
     if tf.isdigit():
         return tf
-    return "15"
+    raise ValueError(f"Unsupported timeframe: {timeframe!r}")
 
 
 def _timeframe_to_seconds(timeframe: str) -> int:
     """Dynamically converts any timeframe string (e.g. 1m, 30m, 2h, 4h, 1d, 1w) into seconds."""
-    tf = (timeframe or "15m").lower().strip()
+    if not isinstance(timeframe, str) or not timeframe.strip():
+        raise ValueError(f"Unsupported timeframe: {timeframe!r}")
+    tf = timeframe.lower().strip()
     if tf in ("d", "daily"):
         return 86400
     if tf in ("w", "weekly"):
@@ -374,7 +378,7 @@ def _timeframe_to_seconds(timeframe: str) -> int:
         elif tf.isdigit():
             unit, val = "m", int(tf)
         else:
-            return 900
+            raise ValueError(f"Unsupported timeframe: {timeframe!r}")
     else:
         val, unit = int(m.group(1)), m.group(2)
 
@@ -387,7 +391,7 @@ def _timeframe_to_seconds(timeframe: str) -> int:
         return val * 86400
     if unit == "w":
         return val * 604800
-    return 900
+    raise ValueError(f"Unsupported timeframe: {timeframe!r}")
 
 
 def parse_period_to_days(period: Optional[str]) -> Optional[int]:
@@ -506,7 +510,7 @@ def fetch_candles_via_tv(symbol: str, timeframe: str = "1m", count: int = 2000) 
                     "high": float(v[2]),
                     "low": float(v[3]),
                     "close": float(v[4]),
-                    "volume": float(v[5] or 0.0)
+                    "volume": float(v[5] or 0.0) if len(v) > 5 else 0.0
                 })
 
         logger.info(f"[DataManager] Successfully received {len(candles)} authentic bars for {tv_sym}")

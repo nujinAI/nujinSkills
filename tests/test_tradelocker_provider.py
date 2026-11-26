@@ -113,6 +113,15 @@ class TestTradeLockerPriceFeed(unittest.TestCase):
         mock_broker = MagicMock()
         mock_broker.is_connected = True
         mock_broker._resolve_instrument_id.return_value = "inst_xau_123"
+        mock_broker.fetch_price_history.return_value = []
+        mock_broker.fetch_instrument_quote.return_value = {
+            "symbol": "XAU/USD",
+            "price": 4410.35,
+            "bid": 4410.20,
+            "ask": 4410.50,
+            "timestamp": int(time.time()),
+            "source": "tradelocker_broker",
+        }
 
         mock_client = MagicMock()
         mock_client.get_quote.return_value = {
@@ -123,47 +132,53 @@ class TestTradeLockerPriceFeed(unittest.TestCase):
         mock_broker.client = mock_client
         return mock_broker
 
-    def _make_provider(self, seed_last_close: float = 4410.20):
-        """Builds a provider whose historical seed is patched, never fetched."""
+    def _make_provider(self, seed_last_close: float = 4410.20, live_quote: bool = True):
+        """Builds a provider whose broker-native historical seed is mocked, never fetched."""
         provider_cls = self._provider_class()
         mock_broker = self._mock_broker()
         seed = self._seed_candles(last_close=seed_last_close)
-        with patch("server.data_manager.fetch_real_oanda_candles", return_value=seed), \
-             patch("server.data_manager.fetch_candles_via_tv", return_value=seed):
-            provider = provider_cls(
-                broker_instance=mock_broker, symbol="XAU/USD", timeframe="1m"
-            )
-            # Seeding is lazy, so the first read is what fetches: pull it inside the patch.
-            provider.get_candles()
+        mock_broker.fetch_price_history.return_value = seed
+        if not live_quote:
+            mock_broker.fetch_instrument_quote.return_value = None
+        provider = provider_cls(
+            broker_instance=mock_broker, symbol="XAU/USD", timeframe="1m"
+        )
+        # Seeding is lazy, so the first read is what fetches from broker history.
+        provider.get_candles()
         return provider, mock_broker
 
     def test_constructing_provider_does_not_fetch_candles(self):
         """
-        Construction must be side-effect free; the first read is what seeds history.
-
-        The constructor used to run a 2,000-bar OANDA/TradingView fetch, which is why every
-        test touching a provider depended on the live market price and why building one was
-        slow and behaved differently offline.
+        Construction must be side-effect free; the first read is what seeds history
+        strictly from broker-native history (with zero third-party fallback).
         """
         provider_cls = self._provider_class()
         mock_broker = self._mock_broker()
-        fetch_calls = []
+        broker_calls = []
+        third_party_calls = []
 
-        def _record(*args, **kwargs):
-            fetch_calls.append(kwargs or args)
+        def _record_broker(*args, **kwargs):
+            broker_calls.append(kwargs or args)
             return []
 
-        with patch("server.data_manager.fetch_real_oanda_candles", side_effect=_record), \
-             patch("server.data_manager.fetch_candles_via_tv", side_effect=_record):
+        def _record_third_party(*args, **kwargs):
+            third_party_calls.append(kwargs or args)
+            return []
+
+        mock_broker.fetch_price_history.side_effect = _record_broker
+
+        with patch("server.data_manager.fetch_real_oanda_candles", side_effect=_record_third_party), \
+             patch("server.data_manager.fetch_candles_via_tv", side_effect=_record_third_party):
             provider = provider_cls(
                 broker_instance=mock_broker, symbol="XAU/USD", timeframe="1m"
             )
-            self.assertEqual(fetch_calls, [], "the constructor must not fetch historical candles")
+            self.assertEqual(broker_calls, [], "the constructor must not fetch historical candles")
             self.assertEqual(provider._candles, [])
 
             provider.get_candles()
 
-        self.assertGreaterEqual(len(fetch_calls), 1, "the first read must seed from history")
+        self.assertGreaterEqual(len(broker_calls), 1, "the first read must seed from broker history")
+        self.assertEqual(third_party_calls, [], "TradeLockerProvider must never fall back to third-party feeds")
 
     def test_tradelocker_provider_tick_processing(self):
         """Tests that TradeLockerMarketDataProvider processes live broker quotes and forms candles."""
@@ -231,14 +246,14 @@ class TestTradeLockerPriceFeed(unittest.TestCase):
 
     def test_tradelocker_provider_initial_candles_seed(self):
         """Tests that TradeLockerMarketDataProvider adopts the historical candles fetched on init."""
-        provider, _ = self._make_provider(seed_last_close=4410.20)
+        provider, _ = self._make_provider(seed_last_close=4410.20, live_quote=False)
 
         candles = provider.get_candles(count=1000)
         self.assertGreater(len(candles), 25, "TradeLockerMarketDataProvider must seed >25 candles so strategy evaluation succeeds")
 
         # The seed is adopted verbatim: the last seeded close drives the initial quote.
         self.assertEqual(candles[-1]["close"], 4410.20)
-        self.assertEqual(provider.get_latest_quote()["source"], "tradelocker_initial_seed")
+        self.assertEqual(provider.get_latest_quote()["source"], "tradelocker_history_seed")
 
     def test_broker_registry_autodetect_tradelocker_account(self):
         """Tests that BrokerRegistry.get_active_broker_id auto-detects active TradeLocker accounts in accounts_store."""

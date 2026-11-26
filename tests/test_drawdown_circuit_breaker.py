@@ -130,6 +130,39 @@ class TestDrawdownCircuitBreaker(unittest.TestCase):
         self.assertTrue(safe)
         self.assertEqual(reason, "OK")
 
+    def test_circuit_breaker_adds_live_broker_floating_loss_without_double_counting(self):
+        """A connected live broker adds unrealized floating loss (balance - equity) without double-counting closed realized losses."""
+        account = {
+            "broker_id": "tradelocker",
+            "is_active": True,
+            "initial_balance": BALANCE,
+            "risk_profile": {},
+        }
+        accounts = MagicMock()
+        accounts.get_all_active_accounts.return_value = [account]
+
+        live_broker = MagicMock()
+        live_broker.broker_id = "tradelocker"
+        live_broker.is_connected = True
+        live_broker.get_account_info.return_value = {
+            "balance": 4950.0,
+            "equity": 4930.0,
+            "today_net_usd": -50.0,
+        }
+        broker_reg = MagicMock()
+        broker_reg.get_broker.return_value = live_broker
+
+        with patch("server.backtest_engine.load_strategy_instance", return_value=None), \
+             patch("server.strategy_executor.accounts_store", accounts), \
+             patch("server.strategy_executor.broker_registry", broker_reg), \
+             patch.object(signal_store, "get_all", return_value=[_closed_signal(-50.0)]):
+            safe, reason, details = self.runner.check_drawdown_safety()
+
+        self.assertEqual(details["today_loss_usd"], 70.0)
+        self.assertEqual(details["remaining_budget_usd"], 80.0)
+        self.assertTrue(safe)
+        self.assertEqual(reason, "OK")
+
 
 if __name__ == "__main__":
     unittest.main()

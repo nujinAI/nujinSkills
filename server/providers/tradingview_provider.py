@@ -38,9 +38,6 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
         try:
             logger.info(f"[TradingViewProvider] Loading initial candles for {self.tv_symbol} ({self.timeframe})...")
             candles = data_manager.fetch_candles_via_tv(self.tv_symbol, self.timeframe, count=2000)
-            if not candles and ("XAU" in self.symbol.upper() or "GOLD" in self.symbol.upper()):
-                # Broker Spot Fallback only if TV websocket has a temporary timeout
-                candles = data_manager.fetch_real_broker_spot_gold_candles(interval=self.timeframe, count=1000)
 
             if candles:
                 self._candles = candles
