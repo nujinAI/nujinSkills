@@ -216,7 +216,7 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                                         "low": round(l, prec),
                                         "volume": vol,
                                         "delta_volume": delta_vol,
-                                        "timestamp": b_ts,
+                                        "timestamp": int(time.time()),
                                         "source": "tradingview_ws_live",
                                         "candle": {
                                             "time": b_ts,
@@ -305,6 +305,23 @@ class TradingViewMarketDataProvider(BaseMarketDataProvider):
                                             if len(self._candles) > 2500:
                                                 self._candles = self._candles[-2500:]
                                             self._last_bar_time = latest_nb_ts
+                                            latest_nb = new_bars[-1]
+                                            latest_c = float(latest_nb.get("close") or finalized_bar.get("close") or 0.0)
+                                            if latest_c > 0:
+                                                self._latest_quote = {
+                                                    "symbol": self.symbol,
+                                                    "price": round(latest_c, prec),
+                                                    "bid": round(latest_c - spread_val, prec),
+                                                    "ask": round(latest_c + spread_val, prec),
+                                                    "open": latest_nb.get("open", latest_c),
+                                                    "high": latest_nb.get("high", latest_c),
+                                                    "low": latest_nb.get("low", latest_c),
+                                                    "volume": latest_nb.get("volume", 0.0),
+                                                    "delta_volume": 0.0,
+                                                    "timestamp": int(time.time()),
+                                                    "source": "tradingview_ws_live",
+                                                    "candle": latest_nb,
+                                                }
                                             await self._notify_bar(finalized_bar)
                                             continue
 

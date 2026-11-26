@@ -77,13 +77,20 @@ class BaseMarketDataProvider(abc.ABC):
         except Exception:
             pass
 
+        async_tasks = []
         for cb in list(self._tick_callbacks):
             try:
                 res = cb(quote)
                 if asyncio.iscoroutine(res):
-                    await res
+                    async_tasks.append(res)
             except Exception as e:
                 logger.error(f"[{self.symbol}] Tick callback error: {e}")
+
+        if async_tasks:
+            results = await asyncio.gather(*async_tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, Exception):
+                    logger.error(f"[{self.symbol}] Tick callback error: {res}")
 
     async def _notify_bar(self, bar: Dict[str, Any]) -> None:
         # Broadcast finalized bar event
@@ -101,13 +108,20 @@ class BaseMarketDataProvider(abc.ABC):
         except Exception:
             pass
 
+        async_tasks = []
         for cb in list(self._bar_callbacks):
             try:
                 res = cb(bar)
                 if asyncio.iscoroutine(res):
-                    await res
+                    async_tasks.append(res)
             except Exception as e:
                 logger.error(f"[{self.symbol}] Bar callback error: {e}")
+
+        if async_tasks:
+            results = await asyncio.gather(*async_tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, Exception):
+                    logger.error(f"[{self.symbol}] Bar callback error: {res}")
 
     async def _on_bar_closing(self, closed_bar: Dict[str, Any]) -> Dict[str, Any]:
         """Optional hook called on bar rollover before notifying bar subscribers."""
@@ -361,8 +375,26 @@ class ProviderRegistry:
         return provider
 
     @classmethod
+    def invalidate_cache(cls) -> None:
+        """Clears cached provider instances (e.g. on broker switch) and stops running streams."""
+        providers = list(cls._providers.values())
+        cls._providers.clear()
+        for p in providers:
+            if getattr(p, "is_running", False):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(p.stop())
+                except RuntimeError:
+                    p.is_running = False
+
+    @classmethod
+    async def reset_providers(cls) -> None:
+        """Stops all running providers and clears cache so next lookup re-routes cleanly."""
+        await cls.stop_all()
+
+    @classmethod
     async def stop_all(cls) -> None:
-        for p in cls._providers.values():
+        for p in list(cls._providers.values()):
             if p.is_running:
                 await p.stop()
         cls._providers.clear()

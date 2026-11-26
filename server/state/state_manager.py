@@ -24,10 +24,11 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from server.cynic_gates import GATE_KEYS
@@ -110,18 +111,42 @@ def _ensure_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
 
+_JSON_CACHE_LOCK = threading.RLock()
+_JSON_READ_CACHE: Dict[str, Tuple[int, int, int, Any]] = {}
+
+
 def _read_json_locked(path: str, default: Any) -> Any:
-    """Read a JSON file under a shared lock. Returns `default` on missing/corrupt."""
+    """Read a JSON file under a shared lock with inode/mtime/size caching. Returns `default` on missing/corrupt."""
     _ensure_dir(path)
-    if not os.path.exists(path):
+    abs_path = os.path.abspath(path)
+    if not os.path.exists(abs_path):
+        with _JSON_CACHE_LOCK:
+            _JSON_READ_CACHE.pop(abs_path, None)
         return deepcopy(default)
     try:
-        with open(path, "r") as f:
+        st = os.stat(abs_path)
+        sig = (st.st_ino, st.st_mtime_ns, st.st_size)
+        with _JSON_CACHE_LOCK:
+            cached = _JSON_READ_CACHE.get(abs_path)
+            if cached is not None and cached[:3] == sig:
+                return deepcopy(cached[3])
+    except OSError:
+        sig = None
+    try:
+        with open(abs_path, "r") as f:
             fcntl.flock(f, fcntl.LOCK_SH)
             try:
-                return json.load(f)
+                data = json.load(f)
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
+        try:
+            st_after = os.stat(abs_path)
+            sig_after = (st_after.st_ino, st_after.st_mtime_ns, st_after.st_size)
+            with _JSON_CACHE_LOCK:
+                _JSON_READ_CACHE[abs_path] = (sig_after[0], sig_after[1], sig_after[2], deepcopy(data))
+        except OSError:
+            pass
+        return data
     except Exception as e:
         logger.warning(f"[StateManager] Could not read {path}: {e}")
         return deepcopy(default)
@@ -143,7 +168,8 @@ class _NumpyEncoder(json.JSONEncoder):
 def _write_json_locked(path: str, data: Any) -> None:
     """Write JSON to a file under an exclusive lock (atomic tmp-then-rename)."""
     _ensure_dir(path)
-    tmp_path = f"{path}.{os.getpid()}.{time.time_ns()}.tmp"
+    abs_path = os.path.abspath(path)
+    tmp_path = f"{abs_path}.{os.getpid()}.{time.time_ns()}.tmp"
     try:
         with open(tmp_path, "w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
@@ -153,9 +179,18 @@ def _write_json_locked(path: str, data: Any) -> None:
                 os.fsync(f.fileno())
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
-        os.replace(tmp_path, path)   # atomic on POSIX
+        os.replace(tmp_path, abs_path)   # atomic on POSIX
+        try:
+            st = os.stat(abs_path)
+            with _JSON_CACHE_LOCK:
+                _JSON_READ_CACHE[abs_path] = (st.st_ino, st.st_mtime_ns, st.st_size, deepcopy(data))
+        except OSError:
+            with _JSON_CACHE_LOCK:
+                _JSON_READ_CACHE.pop(abs_path, None)
     except Exception as e:
         logger.error(f"[StateManager] Write failed for {path}: {e}")
+        with _JSON_CACHE_LOCK:
+            _JSON_READ_CACHE.pop(abs_path, None)
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)

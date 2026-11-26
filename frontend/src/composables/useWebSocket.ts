@@ -140,6 +140,18 @@ const connect = () => {
             }
             break;
           }
+          case 'SIGNAL_UPDATED': {
+            signals.value = signals.value.map((s) =>
+              s.id === payload.id ? { ...s, ...payload } : s
+            );
+            if (latestSignal.value && latestSignal.value.id === payload.id) {
+              latestSignal.value = {
+                ...latestSignal.value,
+                ...payload,
+              };
+            }
+            break;
+          }
           case 'SIGNALS_CLEARED': {
             if (payload?.strategy) {
               signals.value = signals.value.filter((s) => s.strategy !== payload.strategy);

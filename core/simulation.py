@@ -52,6 +52,7 @@ def run_discrete_simulation(
     eod_close_hour_utc: int = 21,
     daily_carry_bps: float = 0.0,
     friction_override: Optional[Dict[str, float]] = None,
+    min_hold_bars: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Simulates trades bar-by-bar against execution geometry with pessimistic resolution.
@@ -122,6 +123,7 @@ def run_discrete_simulation(
                 max_hold_bars=max_hold_bars,
                 close_eod=close_eod,
                 eod_close_hour_utc=eod_close_hour_utc,
+                min_hold_bars=min_hold_bars,
             )
 
             if decision is not None:

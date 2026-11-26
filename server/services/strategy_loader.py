@@ -5,10 +5,11 @@ from core strategies/ directory or installed plugins with Freqtrade interface sh
 """
 import os
 import sys
+import threading
 import types
 import importlib.util
 import logging
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Tuple
 
 from server.state_manager import state_manager, strategy_registry
 
@@ -25,6 +26,9 @@ if _PARENT not in sys.path:
 _ZILLIONS = os.path.join(_PARENT, "zillionsAlpha")
 if os.path.exists(_ZILLIONS) and _ZILLIONS not in sys.path:
     sys.path.insert(0, _ZILLIONS)
+
+_CLASS_CACHE_LOCK = threading.RLock()
+_CLASS_CACHE: Dict[str, Tuple[int, int, int, type]] = {}
 
 
 def _ensure_freqtrade_shim():
@@ -89,11 +93,24 @@ def load_strategy_instance(strategy_name: str) -> Optional[Any]:
         logger.warning(f"[StrategyLoader] Strategy file not found at {strat_path}")
         return None
 
+    abs_path = os.path.abspath(strat_path)
+    try:
+        st = os.stat(abs_path)
+        sig = (st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = None
+
+    if sig is not None:
+        with _CLASS_CACHE_LOCK:
+            cached = _CLASS_CACHE.get(abs_path)
+            if cached is not None and cached[:3] == sig:
+                return cached[3]()
+
     try:
         mod_name = f"edge_strategy_{clean_name}"
         if mod_name in sys.modules:
             del sys.modules[mod_name]
-        spec = importlib.util.spec_from_file_location(mod_name, strat_path)
+        spec = importlib.util.spec_from_file_location(mod_name, abs_path)
         if not spec or not spec.loader:
             return None
         mod = importlib.util.module_from_spec(spec)
@@ -106,7 +123,10 @@ def load_strategy_instance(strategy_name: str) -> Optional[Any]:
                 continue
             obj = getattr(mod, attr_name)
             if isinstance(obj, type) and ((hasattr(obj, "populate_indicators") and hasattr(obj, "populate_entry_trend")) or hasattr(obj, "generate_signals")):
-                logger.info(f"[StrategyLoader] Successfully loaded strategy class: {attr_name} from {strat_path}")
+                if sig is not None:
+                    with _CLASS_CACHE_LOCK:
+                        _CLASS_CACHE[abs_path] = (sig[0], sig[1], sig[2], obj)
+                logger.info(f"[StrategyLoader] Successfully loaded strategy class: {attr_name} from {abs_path}")
                 return obj()
     except Exception as e:
         logger.error(f"[StrategyLoader] Failed to load strategy instance for '{clean_name}': {e}")

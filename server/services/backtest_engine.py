@@ -321,6 +321,7 @@ def _run_real_backtest_impl(
         max_daily_l = contract.max_daily_losses
         daily_cap = contract.resolve_daily_profit_cap_dollars(acct_size)
         max_hold_b = contract.max_hold_bars
+        min_hold_b = contract.min_hold_bars
 
         res_disc = run_discrete_simulation(
             df=df_idx,
@@ -335,6 +336,7 @@ def _run_real_backtest_impl(
             eod_close_hour_utc=eod_hour,
             daily_carry_bps=daily_carry_bps,
             friction_override=friction_override,
+            min_hold_bars=min_hold_b,
         )
 
         for t in res_disc["trades"]:

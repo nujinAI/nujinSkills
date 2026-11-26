@@ -11,8 +11,9 @@ without modifying strategy logic.
 from __future__ import annotations
 
 import abc
+import asyncio
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional, Set
 
 logger = logging.getLogger("ExecutionBroker")
 
@@ -26,11 +27,65 @@ class BaseExecutionBroker(abc.ABC):
         self.broker_id = broker_id
         self.name = name
         self.is_connected = False
+        self._event_callbacks: Set[Callable[[Dict[str, Any]], Any]] = set()
 
     @property
     def supports_multi_account(self) -> bool:
         """Indicates whether this broker adapter supports concurrent multi-account execution."""
         return False
+
+    @property
+    def supports_server_side_brackets(self) -> bool:
+        """
+        True when the broker natively enforces attached SL/TP server-side.
+        Allows runners to rely on fast reconciliation + safety backstop rather than double-closing.
+        """
+        return False
+
+    def subscribe_execution_events(self, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """Register callback for real-time execution/fill/close events (for streaming broker plugins)."""
+        self._event_callbacks.add(callback)
+
+    def unsubscribe_execution_events(self, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        self._event_callbacks.discard(callback)
+
+    def _emit_execution_event(self, event: Dict[str, Any]) -> None:
+        """Dispatches an execution event to registered callbacks safely from sync or async contexts."""
+        for cb in list(self._event_callbacks):
+            try:
+                res = cb(event)
+                if asyncio.iscoroutine(res):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(res)
+                    except RuntimeError:
+                        res.close()
+            except Exception as e:
+                logger.debug(f"[{self.broker_id}] Execution event callback note: {e}")
+
+    def get_cached_account_info(self, max_age: float = 15.0) -> Dict[str, Any]:
+        """Fast account-info lookup allowing broker adapters to reuse a fresh snapshot."""
+        return self.get_account_info()
+
+    def get_cached_open_positions(
+        self,
+        symbol: Optional[str] = None,
+        max_age: float = 5.0,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Fast open-positions lookup allowing broker adapters to reuse a fresh snapshot."""
+        return self.get_open_positions(symbol=symbol)
+
+    def reconcile_order_fill(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Optional post-order async fill lookup returning
+        {"filled_price": float, "position_id": Optional[str], "status": Optional[str]} or None.
+        """
+        return None
 
     def validate_credentials(self, config: Dict[str, Any]) -> tuple[bool, str]:
         """

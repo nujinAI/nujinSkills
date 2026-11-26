@@ -7,7 +7,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 
 import numpy as np
 import pandas as pd
@@ -111,7 +111,13 @@ class StrategyEvaluator:
         }
 
     @staticmethod
-    def evaluate(strategy_name: str, symbol: str, candles: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def evaluate(
+        strategy_name: str,
+        symbol: str,
+        candles: List[Dict[str, Any]],
+        strat_inst: Any = None,
+        prefetched_equity: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Evaluates candle indicators and checks for LONG or SHORT entry signals.
         Returns signal dictionary if triggered, else None.
@@ -121,60 +127,34 @@ class StrategyEvaluator:
 
         clean_name = strategy_name.replace(".py", "")
         df = pd.DataFrame(candles)
-
         close = df["close"]
         high = df["high"]
         low = df["low"]
         vol = df["volume"]
 
-        # Common indicators
-        total_range = (high - low).replace(0, 1e-6)
-        lower_wick = (np.minimum(close, df["open"]) - low) / total_range
-        upper_wick = (high - np.maximum(close, df["open"])) / total_range
-
-        vol_mean = vol.rolling(20).mean()
-        vol_std = vol.rolling(20).std().replace(0, 1e-6)
-        vol_z = (vol - vol_mean) / vol_std
-
-        ema_9 = close.ewm(span=9, adjust=False).mean()
-        ema_21 = close.ewm(span=21, adjust=False).mean()
-        ema_200 = close.ewm(span=min(200, len(close)), adjust=False).mean()
-
-        tr = np.maximum(high - low, np.maximum((high - close.shift(1)).abs(), (low - close.shift(1)).abs()))
-        atr_14 = tr.rolling(14).mean()
-
-        hh_15 = high.shift(1).rolling(15).max()
-        ll_15 = low.shift(1).rolling(15).min()
-
         curr_i = len(df) - 1
         curr_bar = df.iloc[curr_i]
         curr_p = float(close.iloc[curr_i])
-        curr_e9 = float(ema_9.iloc[curr_i])
-        curr_e21 = float(ema_21.iloc[curr_i])
-        curr_e200 = float(ema_200.iloc[curr_i])
-        curr_vz = float(vol_z.iloc[curr_i]) if not np.isnan(vol_z.iloc[curr_i]) else 0.0
-        curr_atr = float(atr_14.iloc[curr_i]) if not np.isnan(atr_14.iloc[curr_i]) else 2.50
-        curr_hh15 = float(hh_15.iloc[curr_i]) if not np.isnan(hh_15.iloc[curr_i]) else curr_p
-        curr_ll15 = float(ll_15.iloc[curr_i]) if not np.isnan(ll_15.iloc[curr_i]) else curr_p
-        curr_lw = float(lower_wick.iloc[curr_i]) if not np.isnan(lower_wick.iloc[curr_i]) else 0.0
-        curr_uw = float(upper_wick.iloc[curr_i]) if not np.isnan(upper_wick.iloc[curr_i]) else 0.0
-
         bar_ts = int(curr_bar.get("time", curr_bar.get("timestamp", 0)))
         is_xau = "XAU" in symbol.upper() or "GOLD" in symbol.upper()
-        
+
         from core.data import get_market_price_precision
         price_prec = get_market_price_precision(symbol)
 
         # Dynamic evaluation via strategy class Single Source of Truth
         try:
-            from server.backtest_engine import load_strategy_instance
-            strat_inst = load_strategy_instance(clean_name)
+            if strat_inst is None:
+                from server.backtest_engine import load_strategy_instance
+                strat_inst = load_strategy_instance(clean_name)
             if not strat_inst:
                 logger.warning(f"[StrategyEvaluator] Strategy '{clean_name}' class could not be loaded from strategies/{clean_name}.py. No signal.")
                 return None
 
             from core.execution_engine import StrategyContract, extract_latest_signal
             contract = StrategyContract.from_strategy(strat_inst)
+
+            curr_vz = 0.0
+            curr_atr = float("nan")
 
             if hasattr(strat_inst, "generate_signals"):
                 intent, sig_df, last_sig = extract_latest_signal(strat_inst, df, price_prec=price_prec)
@@ -189,15 +169,13 @@ class StrategyEvaluator:
                 limit_p = intent.limit_price
                 is_limit_order = (intent.order_type == "LIMIT")
 
-                atr_v = curr_atr if (curr_atr and not np.isnan(curr_atr) and curr_atr > 0) else (curr_p * 0.005)
                 found_sig_atr = False
                 for atr_col in ("atr", "atr_14", "ATR", "ATR_14"):
                     if sig_df is not None and atr_col in sig_df.columns and not np.isnan(sig_df[atr_col].iloc[-1]):
                         atr_v = float(sig_df[atr_col].iloc[-1])
                         found_sig_atr = True
                         break
-                # Only recompute compute_indicators if ATR wasn't already available on df/sig_df
-                if not found_sig_atr and (not curr_atr or np.isnan(curr_atr) or curr_atr <= 0) and hasattr(strat_inst, "compute_indicators"):
+                if not found_sig_atr and hasattr(strat_inst, "compute_indicators"):
                     try:
                         df_idx = df.copy()
                         if "time" in df_idx.columns:
@@ -211,11 +189,25 @@ class StrategyEvaluator:
                         for atr_col in ("atr", "atr_14", "ATR", "ATR_14"):
                             if atr_col in ind_df.columns and not np.isnan(ind_df[atr_col].iloc[-1]):
                                 atr_v = float(ind_df[atr_col].iloc[-1])
+                                found_sig_atr = True
                                 break
                     except Exception:
                         pass
+                if not found_sig_atr:
+                    tr = np.maximum(high - low, np.maximum((high - close.shift(1)).abs(), (low - close.shift(1)).abs()))
+                    atr_14 = tr.rolling(14).mean()
+                    curr_atr = float(atr_14.iloc[curr_i]) if not np.isnan(atr_14.iloc[curr_i]) else (curr_p * 0.005)
+                    atr_v = curr_atr if curr_atr > 0 else (curr_p * 0.005)
                 last_row = last_sig
             else:
+                tr = np.maximum(high - low, np.maximum((high - close.shift(1)).abs(), (low - close.shift(1)).abs()))
+                atr_14 = tr.rolling(14).mean()
+                curr_atr = float(atr_14.iloc[curr_i]) if not np.isnan(atr_14.iloc[curr_i]) else 2.50
+                vol_mean = vol.rolling(20).mean()
+                vol_std = vol.rolling(20).std().replace(0, 1e-6)
+                vol_z = (vol - vol_mean) / vol_std
+                curr_vz = float(vol_z.iloc[curr_i]) if not np.isnan(vol_z.iloc[curr_i]) else 0.0
+
                 df_dyn = strat_inst.populate_indicators(df.copy(), {})
                 df_dyn = strat_inst.populate_entry_trend(df_dyn, {})
                 last_row = df_dyn.iloc[-1]
@@ -307,29 +299,34 @@ class StrategyEvaluator:
                 }
                 bar_sec = tf_map.get(str(tf_str).lower(), 300 if ("5m" in clean_name.lower()) else (60 if "1m" in symbol.lower() else 900))
 
-            min_bars = getattr(strat_inst, "min_bars", getattr(strat_inst, "min_hold_bars", 1))
-            max_bars = getattr(strat_inst, "max_bars", None)
+            min_bars = contract.min_hold_bars
+            min_hold_seconds = (min_bars * bar_sec) if (min_bars is not None and min_bars > 0) else 0
 
             # 4. Strategy-Designed Smart Lot Sizer
-            target_equity = None
-            try:
-                broker = broker_registry.get_broker()
-                is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
-                if broker and getattr(broker, "is_connected", False) and not is_paper_broker:
-                    acc_info = broker.get_account_info()
-                    bal = float(acc_info.get("balance") or 0.0)
-                    eq = float(acc_info.get("equity") or bal or 0.0)
-                    if eq > 0:
-                        target_equity = eq
-                    active_broker_id = getattr(broker, "broker_id", "")
-                    if bal > 0 and active_broker_id and accounts_store and hasattr(accounts_store, "update_account_balance"):
-                        accounts_store.update_account_balance(
-                            broker_id=active_broker_id,
-                            balance=bal,
-                            equity=eq,
+            target_equity = float(prefetched_equity) if (prefetched_equity is not None and float(prefetched_equity) > 0) else None
+            if target_equity is None:
+                try:
+                    broker = broker_registry.get_broker()
+                    is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
+                    if broker and getattr(broker, "is_connected", False) and not is_paper_broker:
+                        acc_info = (
+                            broker.get_cached_account_info(max_age=15.0)
+                            if hasattr(broker, "get_cached_account_info")
+                            else broker.get_account_info()
                         )
-            except Exception:
-                pass
+                        bal = float(acc_info.get("balance") or 0.0)
+                        eq = float(acc_info.get("equity") or bal or 0.0)
+                        if eq > 0:
+                            target_equity = eq
+                        active_broker_id = getattr(broker, "broker_id", "")
+                        if bal > 0 and active_broker_id and accounts_store and hasattr(accounts_store, "update_account_balance"):
+                            accounts_store.update_account_balance(
+                                broker_id=active_broker_id,
+                                balance=bal,
+                                equity=eq,
+                            )
+                except Exception:
+                    pass
 
             if target_equity is None:
                 try:
@@ -367,6 +364,12 @@ class StrategyEvaluator:
                     if "atr" in sig_params:
                         call_kwargs["atr"] = atr_v
                     if "z_score" in sig_params:
+                        if curr_vz == 0.0 and len(vol) >= 20:
+                            vol_mean = vol.rolling(20).mean()
+                            vol_std = vol.rolling(20).std().replace(0, 1e-6)
+                            vz_series = (vol - vol_mean) / vol_std
+                            if not np.isnan(vz_series.iloc[curr_i]):
+                                curr_vz = float(vz_series.iloc[curr_i])
                         call_kwargs["z_score"] = curr_vz
 
                     raw_lots = float(strat_inst.calculate_lot_size(**call_kwargs))
@@ -410,6 +413,7 @@ class StrategyEvaluator:
 
             order_action_type = "LIMIT" if is_limit_order else "MARKET"
             dispatch_price = limit_p if (is_limit_order and limit_p is not None and limit_p > 0) else curr_p
+            signal_bar_close_ts = (bar_ts + bar_sec) if (bar_ts > 0 and bar_sec > 0) else bar_ts
 
             return {
                 "strategy": clean_name,
@@ -420,14 +424,17 @@ class StrategyEvaluator:
                 "price": dispatch_price,
                 "entry_price": dispatch_price,
                 "market_price": curr_p,
-                "time": bar_ts if bar_ts > 0 else int(time.time()),
+                "time": signal_bar_close_ts if signal_bar_close_ts > 0 else int(time.time()),
+                "signal_bar_time": bar_ts,
+                "signal_bar_close_ts": signal_bar_close_ts,
+                "bar_step_seconds": bar_sec,
                 "stop_loss": sl,
                 "take_profit": tp,
                 "lots": lots,
                 "lot_size": lots,
                 "atr": float(atr_v if atr_v and atr_v > 0 else 0.0),
                 "atr_trail_mult": atr_trail_m,
-                "min_hold_seconds": min_bars * bar_sec,
+                "min_hold_seconds": min_hold_seconds,
                 "max_hold_seconds": max_hold_seconds,
                 "limit_expiry_seconds": limit_expiry_seconds,
                 "trailing_stop": use_trailing,
@@ -464,6 +471,43 @@ class NativeStrategyRunner:
         self._stopped: bool = False
         self._supports_structural_sl: Optional[bool] = None
         self._last_struct_sl_bar_ts: int = 0
+        self._exit_lock: asyncio.Lock = asyncio.Lock()
+        self._reconcile_in_flight: bool = False
+        self._subscribed_broker: Optional[Any] = None
+
+    def _get_strategy_instance(self) -> Any:
+        strat_inst = getattr(self, "_cached_strat_inst", None)
+        if strat_inst is None:
+            try:
+                from server.backtest_engine import load_strategy_instance
+                strat_inst = load_strategy_instance(self.strategy_name)
+                if strat_inst is not None:
+                    self._cached_strat_inst = strat_inst
+            except Exception as e_st:
+                logger.debug(f"[NativeStrategyRunner] Could not load strategy instance for {self.strategy_name}: {e_st}")
+        return strat_inst
+
+    def _fetch_broker_snapshot(self) -> Tuple[Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
+        """Fetches a single cached broker snapshot (account info + open positions) off the event loop."""
+        try:
+            broker = broker_registry.get_broker()
+            is_paper = getattr(broker, "broker_id", "paper") == "paper"
+            if not broker or not getattr(broker, "is_connected", False) or is_paper:
+                return None, None
+            info = (
+                broker.get_cached_account_info(max_age=15.0)
+                if hasattr(broker, "get_cached_account_info")
+                else broker.get_account_info()
+            )
+            positions = None
+            if hasattr(broker, "get_cached_open_positions"):
+                positions = broker.get_cached_open_positions(max_age=4.0)
+            elif hasattr(broker, "get_open_positions"):
+                positions = broker.get_open_positions()
+            return info, positions
+        except Exception as e_snap:
+            logger.debug(f"[NativeStrategyRunner] Broker snapshot note: {e_snap}")
+            return None, None
 
     async def start(self) -> None:
         if self._stopped or self.is_running:
@@ -481,6 +525,13 @@ class NativeStrategyRunner:
         # Subscribe callbacks
         self.provider.subscribe_tick(self._on_market_tick)
         self.provider.subscribe_bar(self._on_market_bar)
+        try:
+            broker = broker_registry.get_broker(connect=False)
+            if broker and hasattr(broker, "subscribe_execution_events"):
+                broker.subscribe_execution_events(self._on_broker_execution_event)
+                self._subscribed_broker = broker
+        except Exception:
+            pass
         logger.info(f"[NativeStrategyRunner] Active for '{self.strategy_name}' on {self.symbol} ({self.timeframe})")
 
     async def stop(self) -> None:
@@ -488,9 +539,15 @@ class NativeStrategyRunner:
         self.is_running = False
         self.provider.unsubscribe_tick(self._on_market_tick)
         self.provider.unsubscribe_bar(self._on_market_bar)
+        try:
+            if self._subscribed_broker and hasattr(self._subscribed_broker, "unsubscribe_execution_events"):
+                self._subscribed_broker.unsubscribe_execution_events(self._on_broker_execution_event)
+            self._subscribed_broker = None
+        except Exception:
+            pass
         logger.info(f"[NativeStrategyRunner] Stopped for '{self.strategy_name}'")
 
-    def _is_pyramiding_blocked(self) -> Tuple[bool, str]:
+    def _is_pyramiding_blocked(self, prefetched_positions: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, str]:
         """Return (True, reason) if allow_pyramiding is False and another signal/position is active."""
         allow_pyramiding = False
         try:
@@ -518,6 +575,11 @@ class NativeStrategyRunner:
             pass
 
         # 2. Check live broker open positions (protects against manual or untracked positions)
+        if prefetched_positions is not None:
+            if len(prefetched_positions) > 0:
+                return True, f"Pyramiding disabled: {len(prefetched_positions)} open position(s) already on broker"
+            return False, ""
+
         try:
             broker = broker_registry.get_broker()
             is_paper = getattr(broker, "broker_id", "paper") == "paper"
@@ -530,7 +592,7 @@ class NativeStrategyRunner:
 
         return False, ""
 
-    def check_drawdown_safety(self) -> Tuple[bool, str, Dict[str, Any]]:
+    def check_drawdown_safety(self, prefetched_broker_info: Optional[Dict[str, Any]] = None) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Active Live Risk & Drawdown Circuit Breaker.
         Strictly enforces strategy-configured max_daily_drawdown_pct and max_total_drawdown_pct
@@ -589,10 +651,8 @@ class NativeStrategyRunner:
         broker_balance = None
         broker_today_net = None
         try:
-            broker = broker_registry.get_broker()
-            is_paper = getattr(broker, "broker_id", "paper") == "paper"
-            if broker and getattr(broker, "is_connected", False) and not is_paper:
-                info = broker.get_account_info()
+            if prefetched_broker_info is not None:
+                info = prefetched_broker_info
                 eq = float(info.get("equity") or 0.0)
                 bal = float(info.get("balance") or 0.0)
                 if eq > 0:
@@ -600,13 +660,25 @@ class NativeStrategyRunner:
                     broker_balance = bal if bal > 0 else eq
                 if info.get("today_net_usd") is not None:
                     broker_today_net = float(info["today_net_usd"])
-                active_broker_id = getattr(broker, "broker_id", "")
-                if bal > 0 and active_broker_id and accounts_store and hasattr(accounts_store, "update_account_balance"):
-                    accounts_store.update_account_balance(
-                        broker_id=active_broker_id,
-                        balance=bal,
-                        equity=eq if eq > 0 else bal,
-                    )
+            else:
+                broker = broker_registry.get_broker()
+                is_paper = getattr(broker, "broker_id", "paper") == "paper"
+                if broker and getattr(broker, "is_connected", False) and not is_paper:
+                    info = broker.get_account_info()
+                    eq = float(info.get("equity") or 0.0)
+                    bal = float(info.get("balance") or 0.0)
+                    if eq > 0:
+                        broker_equity = eq
+                        broker_balance = bal if bal > 0 else eq
+                    if info.get("today_net_usd") is not None:
+                        broker_today_net = float(info["today_net_usd"])
+                    active_broker_id = getattr(broker, "broker_id", "")
+                    if bal > 0 and active_broker_id and accounts_store and hasattr(accounts_store, "update_account_balance"):
+                        accounts_store.update_account_balance(
+                            broker_id=active_broker_id,
+                            balance=bal,
+                            equity=eq if eq > 0 else bal,
+                        )
         except Exception as e_b:
             logger.debug(f"[DrawdownGuard] Broker info error: {e_b}")
 
@@ -886,14 +958,17 @@ class NativeStrategyRunner:
                 # Already in position — enforce 1 concurrent trade per strategy
                 return
 
+            # Single non-blocking broker snapshot (cached) reused across pyramiding, drawdown, and sizing
+            broker_info, open_positions = await asyncio.to_thread(self._fetch_broker_snapshot)
+
             # Cross-Strategy Pyramiding Guard (default: allow_pyramiding=False)
-            pyr_blocked, pyr_reason = self._is_pyramiding_blocked()
+            pyr_blocked, pyr_reason = self._is_pyramiding_blocked(prefetched_positions=open_positions)
             if pyr_blocked:
                 logger.info(f"[NativeStrategyRunner] {pyr_reason} — skipping entry for '{self.strategy_name}'")
                 return
 
             # Prop Firm Risk Guard: Daily Drawdown Circuit Breaker
-            safe, reason, dd_details = self.check_drawdown_safety()
+            safe, reason, dd_details = self.check_drawdown_safety(prefetched_broker_info=broker_info)
             if not safe:
                 today_key = dd_details.get("day_key", "today")
                 if not getattr(self, f"_halted_{today_key}", False):
@@ -916,20 +991,30 @@ class NativeStrategyRunner:
                 self._send_alpha_decay_alert(decay_details)
                 return
 
-            # For XAU/USD, yield briefly so background authentic volume sync finishes
-            if "XAU" in self.symbol or "GOLD" in self.symbol:
-                await asyncio.sleep(1.2)
-
             # Evaluate strategy entry strictly on completed bars up to bar_time
             candles = self.provider.get_candles(count=1000)
             completed_candles = [
-                c for c in candles 
+                c for c in candles
                 if int(c.get("time", c.get("timestamp", 0))) <= bar_time
             ]
             if not completed_candles or len(completed_candles) < 25:
                 completed_candles = candles
 
-            sig = StrategyEvaluator.evaluate(self.strategy_name, self.symbol, completed_candles)
+            strat_inst = self._get_strategy_instance()
+            prefetched_equity = None
+            if broker_info:
+                eq_val = float(broker_info.get("equity") or broker_info.get("balance") or 0.0)
+                if eq_val > 0:
+                    prefetched_equity = eq_val
+
+            sig = await asyncio.to_thread(
+                StrategyEvaluator.evaluate,
+                self.strategy_name,
+                self.symbol,
+                completed_candles,
+                strat_inst,
+                prefetched_equity,
+            )
             if sig:
                 logger.info(f"[NativeStrategyRunner] 🔥 SIGNAL TRIGGERED on finalized bar {bar_time}: {sig.get('action')} @ {sig.get('price')}")
             else:
@@ -961,16 +1046,34 @@ class NativeStrategyRunner:
                         })
                     return
 
-                await self._trigger_new_signal(sig)
+                await self._trigger_new_signal(
+                    sig,
+                    prefetched_broker_info=broker_info,
+                    prefetched_positions=open_positions,
+                )
         except Exception as e_bar:
             logger.error(f"[NativeStrategyRunner] Error in _on_market_bar for {self.strategy_name}: {e_bar}", exc_info=True)
 
-    async def _trigger_new_signal(self, sig: Dict[str, Any]) -> None:
+    async def _trigger_new_signal(
+        self,
+        sig: Dict[str, Any],
+        prefetched_broker_info: Optional[Dict[str, Any]] = None,
+        prefetched_positions: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         """Serialized entry point preventing concurrent strategies from racing past pyramiding/conflict guards."""
         async with _get_execution_lock():
-            await self._trigger_new_signal_locked(sig)
+            await self._trigger_new_signal_locked(
+                sig,
+                prefetched_broker_info=prefetched_broker_info,
+                prefetched_positions=prefetched_positions,
+            )
 
-    async def _trigger_new_signal_locked(self, sig: Dict[str, Any]) -> None:
+    async def _trigger_new_signal_locked(
+        self,
+        sig: Dict[str, Any],
+        prefetched_broker_info: Optional[Dict[str, Any]] = None,
+        prefetched_positions: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         """Saves signal to store, alerts Telegram, plays sound, and broadcasts to UI."""
         # Re-check single-position-per-strategy inside the execution lock
         if signal_store.get_active(self.strategy_name):
@@ -978,7 +1081,7 @@ class NativeStrategyRunner:
             return
 
         # Cross-Strategy Pyramiding Guard (double defense inside execution lock)
-        pyr_blocked, pyr_reason = self._is_pyramiding_blocked()
+        pyr_blocked, pyr_reason = self._is_pyramiding_blocked(prefetched_positions=prefetched_positions)
         if pyr_blocked:
             logger.warning(f"[NativeStrategyRunner] ORDER EXECUTION BLOCKED: {pyr_reason}")
             sig["status"] = "BLOCKED_PYRAMIDING"
@@ -988,7 +1091,7 @@ class NativeStrategyRunner:
             return
 
         # Double defense: check drawdown safety before executing order
-        safe, reason, dd_details = self.check_drawdown_safety()
+        safe, reason, dd_details = self.check_drawdown_safety(prefetched_broker_info=prefetched_broker_info)
         if not safe:
             logger.warning(f"[NativeStrategyRunner] 🛡️ ORDER EXECUTION BLOCKED by {reason}: {dd_details.get('message', reason)}")
             sig["status"] = "BLOCKED_DRAWDOWN_LIMIT"
@@ -999,15 +1102,7 @@ class NativeStrategyRunner:
             return
 
         # Triple defense: Live Quote Freshness, Spread Guard, Pre-Trade SL/TP Orientation, & Max-Slippage ("No-Chase") Interlock
-        strat_inst = getattr(self, "_cached_strat_inst", None)
-        if strat_inst is None:
-            try:
-                from server.backtest_engine import load_strategy_instance
-                strat_inst = load_strategy_instance(self.strategy_name)
-                if strat_inst is not None:
-                    self._cached_strat_inst = strat_inst
-            except Exception:
-                pass
+        strat_inst = self._get_strategy_instance()
         try:
             active_broker = broker_registry.get_broker()
             is_paper_precheck = getattr(active_broker, "broker_id", "paper") == "paper"
@@ -1018,10 +1113,11 @@ class NativeStrategyRunner:
         # Preserve immutable signal benchmark telemetry before live fill reconciliation
         signal_price = float(sig.get("signal_price") or sig.get("price") or 0.0)
         sig["signal_price"] = signal_price
-        bar_step = int(getattr(self.provider, "bar_step_seconds", 0) or 0) if hasattr(self, "provider") and self.provider else 0
-        raw_bar_t = int(sig.get("time") or 0)
-        if raw_bar_t > 0 and bar_step > 0:
-            sig["signal_bar_close_ts"] = raw_bar_t + bar_step
+        bar_step = int(sig.get("bar_step_seconds") or getattr(self.provider, "bar_step_seconds", 0) or 0) if hasattr(self, "provider") and self.provider else int(sig.get("bar_step_seconds") or 0)
+        if not sig.get("signal_bar_close_ts"):
+            raw_sig_bar_t = int(sig.get("signal_bar_time") or sig.get("time") or 0)
+            if raw_sig_bar_t > 0 and bar_step > 0:
+                sig["signal_bar_close_ts"] = raw_sig_bar_t + bar_step if sig.get("signal_bar_time") else raw_sig_bar_t
 
         order_type_u = str(sig.get("order_type") or sig.get("type") or "MARKET").upper()
         latest_quote = self.provider.get_latest_quote() if hasattr(self, "provider") and self.provider else None
@@ -1033,10 +1129,12 @@ class NativeStrategyRunner:
 
         if not is_paper_precheck and needs_refresh and active_broker and hasattr(active_broker, "get_latest_quote"):
             try:
-                try:
-                    refreshed_q = active_broker.get_latest_quote(self.symbol, max_age=1.5)
-                except TypeError:
-                    refreshed_q = active_broker.get_latest_quote(self.symbol)
+                def _fetch_q():
+                    try:
+                        return active_broker.get_latest_quote(self.symbol, max_age=1.5)
+                    except TypeError:
+                        return active_broker.get_latest_quote(self.symbol)
+                refreshed_q = await asyncio.to_thread(_fetch_q)
                 if refreshed_q and refreshed_q.get("price"):
                     latest_quote = refreshed_q
                     quote_ts = float(latest_quote.get("timestamp") or 0.0)
@@ -1139,7 +1237,7 @@ class NativeStrategyRunner:
         try:
             broker = broker_registry.get_broker()
             is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
-            order_res = broker.execute_order(sig)
+            order_res = await asyncio.to_thread(broker.execute_order, sig)
             sig["broker_order"] = order_res
             
             if order_res.get("status") in ("REJECTED", "FAILED", "ERROR"):
@@ -1213,8 +1311,10 @@ class NativeStrategyRunner:
                 sig["annotation"] = f"{sig.get('annotation', '')} (Simulated Paper)"
             elif order_res.get("status") == "PENDING_ORDER":
                 sig["status"] = "PENDING_LIMIT"
-                sig["execution_mode"] = "LIVE_BROKER"
+                sig["execution_mode"] = "PAPER_SIMULATED" if is_paper_broker else "LIVE_BROKER"
                 sig["placed_at"] = now_ts
+                if not is_paper_broker and order_res.get("needs_reconcile"):
+                    sig["broker_sync_state"] = "PENDING_FILL_SYNC"
                 b_lots = float(order_res.get("filled_lots") or 0.0)
                 if b_lots > 0:
                     sig["lots"] = b_lots
@@ -1237,7 +1337,9 @@ class NativeStrategyRunner:
                 )
             elif order_res.get("status") == "FILLED":
                 sig["status"] = "ACTIVE_IN_POSITION"
-                sig["execution_mode"] = "LIVE_BROKER"
+                sig["execution_mode"] = "PAPER_SIMULATED" if is_paper_broker else "LIVE_BROKER"
+                if not is_paper_broker:
+                    sig["broker_sync_state"] = "PENDING_FILL_SYNC" if order_res.get("needs_reconcile") else "CONFIRMED"
                 # If broker returned an authentic fill price/lots, synchronize with broker truth
                 b_price = float(order_res.get("filled_price") or 0.0)
                 if b_price > 0:
@@ -1347,6 +1449,181 @@ class NativeStrategyRunner:
                 }
             })
 
+        # 6. Asynchronous live broker fill reconciliation (never blocks order dispatch or UI broadcast)
+        try:
+            broker = broker_registry.get_broker()
+            is_paper_b = getattr(broker, "broker_id", "paper") == "paper" if broker else True
+            if (
+                not is_paper_b
+                and new_signal_entry.get("status") in ("ACTIVE_IN_POSITION", "PENDING_LIMIT")
+                and (
+                    new_signal_entry.get("broker_sync_state") == "PENDING_FILL_SYNC"
+                    or (new_signal_entry.get("status") == "ACTIVE_IN_POSITION" and not new_signal_entry.get("broker_position_id"))
+                )
+            ):
+                asyncio.create_task(self._reconcile_entry_fill_async(dict(new_signal_entry)))
+        except Exception:
+            pass
+
+    async def _reconcile_entry_fill_async(self, sig_entry: Dict[str, Any]) -> None:
+        """Asynchronously reconciles authentic broker fill price & position_id after fast order placement."""
+        if self._reconcile_in_flight:
+            return
+        self._reconcile_in_flight = True
+        try:
+            broker = broker_registry.get_broker()
+            if not broker or getattr(broker, "broker_id", "paper") == "paper" or not getattr(broker, "is_connected", False):
+                return
+            b_order = sig_entry.get("broker_order") or {}
+            b_details = b_order.get("details") or []
+            first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
+            ord_id = str(sig_entry.get("broker_order_id") or first_det.get("order_id") or b_order.get("order_id") or "")
+            side = str(sig_entry.get("action") or "BUY").upper()
+            is_long = side in ("BUY", "LONG")
+
+            rec = None
+            for delay in (0.15, 0.45):
+                await asyncio.sleep(delay)
+                if hasattr(broker, "reconcile_order_fill"):
+                    rec = await asyncio.to_thread(broker.reconcile_order_fill, ord_id, self.symbol, side)
+                if rec and (rec.get("position_id") or float(rec.get("filled_price") or 0.0) > 0):
+                    break
+
+            if not rec:
+                return
+
+            updates: Dict[str, Any] = {"broker_sync_state": "CONFIRMED"}
+            rec_pid = rec.get("position_id")
+            rec_px = float(rec.get("filled_price") or 0.0)
+            rec_status = str(rec.get("status") or "").upper()
+
+            if rec_pid:
+                updates["broker_position_id"] = str(rec_pid)
+            if rec_status == "FILLED" and sig_entry.get("status") == "PENDING_LIMIT":
+                now_f = time.time()
+                updates["status"] = "ACTIVE_IN_POSITION"
+                updates["executed_at"] = now_f
+                updates["entry_time_ts"] = now_f
+            if rec_px > 0:
+                from core.data import get_market_price_precision
+                p_prec = get_market_price_precision(self.symbol)
+                updates["price"] = rec_px
+                updates["entry_price"] = rec_px
+                ref_sig_px = float(sig_entry.get("signal_price") or rec_px)
+                updates["entry_slippage_pts"] = round((rec_px - ref_sig_px) if is_long else (ref_sig_px - rec_px), p_prec)
+
+            updated = signal_store.update_signal(sig_entry["id"], updates)
+            if updated and self.broadcast_callback:
+                await self.broadcast_callback({"event_type": "SIGNAL_UPDATED", "payload": updated})
+        except Exception as e_rec:
+            logger.debug(f"[NativeStrategyRunner] Async entry fill reconcile note: {e_rec}")
+        finally:
+            self._reconcile_in_flight = False
+
+    async def _reconcile_exit_fill_async(
+        self,
+        closed_sig: Dict[str, Any],
+        expected_close_side: str,
+        b_pos_id: Optional[str],
+        b_ord_id: Optional[str],
+    ) -> None:
+        """Asynchronously refines closed trade exit_price & PnL with authentic broker execution fill."""
+        try:
+            broker = broker_registry.get_broker()
+            if not broker or getattr(broker, "broker_id", "paper") == "paper" or not hasattr(broker, "get_latest_position_execution"):
+                return
+            await asyncio.sleep(0.35)
+            exec_data = await asyncio.to_thread(
+                broker.get_latest_position_execution,
+                b_pos_id,
+                b_ord_id,
+            )
+            if not exec_data or float(exec_data.get("price") or 0.0) <= 0:
+                return
+            ex_side = str(exec_data.get("side") or "").upper()
+            if ex_side and ex_side != expected_close_side:
+                return
+            real_ex = float(exec_data["price"])
+            entry_p = float(closed_sig.get("price") or closed_sig.get("entry_price") or 0.0)
+            lots = float(closed_sig.get("lots") or closed_sig.get("lot_size") or 0.01)
+            is_long = str(closed_sig.get("action") or "BUY").upper() in ("BUY", "LONG")
+            updates: Dict[str, Any] = {"exit_price": real_ex, "broker_sync_state": "CONFIRMED"}
+            if entry_p > 0:
+                raw_pct = ((real_ex - entry_p) / entry_p * 100.0) if is_long else ((entry_p - real_ex) / entry_p * 100.0)
+                updates["pnl_pct"] = round(raw_pct, 2)
+                c_val = _resolve_contract_size(self.symbol, entry_p)
+                diff = (real_ex - entry_p) if is_long else (entry_p - real_ex)
+                updates["pnl_usd"] = round(diff * lots * c_val, 2)
+            updated = signal_store.update_signal(closed_sig["id"], updates)
+            if updated and self.broadcast_callback:
+                await self.broadcast_callback({"event_type": "SIGNAL_UPDATED", "payload": updated})
+                logger.info(
+                    f"[NativeStrategyRunner] 🎯 Async reconciled authentic broker exit fill for #{closed_sig['id']}: "
+                    f"local={closed_sig.get('exit_price')} -> broker={real_ex} (pos_id={b_pos_id})"
+                )
+        except Exception as e_ex_rec:
+            logger.debug(f"[NativeStrategyRunner] Async exit fill reconcile note: {e_ex_rec}")
+
+    async def _on_broker_execution_event(self, event: Dict[str, Any]) -> None:
+        """Handles real-time push execution events from WebSocket-capable broker plugins."""
+        try:
+            if not self.is_running or not isinstance(event, dict):
+                return
+            ev_type = str(event.get("event_type") or "").upper()
+            active_pos = signal_store.get_active(self.strategy_name)
+            if not active_pos:
+                return
+
+            ev_pos_id = str(event.get("position_id") or "")
+            ev_ord_id = str(event.get("order_id") or "")
+            pos_bid = str(active_pos.get("broker_position_id") or "")
+            pos_oid = str(active_pos.get("broker_order_id") or "")
+            matches = (
+                (ev_pos_id and pos_bid and ev_pos_id == pos_bid)
+                or (ev_ord_id and pos_oid and ev_ord_id == pos_oid)
+            )
+            if not matches:
+                return
+
+            async with self._exit_lock:
+                fresh_pos = signal_store.get_active(self.strategy_name)
+                if not fresh_pos or fresh_pos.get("id") != active_pos.get("id"):
+                    return
+                if ev_type == "ORDER_FILLED" and fresh_pos.get("status") == "PENDING_LIMIT":
+                    fill_px = float(event.get("price") or fresh_pos.get("price") or 0.0)
+                    now_f = time.time()
+                    bar_step = int(fresh_pos.get("bar_step_seconds") or getattr(self.provider, "bar_step_seconds", 0) or 0)
+                    fill_bar_t = (int(now_f) // bar_step) * bar_step if bar_step > 0 else int(now_f)
+                    updates = {
+                        "status": "ACTIVE_IN_POSITION",
+                        "price": fill_px,
+                        "entry_price": fill_px,
+                        "time": fill_bar_t,
+                        "executed_at": now_f,
+                        "entry_time_ts": now_f,
+                        "broker_sync_state": "CONFIRMED",
+                    }
+                    if ev_pos_id:
+                        updates["broker_position_id"] = ev_pos_id
+                    updated = signal_store.update_signal(fresh_pos["id"], updates)
+                    if updated and self.broadcast_callback:
+                        await self.broadcast_callback({"event_type": "SIGNAL_UPDATED", "payload": updated})
+                elif ev_type in ("POSITION_CLOSED", "ORDER_CANCELLED"):
+                    exit_px = float(event.get("price") or 0.0)
+                    reason = str(event.get("reason") or ("CANCELLED_ORDER" if ev_type == "ORDER_CANCELLED" else "BROKER_CLOSED"))
+                    closed = signal_store.close_position(
+                        signal_id=fresh_pos["id"],
+                        strategy=self.strategy_name,
+                        exit_price=exit_px,
+                        exit_reason=reason,
+                    )
+                    if closed:
+                        telegram_gateway.format_and_send_trade_close(closed)
+                        if self.broadcast_callback:
+                            await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
+        except Exception as e_ev:
+            logger.debug(f"[NativeStrategyRunner] Broker execution event note: {e_ev}")
+
     async def _evaluate_pending_order(self, pos: Dict[str, Any], current_price: float, quote: Optional[Dict[str, Any]] = None) -> None:
         """
         Tracks a resting PENDING_LIMIT order against real broker truth:
@@ -1354,6 +1631,12 @@ class NativeStrategyRunner:
           2. Enforces `limit_expiry_seconds` by cancelling expired resting orders on the broker (zero orphan GTC orders).
           3. Reconciles if cancelled externally or filled-and-closed between polls.
         """
+        if self._exit_lock.locked():
+            return
+        async with self._exit_lock:
+            await self._evaluate_pending_order_locked(pos, current_price, quote=quote)
+
+    async def _evaluate_pending_order_locked(self, pos: Dict[str, Any], current_price: float, quote: Optional[Dict[str, Any]] = None) -> None:
         now_f = time.time()
         now_ts = int(now_f)
         placed_at = int(pos.get("placed_at") or pos.get("executed_at") or pos.get("time") or now_ts)
@@ -1364,8 +1647,10 @@ class NativeStrategyRunner:
         side = str(pos.get("action") or "BUY").upper()
         is_long = side in ("BUY", "LONG")
         limit_px = float(pos.get("price") or pos.get("entry_price") or 0.0)
+        sl_px = float(pos.get("stop_loss") or 0.0)
         bid_p = float((quote or {}).get("bid") or current_price)
         ask_p = float((quote or {}).get("ask") or current_price)
+        bar_step = int(pos.get("bar_step_seconds") or getattr(self.provider, "bar_step_seconds", 0) or 0) if hasattr(self, "provider") and self.provider else int(pos.get("bar_step_seconds") or 0)
 
         broker = None
         is_paper_broker = True
@@ -1375,14 +1660,23 @@ class NativeStrategyRunner:
         except Exception:
             pass
 
-        # Paper mode simulated limit fill / expiry
+        # Paper mode simulated limit fill / SL invalidation / expiry
         if is_paper_broker or not broker or not getattr(broker, "is_connected", False):
+            # Invalidate resting limit if SL is breached before limit fills (matches core.simulation)
+            sl_breached = (sl_px > 0) and ((bid_p <= sl_px) if is_long else (ask_p >= sl_px))
+            if sl_breached:
+                closed = signal_store.close_position(signal_id=pos["id"], strategy=self.strategy_name, exit_price=0.0, exit_reason="SL_INVALIDATED_LIMIT")
+                if closed and self.broadcast_callback:
+                    await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
+                return
             filled_paper = (limit_px > 0) and ((ask_p <= limit_px) if is_long else (bid_p >= limit_px))
             if filled_paper:
+                fill_bar_t = (now_ts // bar_step) * bar_step if bar_step > 0 else now_ts
                 updates = {
                     "status": "ACTIVE_IN_POSITION",
                     "price": limit_px,
                     "entry_price": limit_px,
+                    "time": fill_bar_t,
                     "executed_at": now_f,
                     "entry_time_ts": now_f,
                 }
@@ -1398,9 +1692,11 @@ class NativeStrategyRunner:
                     await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
             return
 
-        # Live broker mode: reconcile every 8 seconds against broker open positions & pending orders
+        # Live broker mode: adaptive poll (1.0s when price crossed limit or past expiry, 3.0s otherwise)
+        price_crossed = (limit_px > 0) and ((ask_p <= limit_px) if is_long else (bid_p >= limit_px))
+        poll_interval = 1.0 if (price_crossed or (expiry_sec is not None and elapsed_sec >= expiry_sec)) else 3.0
         last_chk = getattr(self, "_last_pending_check_ts", 0.0)
-        if (now_f - last_chk) < 8.0:
+        if (now_f - last_chk) < poll_interval:
             return
         self._last_pending_check_ts = now_f
 
@@ -1413,7 +1709,7 @@ class NativeStrategyRunner:
 
         # 1. Check if resting order has filled into an open position on the broker
         try:
-            open_positions = broker.get_open_positions(symbol=self.symbol) if hasattr(broker, "get_open_positions") else None
+            open_positions = await asyncio.to_thread(broker.get_open_positions, self.symbol) if hasattr(broker, "get_open_positions") else None
         except Exception as e_op:
             logger.debug(f"[NativeStrategyRunner] Pending order position check note: {e_op}")
             open_positions = None
@@ -1428,11 +1724,14 @@ class NativeStrategyRunner:
                 live_bp = pos_matches[0]
                 fill_px = float(live_bp.get("avg_price") or limit_px)
                 bp_id = str(live_bp.get("id") or "")
+                fill_bar_t = (now_ts // bar_step) * bar_step if bar_step > 0 else now_ts
                 updates = {
                     "status": "ACTIVE_IN_POSITION",
                     "price": fill_px,
                     "entry_price": fill_px,
+                    "time": fill_bar_t,
                     "broker_position_id": bp_id,
+                    "broker_sync_state": "CONFIRMED",
                     "executed_at": now_f,
                     "entry_time_ts": now_f,
                 }
@@ -1448,7 +1747,7 @@ class NativeStrategyRunner:
 
         # 2. Check resting pending orders on broker
         try:
-            pending_orders = broker.get_pending_orders(symbol=self.symbol) if hasattr(broker, "get_pending_orders") else None
+            pending_orders = await asyncio.to_thread(broker.get_pending_orders, self.symbol) if hasattr(broker, "get_pending_orders") else None
         except Exception as e_po:
             logger.debug(f"[NativeStrategyRunner] Pending orders query note: {e_po}")
             pending_orders = None
@@ -1470,7 +1769,7 @@ class NativeStrategyRunner:
                     f"[NativeStrategyRunner] ⏱️ Resting LIMIT order #{pos['id']} ({self.strategy_name}, "
                     f"broker_order={cancel_oid}) expired after {elapsed_sec}s >= {expiry_sec}s. Cancelling on broker..."
                 )
-                cancel_res = broker.cancel_order(order_id=cancel_oid, symbol=self.symbol) if hasattr(broker, "cancel_order") else {"status": "CANCELLED"}
+                cancel_res = await asyncio.to_thread(broker.cancel_order, cancel_oid, self.symbol) if hasattr(broker, "cancel_order") else {"status": "CANCELLED"}
                 if cancel_res.get("status") in ("CANCELLED", "NOT_FOUND", "CANCELLED_PREVIEW"):
                     closed = signal_store.close_position(
                         signal_id=pos["id"],
@@ -1492,7 +1791,7 @@ class NativeStrategyRunner:
                 exec_data = None
                 if b_ord_id and hasattr(broker, "get_latest_position_execution"):
                     try:
-                        exec_data = broker.get_latest_position_execution(order_id=b_ord_id)
+                        exec_data = await asyncio.to_thread(broker.get_latest_position_execution, None, b_ord_id)
                     except Exception:
                         pass
                 if exec_data and float(exec_data.get("price") or 0.0) > 0:
@@ -1507,6 +1806,12 @@ class NativeStrategyRunner:
 
     async def _evaluate_position_exit(self, pos: Dict[str, Any], current_price: float, quote: Optional[Dict[str, Any]] = None) -> None:
         """Monitors active trade against Take Profit, Stop Loss, and Holding Rules with bid/ask spread awareness."""
+        if self._exit_lock.locked():
+            return
+        async with self._exit_lock:
+            await self._evaluate_position_exit_locked(pos, current_price, quote=quote)
+
+    async def _evaluate_position_exit_locked(self, pos: Dict[str, Any], current_price: float, quote: Optional[Dict[str, Any]] = None) -> None:
         now_ts = int(time.time())
         # Measure elapsed time strictly from actual order fill execution time, not candle open timestamp
         entry_time = int(pos.get("executed_at") or pos.get("entry_time_ts") or pos.get("time") or now_ts)
@@ -1528,22 +1833,13 @@ class NativeStrategyRunner:
 
         eval_exit_price = bid_price if is_long else ask_price
 
-        # Holding constraints (strictly from signal payload or strategy configuration, no arbitrary global caps)
+        # Holding constraints (strictly from signal payload or StrategyContract SSOT, zero hidden 10s fallback)
         min_hold_raw = pos.get("min_hold_seconds")
-        min_hold = int(min_hold_raw) if min_hold_raw is not None else 10
+        min_hold = int(min_hold_raw) if (min_hold_raw is not None and int(min_hold_raw) > 0) else 0
         max_hold_raw = pos.get("max_hold_seconds")
         max_hold = int(max_hold_raw) if (max_hold_raw is not None and max_hold_raw != 0) else None
 
-        # Ensure strategy parameters are available (cached on runner to avoid disk reload on every tick)
-        strat_inst = getattr(self, "_cached_strat_inst", None)
-        if strat_inst is None:
-            try:
-                from server.backtest_engine import load_strategy_instance
-                strat_inst = load_strategy_instance(self.strategy_name)
-                if strat_inst is not None:
-                    self._cached_strat_inst = strat_inst
-            except Exception:
-                pass
+        strat_inst = self._get_strategy_instance()
 
         # Trailing stop configuration: strictly from StrategyContract SSOT (False unless strategy opts in)
         from core.execution_engine import StrategyContract
@@ -1635,149 +1931,161 @@ class NativeStrategyRunner:
         reconciled_exit_price: Optional[float] = None
         broker_already_closed = False
 
+        broker = None
+        is_paper_broker = True
+        try:
+            broker = broker_registry.get_broker()
+            is_paper_broker = getattr(broker, "broker_id", "paper") == "paper" if broker else True
+        except Exception:
+            pass
+
+        is_live_connected = bool(broker and getattr(broker, "is_connected", False) and not is_paper_broker)
+        has_server_brackets = bool(
+            is_live_connected
+            and getattr(broker, "supports_server_side_brackets", False)
+            and (sl > 0 or tp > 0)
+        )
+
+        sl_crossed = (sl > 0) and ((eval_exit_price <= sl) if is_long else (eval_exit_price >= sl))
+        tp_crossed = (tp > 0) and ((eval_exit_price >= tp) if is_long else (eval_exit_price <= tp)) and (elapsed_sec >= min_hold)
+        live_spread = abs(ask_price - bid_price) if (ask_price > bid_price > 0) else 0.0
+
         # 1. Broker Server-Side Execution Reconciliation (Priority 1 if connected):
-        # If an active execution broker plugin is connected,
-        # verify whether the position was already filled/closed server-side (e.g. SL or TP execution).
-        if elapsed_sec >= 15:
-            last_reconcile = getattr(self, "_last_broker_reconcile_ts", 0)
-            if (now_ts - last_reconcile) >= 8:
-                self._last_broker_reconcile_ts = now_ts
+        # Fast adaptive polling (1.5s when price crossed SL/TP, 4.0s otherwise), starting at 2s after entry.
+        if is_live_connected and elapsed_sec >= 2 and hasattr(broker, "get_open_positions"):
+            now_f = time.time()
+            poll_interval = 1.5 if (sl_crossed or tp_crossed) else 4.0
+            last_reconcile = float(getattr(self, "_last_broker_reconcile_ts", 0.0))
+            if (now_f - last_reconcile) >= poll_interval:
+                self._last_broker_reconcile_ts = now_f
                 try:
-                    broker = broker_registry.get_broker()
-                    is_paper_broker = getattr(broker, "broker_id", "paper") == "paper"
-                    if broker and getattr(broker, "is_connected", False) and not is_paper_broker and hasattr(broker, "get_open_positions"):
-                        broker_positions = broker.get_open_positions(symbol=self.symbol)
-                        if broker_positions is not None:
-                            my_canon = resolve_market_symbol(self.symbol)
-                            matches = [
-                                bp for bp in broker_positions
-                                if bp.get("symbol") == self.symbol
-                                or (bp.get("symbol") and resolve_market_symbol(str(bp.get("symbol"))) == my_canon)
-                            ]
-                            if len(matches) == 0:
-                                empty_count = int(pos.get("_broker_empty_confirmations", 0)) + 1
-                                pos["_broker_empty_confirmations"] = empty_count
-                                if empty_count >= 2:
-                                    broker_already_closed = True
-                                    logger.info(f"[NativeStrategyRunner] 🛡️ Confirmed: Broker server closed position #{pos['id']} ({pos['strategy']}). Reconciling authentic broker execution!")
-                                    # Attempt to fetch exact execution details from broker
-                                    broker_order = pos.get("broker_order", {})
-                                    b_details = broker_order.get("details", [])
-                                    first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
-                                    b_ord_id = first_det.get("order_id") or broker_order.get("order_id")
-                                    b_pos_id = pos.get("broker_position_id") or first_det.get("position_id") or pos.get("position_id")
-                                    
-                                    exec_data = None
-                                    if hasattr(broker, "get_latest_position_execution"):
-                                        exec_data = broker.get_latest_position_execution(position_id=b_pos_id, order_id=b_ord_id)
+                    broker_positions = await asyncio.to_thread(broker.get_open_positions, self.symbol)
+                    if broker_positions is not None:
+                        my_canon = resolve_market_symbol(self.symbol)
+                        matches = [
+                            bp for bp in broker_positions
+                            if bp.get("symbol") == self.symbol
+                            or (bp.get("symbol") and resolve_market_symbol(str(bp.get("symbol"))) == my_canon)
+                        ]
+                        if len(matches) == 0:
+                            empty_count = int(pos.get("_broker_empty_confirmations", 0)) + 1
+                            pos["_broker_empty_confirmations"] = empty_count
+                            required_confirmations = 1 if (sl_crossed or tp_crossed) else 2
+                            if empty_count >= required_confirmations:
+                                broker_already_closed = True
+                                logger.info(f"[NativeStrategyRunner] 🛡️ Confirmed: Broker server closed position #{pos['id']} ({pos['strategy']}). Reconciling authentic broker execution!")
+                                broker_order = pos.get("broker_order", {})
+                                b_details = broker_order.get("details", [])
+                                first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
+                                b_ord_id = first_det.get("order_id") or broker_order.get("order_id")
+                                b_pos_id = pos.get("broker_position_id") or first_det.get("position_id") or pos.get("position_id")
 
-                                    expected_close_s = "SELL" if is_long else "BUY"
-                                    if exec_data and float(exec_data.get("price") or 0.0) > 0:
-                                        ex_s = str(exec_data.get("side") or "").upper()
-                                        if not ex_s or ex_s == expected_close_s:
-                                            reconciled_exit_price = float(exec_data["price"])
-                                            logger.info(f"[NativeStrategyRunner] 🎯 Matched broker execution fill price: {reconciled_exit_price} (order: {b_ord_id}, position: {b_pos_id})")
+                                exec_data = None
+                                if hasattr(broker, "get_latest_position_execution"):
+                                    exec_data = await asyncio.to_thread(
+                                        broker.get_latest_position_execution,
+                                        b_pos_id,
+                                        b_ord_id,
+                                    )
 
-                                    eff_exit_price = reconciled_exit_price or eval_exit_price
-                                    if is_long:
-                                        exit_reason = "STOP_LOSS" if eff_exit_price < entry_price else "TAKE_PROFIT"
-                                    else:
-                                        exit_reason = "STOP_LOSS" if eff_exit_price > entry_price else "TAKE_PROFIT"
-                            else:
-                                pos["_broker_empty_confirmations"] = 0
-                                # Synchronize authentic broker entry avg_price & position_id if internal record drifted
-                                live_bp = matches[0]
-                                bp_avg = float(live_bp.get("avg_price") or 0.0)
-                                bp_id = str(live_bp.get("id") or "")
-                                sync_updates: Dict[str, Any] = {}
-                                if bp_id and not pos.get("broker_position_id"):
-                                    pos["broker_position_id"] = bp_id
-                                    sync_updates["broker_position_id"] = bp_id
-                                if bp_avg > 0 and abs(bp_avg - entry_price) > (10.0 ** (-price_prec)):
-                                    if not pos.get("signal_price"):
-                                        pos["signal_price"] = entry_price
-                                        sync_updates["signal_price"] = entry_price
-                                    pos["price"] = bp_avg
-                                    pos["entry_price"] = bp_avg
-                                    entry_price = bp_avg
-                                    sync_updates["price"] = bp_avg
-                                    sync_updates["entry_price"] = bp_avg
-                                    sig_px = float(pos.get("signal_price") or bp_avg)
-                                    sync_updates["entry_slippage_pts"] = round(
-                                        (bp_avg - sig_px) if is_long else (sig_px - bp_avg), price_prec
-                                    )
-                                    logger.info(
-                                        f"[NativeStrategyRunner] 🔄 Reconciled live broker entry price for #{pos['id']}: "
-                                        f"{sig_px:.{price_prec}f} -> {bp_avg:.{price_prec}f} (pos_id={bp_id})"
-                                    )
-                                if sync_updates:
-                                    signal_store.update_signal(pos["id"], sync_updates)
+                                expected_close_s = "SELL" if is_long else "BUY"
+                                if exec_data and float(exec_data.get("price") or 0.0) > 0:
+                                    ex_s = str(exec_data.get("side") or "").upper()
+                                    if not ex_s or ex_s == expected_close_s:
+                                        reconciled_exit_price = float(exec_data["price"])
+                                        logger.info(f"[NativeStrategyRunner] 🎯 Matched broker execution fill price: {reconciled_exit_price} (order: {b_ord_id}, position: {b_pos_id})")
+
+                                eff_exit_price = reconciled_exit_price or eval_exit_price
+                                if is_long:
+                                    exit_reason = "STOP_LOSS" if eff_exit_price < entry_price else "TAKE_PROFIT"
+                                else:
+                                    exit_reason = "STOP_LOSS" if eff_exit_price > entry_price else "TAKE_PROFIT"
+                        else:
+                            pos["_broker_empty_confirmations"] = 0
+                            # Synchronize authentic broker entry avg_price & position_id if internal record drifted
+                            live_bp = matches[0]
+                            bp_avg = float(live_bp.get("avg_price") or 0.0)
+                            bp_id = str(live_bp.get("id") or "")
+                            sync_updates: Dict[str, Any] = {}
+                            if bp_id and not pos.get("broker_position_id"):
+                                pos["broker_position_id"] = bp_id
+                                sync_updates["broker_position_id"] = bp_id
+                            if bp_avg > 0 and abs(bp_avg - entry_price) > (10.0 ** (-price_prec)):
+                                if not pos.get("signal_price"):
+                                    pos["signal_price"] = entry_price
+                                    sync_updates["signal_price"] = entry_price
+                                pos["price"] = bp_avg
+                                pos["entry_price"] = bp_avg
+                                entry_price = bp_avg
+                                sync_updates["price"] = bp_avg
+                                sync_updates["entry_price"] = bp_avg
+                                sig_px = float(pos.get("signal_price") or bp_avg)
+                                sync_updates["entry_slippage_pts"] = round(
+                                    (bp_avg - sig_px) if is_long else (sig_px - bp_avg), price_prec
+                                )
+                                logger.info(
+                                    f"[NativeStrategyRunner] 🔄 Reconciled live broker entry price for #{pos['id']}: "
+                                    f"{sig_px:.{price_prec}f} -> {bp_avg:.{price_prec}f} (pos_id={bp_id})"
+                                )
+                            if sync_updates:
+                                signal_store.update_signal(pos["id"], sync_updates)
                 except Exception as e_rec:
                     logger.debug(f"[NativeStrategyRunner] Broker reconciliation check note: {e_rec}")
 
-        # 2. Stop Loss / Trailing Stop hit (evaluated against exact fill price: Bid for Long, Ask for Short)
+        # 2. Stop Loss / Trailing Stop / Take Profit evaluation
+        # When broker enforces server-side SL/TP brackets natively, defer normal SL/TP execution
+        # to the broker to avoid double-close races, while keeping an Emergency SL Safety Backstop
+        # if price blows past SL and the broker still reports the position open.
         if not exit_reason:
-            if is_long and eval_exit_price <= sl:
-                exit_reason = "TRAIL_STOP" if sl > entry_price else "STOP_LOSS"
-            elif not is_long and eval_exit_price >= sl:
-                exit_reason = "TRAIL_STOP" if (sl > 0 and sl < entry_price) else "STOP_LOSS"
+            if has_server_brackets:
+                if sl_crossed and elapsed_sec >= 5:
+                    sl_dist = abs(entry_price - sl)
+                    backstop_tol = max(live_spread * 2.0, sl_dist * 0.05)
+                    breach = (sl - eval_exit_price) if is_long else (eval_exit_price - sl)
+                    if breach > backstop_tol:
+                        exit_reason = "STOP_LOSS_BACKSTOP"
+                        logger.warning(
+                            f"[NativeStrategyRunner] 🚨 Emergency SL Backstop triggered for #{pos['id']}: "
+                            f"eval={eval_exit_price}, SL={sl}, breach={breach:.{price_prec}f} > tol={backstop_tol:.{price_prec}f}"
+                        )
+            else:
+                if sl_crossed:
+                    exit_reason = "TRAIL_STOP" if ((is_long and sl > entry_price) or (not is_long and sl < entry_price)) else "STOP_LOSS"
+                elif tp_crossed:
+                    exit_reason = "TAKE_PROFIT"
 
-        # 3. Take Profit reached (allowed once min_hold anti-arbitrage lock has passed)
-        if not exit_reason:
-            if is_long and eval_exit_price >= tp and elapsed_sec >= min_hold:
-                exit_reason = "TAKE_PROFIT"
-            elif not is_long and eval_exit_price <= tp and elapsed_sec >= min_hold:
-                exit_reason = "TAKE_PROFIT"
-
-        # 4. Maximum holding duration exceeded (scalp cutoff, only if explicitly configured)
+        # 3. Broker-unaware exits: Maximum holding duration & Strategy-declared EOD close
         if not exit_reason:
             if max_hold is not None and elapsed_sec >= max_hold:
                 exit_reason = "TIME_CUTOFF"
+            elif contract.close_eod:
+                now_utc = datetime.now(timezone.utc)
+                if now_utc.hour >= contract.eod_close_hour_utc:
+                    exit_reason = "EOD"
 
         if exit_reason:
             final_exit_price = reconciled_exit_price if reconciled_exit_price is not None else eval_exit_price
             expected_close_side = "SELL" if is_long else "BUY"
-            broker = None
-            is_paper_broker = True
-            try:
-                broker = broker_registry.get_broker()
-                is_paper_broker = getattr(broker, "broker_id", "paper") == "paper" if broker else True
-            except Exception:
-                pass
+
+            broker_order = pos.get("broker_order", {})
+            b_details = broker_order.get("details", [])
+            first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
+            b_ord_id = first_det.get("order_id") or broker_order.get("order_id")
+            b_pos_id = pos.get("broker_position_id") or first_det.get("position_id") or pos.get("position_id")
 
             # Route exit through Active Execution Broker (skip if broker already closed server-side)
             if not broker_already_closed and broker:
                 try:
-                    broker_pos_or_ord = (
-                        pos.get("broker_position_id")
-                        or pos.get("broker_order", {}).get("order_id")
-                        or str(pos.get("id"))
+                    broker_pos_or_ord = b_pos_id or b_ord_id or str(pos.get("id"))
+                    await asyncio.to_thread(
+                        broker.close_position,
+                        broker_pos_or_ord,
+                        exit_reason,
+                        final_exit_price,
+                        self.symbol,
                     )
-                    broker.close_position(broker_pos_or_ord, reason=exit_reason, current_price=final_exit_price, symbol=self.symbol)
                 except Exception as e_broker_close:
                     logger.error(f"[NativeStrategyRunner] Error closing position on broker: {e_broker_close}")
-
-            # Always reconcile authentic broker closing fill price on live brokers (whether server SL/TP or local close)
-            if reconciled_exit_price is None and broker and not is_paper_broker and hasattr(broker, "get_latest_position_execution"):
-                try:
-                    await asyncio.sleep(0.35)
-                    broker_order = pos.get("broker_order", {})
-                    b_details = broker_order.get("details", [])
-                    first_det = b_details[0] if (b_details and isinstance(b_details, list)) else {}
-                    b_ord_id = first_det.get("order_id") or broker_order.get("order_id")
-                    b_pos_id = pos.get("broker_position_id") or first_det.get("position_id") or pos.get("position_id")
-                    exec_data = broker.get_latest_position_execution(position_id=b_pos_id, order_id=b_ord_id)
-                    if exec_data and float(exec_data.get("price") or 0.0) > 0:
-                        ex_side = str(exec_data.get("side") or "").upper()
-                        if not ex_side or ex_side == expected_close_side:
-                            real_ex = float(exec_data["price"])
-                            logger.info(
-                                f"[NativeStrategyRunner] 🎯 Reconciled authentic broker exit fill for #{pos['id']}: "
-                                f"local={final_exit_price} -> broker={real_ex} (pos_id={b_pos_id})"
-                            )
-                            final_exit_price = real_ex
-                except Exception as e_ex_rec:
-                    logger.debug(f"[NativeStrategyRunner] Post-close broker execution lookup note: {e_ex_rec}")
 
             logger.info(f"[NativeStrategyRunner] 🏁 Closing position #{pos['id']} ({pos['strategy']}): {exit_reason} @ {final_exit_price}")
 
@@ -1791,7 +2099,7 @@ class NativeStrategyRunner:
                 # Dispatch Telegram alert for closed trade
                 telegram_gateway.format_and_send_trade_close(closed)
 
-                # Broadcast to UI
+                # Broadcast to UI immediately (two-phase: refine exit fill asynchronously on live brokers)
                 if self.broadcast_callback:
                     await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
                     all_strats = strategy_registry.get_all(sync=False)
@@ -1806,12 +2114,21 @@ class NativeStrategyRunner:
                         }
                     })
 
+                if reconciled_exit_price is None and is_live_connected and hasattr(broker, "get_latest_position_execution"):
+                    asyncio.create_task(
+                        self._reconcile_exit_fill_async(dict(closed), expected_close_side, b_pos_id, b_ord_id)
+                    )
+
     async def _sync_broker_sl(self, pos: Dict[str, Any], new_sl: float) -> None:
         """Propagates updated Trailing Stop Loss to the live execution broker server."""
         try:
             broker = broker_registry.get_broker()
             if broker and hasattr(broker, "modify_position"):
-                broker_order_id = pos.get("broker_order", {}).get("order_id") or str(pos.get("id"))
+                broker_order_id = (
+                    pos.get("broker_position_id")
+                    or pos.get("broker_order", {}).get("order_id")
+                    or str(pos.get("id"))
+                )
                 loop = asyncio.get_running_loop()
                 res = await loop.run_in_executor(
                     None,

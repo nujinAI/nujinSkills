@@ -29,6 +29,7 @@ class StrategyContract:
     Never injects hidden backtest-only or live-only rules.
     """
     max_hold_bars: Optional[int] = None
+    min_hold_bars: Optional[int] = None
     max_daily_losses: Optional[int] = None
     daily_profit_cap_pct: Optional[float] = None
     daily_profit_cap: Optional[float] = None
@@ -56,6 +57,19 @@ class StrategyContract:
                     ival = int(val)
                     if ival > 0:
                         max_hold_bars = ival
+                        break
+                except (TypeError, ValueError):
+                    pass
+
+        # 1b. min_hold_bars (strictly strategy-declared; None = immediate TP allowed)
+        min_hold_bars: Optional[int] = None
+        for attr in ("min_hold_bars", "min_bars"):
+            val = getattr(strat_inst, attr, None)
+            if val is not None:
+                try:
+                    ival = int(val)
+                    if ival > 0:
+                        min_hold_bars = ival
                         break
                 except (TypeError, ValueError):
                     pass
@@ -96,6 +110,7 @@ class StrategyContract:
 
         return cls(
             max_hold_bars=max_hold_bars,
+            min_hold_bars=min_hold_bars,
             max_daily_losses=max_daily_losses,
             daily_profit_cap_pct=float(daily_profit_cap_pct) if daily_profit_cap_pct is not None else None,
             daily_profit_cap=float(daily_profit_cap) if daily_profit_cap is not None else None,
@@ -146,19 +161,22 @@ def evaluate_bar_exit(
     max_hold_bars: Optional[int] = None,
     close_eod: bool = False,
     eod_close_hour_utc: int = 21,
+    min_hold_bars: Optional[int] = None,
 ) -> Optional[ExitDecision]:
     """
     Canonical bar-level exit evaluation shared by Backtest and Live.
     Pessimistic resolution: if both SL and TP are touched on the same bar, SL wins.
+    SL always triggers immediately; TP respects strategy-declared min_hold_bars if set.
     """
     sl_hit = (bar_low <= stop_loss) if direction == 1 else (bar_high >= stop_loss)
     tp_hit = (bar_high >= target) if direction == 1 else (bar_low <= target)
+    tp_allowed = (min_hold_bars is None) or (bars_held >= min_hold_bars)
 
     if sl_hit and tp_hit:
         return ExitDecision(exit_price=stop_loss, exit_reason="SL")
     if sl_hit:
         return ExitDecision(exit_price=stop_loss, exit_reason="SL")
-    if tp_hit:
+    if tp_hit and tp_allowed:
         return ExitDecision(exit_price=target, exit_reason="TP")
     if max_hold_bars is not None and bars_held >= max_hold_bars:
         return ExitDecision(exit_price=bar_close, exit_reason="TIME_STOP")

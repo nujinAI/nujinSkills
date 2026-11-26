@@ -67,18 +67,66 @@ class PaperExecutionBroker(BaseExecutionBroker):
         }
 
     def execute_order(self, signal: Dict[str, Any]) -> Dict[str, Any]:
-        fill_price = float(signal.get("price", 0.0))
+        fill_price = float(signal.get("price") or signal.get("entry_price") or 0.0)
         signal_id = str(signal.get("id") or int(time.time() * 1000))
         lots = float(signal.get("lots") or signal.get("lot_size") or 1.0)
+        order_type = str(signal.get("order_type") or signal.get("type") or "MARKET").upper()
+        action = str(signal.get("action") or signal.get("side") or "BUY").upper()
+        is_long = action in ("BUY", "LONG")
+
+        if order_type == "LIMIT":
+            market_px = float(signal.get("market_price") or signal.get("live_exec_price") or 0.0)
+            limit_px = fill_price
+            immediate_fill = (
+                (market_px > 0 and limit_px > 0)
+                and ((market_px <= limit_px) if is_long else (market_px >= limit_px))
+            )
+            if immediate_fill:
+                eff_fill = min(market_px, limit_px) if is_long else max(market_px, limit_px)
+                logger.info(
+                    f"[PaperBroker] 📝 Simulating immediate LIMIT fill for {signal.get('strategy')} "
+                    f"{action} {signal.get('symbol') or signal.get('pair')} ({lots:.2f} lots) @ {eff_fill}"
+                )
+                return {
+                    "status": "FILLED",
+                    "order_id": f"paper_lim_{signal_id}",
+                    "filled_price": eff_fill,
+                    "filled_lots": lots,
+                    "error": None,
+                }
+            logger.info(
+                f"[PaperBroker] 📝 Resting simulated LIMIT order for {signal.get('strategy')} "
+                f"{action} {signal.get('symbol') or signal.get('pair')} ({lots:.2f} lots) @ {limit_px}"
+            )
+            return {
+                "status": "PENDING_ORDER",
+                "order_id": f"paper_lim_{signal_id}",
+                "filled_price": limit_px,
+                "filled_lots": lots,
+                "error": None,
+            }
+
         logger.info(
             f"[PaperBroker] 📝 Simulating fill for {signal.get('strategy')} "
-            f"{signal.get('action')} {signal.get('symbol')} ({lots:.2f} lots) @ {fill_price}"
+            f"{action} {signal.get('symbol') or signal.get('pair')} ({lots:.2f} lots) @ {fill_price}"
         )
         return {
             "status": "FILLED",
             "order_id": f"paper_{signal_id}",
             "filled_price": fill_price,
             "filled_lots": lots,
+            "error": None,
+        }
+
+    def cancel_order(
+        self,
+        order_id: str,
+        symbol: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        logger.info(f"[PaperBroker] 🗑️ Cancelled resting simulated order {order_id} ({symbol or 'ALL'})")
+        return {
+            "status": "CANCELLED",
+            "order_id": order_id,
             "error": None,
         }
 

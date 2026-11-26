@@ -161,8 +161,15 @@
               :key="sig.id"
               class="hover:bg-base-300/40 border-b border-base-content/5 transition-colors"
             >
-              <td class="text-base-content/60 text-[11px] whitespace-nowrap">
+              <td
+                class="text-base-content/60 text-[11px] whitespace-nowrap"
+                :title="(sig as any).executed_at ? `Executed: ${formatTime((sig as any).executed_at)}` : ''"
+              >
                 {{ formatTime(sig.time || (sig as any).timestamp) }}
+                <span
+                  v-if="(sig as any).execution_latency_ms != null"
+                  class="text-[9px] text-base-content/40 ml-0.5"
+                >+{{ ((sig as any).execution_latency_ms / 1000).toFixed(1) }}s</span>
               </td>
               <td class="font-bold text-base-content text-[11px] truncate max-w-[150px]">
                 {{ (sig.strategy || '').replace('Strategy', '') }}
@@ -184,6 +191,9 @@
               <td>
                 <span v-if="sig.exit_reason" class="badge badge-xs badge-neutral text-[9px]">
                   {{ sig.exit_reason }}
+                </span>
+                <span v-else-if="sig.status === 'PENDING_LIMIT'" class="badge badge-xs badge-warning/20 text-warning text-[9px]">
+                  PENDING LIMIT
                 </span>
                 <span v-else class="text-base-content/40 text-[10px]">RUNNING</span>
               </td>

@@ -60,11 +60,14 @@ async def list_broker_accounts(broker_id: Optional[str] = None):
 async def delete_broker_account(account_id: str):
     """Deletes a broker account by ID."""
     from server.accounts_store import accounts_store
+    from server.providers.base import ProviderRegistry
     acc = accounts_store.get_account_by_id(account_id)
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     user_id = acc.get("telegram_user_id", "")
     ok = accounts_store.delete_account(account_id, user_id)
+    if ok:
+        ProviderRegistry.invalidate_cache()
     return {"deleted": ok, "account_id": account_id}
 
 
@@ -72,10 +75,13 @@ async def delete_broker_account(account_id: str):
 async def toggle_broker_account(account_id: str):
     """Toggles active status of a broker account."""
     from server.accounts_store import accounts_store
+    from server.providers.base import ProviderRegistry
     acc = accounts_store.get_account_by_id(account_id)
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     user_id = acc.get("telegram_user_id", "")
     new_status = not acc.get("is_active", True)
     ok = accounts_store.toggle_account_active(account_id, user_id, is_active=new_status)
+    if ok:
+        ProviderRegistry.invalidate_cache()
     return {"success": ok, "account_id": account_id, "is_active": new_status}
