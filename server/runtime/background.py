@@ -27,7 +27,7 @@ async def cron_backtest_scheduler():
                         strategy_registry.record_backtest(s["name"], res, is_cron=True)
                     except Exception as e_c:
                         logger.warning(f"[CronScheduler] Error evaluating {s['name']}: {e_c}")
-                all_strats = strategy_registry.get_all(sync=False)
+                all_strats = strategy_registry.get_all(sync=False, include_heavy=False)
                 portfolio = strategy_registry.get_portfolio_summary()
                 distribution = strategy_registry.get_distribution_analytics()
                 await manager.broadcast({
@@ -126,7 +126,7 @@ async def strategy_auto_discovery_watcher():
                     except Exception as bt_err:
                         logger.warning(f"[StrategyWatcher] Initial backtest error for {new_file}: {bt_err}")
 
-                all_strats = strategy_registry.get_all(sync=False)
+                all_strats = strategy_registry.get_all(sync=False, include_heavy=False)
                 portfolio = strategy_registry.get_portfolio_summary()
                 distribution = strategy_registry.get_distribution_analytics()
 
@@ -145,7 +145,7 @@ async def strategy_auto_discovery_watcher():
             elif json_changed_externally:
                 last_json_mtime = curr_json_mtime
                 logger.info(f"[StrategyWatcher] data/strategies.json changed externally. Broadcasting update...")
-                all_strats = strategy_registry.get_all(sync=False)
+                all_strats = strategy_registry.get_all(sync=False, include_heavy=False)
                 portfolio = strategy_registry.get_portfolio_summary()
                 distribution = strategy_registry.get_distribution_analytics()
 
@@ -173,7 +173,7 @@ async def strategy_runner_auto_healer():
     while True:
         try:
             await asyncio.sleep(15)
-            active_strats = [s["name"] for s in strategy_registry.get_all(sync=False) if s.get("status") == "ACTIVE_LIVE"]
+            active_strats = [s["name"] for s in strategy_registry._read_raw() if s.get("status") == "ACTIVE_LIVE"]
             for s_name in active_strats:
                 r_info = bot_supervisor.runners.get(s_name)
                 if r_info and (time.time() - float(r_info.get("started_ts") or 0.0)) < 20.0:

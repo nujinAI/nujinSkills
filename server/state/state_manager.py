@@ -112,11 +112,16 @@ def _ensure_dir(path: str) -> None:
 
 
 _JSON_CACHE_LOCK = threading.RLock()
-_JSON_READ_CACHE: Dict[str, Tuple[int, int, int, Any]] = {}
+_JSON_READ_CACHE: Dict[str, Tuple[int, int, int, str, Any]] = {}
+_HEAVY_JSON_BYTES = 512_000
 
 
 def _read_json_locked(path: str, default: Any) -> Any:
-    """Read a JSON file under a shared lock with inode/mtime/size caching. Returns `default` on missing/corrupt."""
+    """
+    Read a JSON file under a shared lock with inode/mtime/size caching.
+    Small files (<=512 KB) cache parsed objects (fast deepcopy); large files cache
+    the raw JSON string and parse via C-accelerated json.loads (10-20x faster than deepcopy).
+    """
     _ensure_dir(path)
     abs_path = os.path.abspath(path)
     if not os.path.exists(abs_path):
@@ -129,21 +134,27 @@ def _read_json_locked(path: str, default: Any) -> Any:
         with _JSON_CACHE_LOCK:
             cached = _JSON_READ_CACHE.get(abs_path)
             if cached is not None and cached[:3] == sig:
-                return deepcopy(cached[3])
+                if cached[3] == "obj":
+                    return deepcopy(cached[4])
+                return json.loads(cached[4])
     except OSError:
         sig = None
     try:
         with open(abs_path, "r") as f:
             fcntl.flock(f, fcntl.LOCK_SH)
             try:
-                data = json.load(f)
+                raw_text = f.read()
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
+        data = json.loads(raw_text)
         try:
             st_after = os.stat(abs_path)
             sig_after = (st_after.st_ino, st_after.st_mtime_ns, st_after.st_size)
             with _JSON_CACHE_LOCK:
-                _JSON_READ_CACHE[abs_path] = (sig_after[0], sig_after[1], sig_after[2], deepcopy(data))
+                if st_after.st_size <= _HEAVY_JSON_BYTES:
+                    _JSON_READ_CACHE[abs_path] = (sig_after[0], sig_after[1], sig_after[2], "obj", deepcopy(data))
+                else:
+                    _JSON_READ_CACHE[abs_path] = (sig_after[0], sig_after[1], sig_after[2], "str", raw_text)
         except OSError:
             pass
         return data
@@ -171,10 +182,13 @@ def _write_json_locked(path: str, data: Any) -> None:
     abs_path = os.path.abspath(path)
     tmp_path = f"{abs_path}.{os.getpid()}.{time.time_ns()}.tmp"
     try:
+        raw_text = json.dumps(data, indent=2, cls=_NumpyEncoder)
+        if len(raw_text) > _HEAVY_JSON_BYTES:
+            raw_text = json.dumps(data, separators=(",", ":"), cls=_NumpyEncoder)
         with open(tmp_path, "w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             try:
-                json.dump(data, f, indent=2, cls=_NumpyEncoder)
+                f.write(raw_text)
                 f.flush()
                 os.fsync(f.fileno())
             finally:
@@ -183,7 +197,10 @@ def _write_json_locked(path: str, data: Any) -> None:
         try:
             st = os.stat(abs_path)
             with _JSON_CACHE_LOCK:
-                _JSON_READ_CACHE[abs_path] = (st.st_ino, st.st_mtime_ns, st.st_size, deepcopy(data))
+                if st.st_size <= _HEAVY_JSON_BYTES:
+                    _JSON_READ_CACHE[abs_path] = (st.st_ino, st.st_mtime_ns, st.st_size, "obj", deepcopy(data))
+                else:
+                    _JSON_READ_CACHE[abs_path] = (st.st_ino, st.st_mtime_ns, st.st_size, "str", raw_text)
         except OSError:
             with _JSON_CACHE_LOCK:
                 _JSON_READ_CACHE.pop(abs_path, None)
@@ -253,6 +270,17 @@ class StateManager:
                 return None
         return node
 
+    @staticmethod
+    def _compact_heavy_fields(state: Dict[str, Any]) -> Dict[str, Any]:
+        """Caps high-frequency 1m marker/trade arrays so state.json stays small and sub-10ms to persist."""
+        td = state.get("trades_detail")
+        if isinstance(td, list) and len(td) > 500:
+            state["trades_detail"] = td[-500:]
+        tm = state.get("trade_markers")
+        if isinstance(tm, list) and len(tm) > 1000:
+            state["trade_markers"] = tm[-1000:]
+        return state
+
     # ── Write ─────────────────────────────────────────────────
     def patch(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -261,7 +289,7 @@ class StateManager:
         """
         current = self.get()
         updates["last_updated"] = _now_local_iso()
-        merged = _deep_merge(current, updates)
+        merged = self._compact_heavy_fields(_deep_merge(current, updates))
         _write_json_locked(self._path, merged)
         logger.info(f"[StateManager] patch applied — keys: {list(updates.keys())}")
         return merged
@@ -269,7 +297,7 @@ class StateManager:
     def set_full(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Replace state entirely (validates against schema by merging with DEFAULT)."""
         state["last_updated"] = _now_local_iso()
-        merged = _deep_merge(DEFAULT_STATE, state)
+        merged = self._compact_heavy_fields(_deep_merge(DEFAULT_STATE, state))
         _write_json_locked(self._path, merged)
         logger.info(f"[StateManager] full state written for strategy: {state.get('active_strategy')}")
         return merged
@@ -379,8 +407,6 @@ class SignalStore:
         })
         updated = [entry] + signals
         _write_json_locked(self._path, updated)
-        # Also bump signals_count in state.json
-        state_manager.patch({"signals_count": len(updated)})
         logger.info(f"[SignalStore] Signal #{new_id} added: {entry['action']} {entry['pair']} ({clean_strat}) @ {entry['price']}")
         return updated
 
@@ -589,6 +615,41 @@ class StrategyRegistry:
     def __init__(self, path: str = STRATEGIES_FILE, strategies_dir: str = STRATEGIES_DIR):
         self._path = path
         self._dir = strategies_dir
+        self._status_lock = threading.RLock()
+        self._status_sig: Optional[Tuple[int, int, int]] = None
+        self._status_index: Dict[str, str] = {}
+
+    def get_status(self, strategy_id: str) -> Optional[str]:
+        """O(1) cached strategy lifecycle status lookup (zero signal_store fan-out or heavy JSON copy)."""
+        clean_name = (strategy_id or "").replace(".py", "").strip().lower()
+        clean_file = f"{clean_name}.py"
+        abs_path = os.path.abspath(self._path)
+        try:
+            st = os.stat(abs_path)
+            sig = (st.st_ino, st.st_mtime_ns, st.st_size)
+        except OSError:
+            sig = None
+
+        with self._status_lock:
+            if sig is not None and sig == self._status_sig:
+                return self._status_index.get(clean_name) or self._status_index.get(clean_file)
+
+        raw = self._read_raw()
+        idx: Dict[str, str] = {}
+        for s in raw:
+            st_val = s.get("status")
+            if not st_val:
+                continue
+            n = str(s.get("name") or "").replace(".py", "").lower()
+            f = str(s.get("file") or "").lower()
+            if n:
+                idx[n] = st_val
+            if f:
+                idx[f] = st_val
+        with self._status_lock:
+            self._status_sig = sig
+            self._status_index = idx
+        return idx.get(clean_name) or idx.get(clean_file)
 
     def _read_raw(self) -> List[Dict[str, Any]]:
         return _read_json_locked(self._path, [])
@@ -1109,26 +1170,109 @@ class StrategyRegistry:
         self._write_raw(ranked)
         return ranked
 
-    def get_all(self, sync: bool = True) -> List[Dict[str, Any]]:
-        """Returns all strategies with rankings, enriched with live stats and signals."""
+    @staticmethod
+    def _compute_live_enrichment(clean_name: str, strat_signals: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
+        closed = [s for s in strat_signals if s.get("exit_reason") and s.get("pnl_pct") is not None]
+        wins = [s for s in closed if s.get("pnl_pct", 0) > 0]
+        losses = [s for s in closed if s.get("pnl_pct", 0) <= 0]
+
+        total = len(closed)
+        win_rate = len(wins) / total if total > 0 else 0.0
+        gross_profit = sum(s.get("pnl_pct", 0) for s in wins)
+        gross_loss = abs(sum(s.get("pnl_pct", 0) for s in losses))
+        profit_factor = (
+            round(gross_profit / gross_loss, 2) if gross_loss > 0
+            else (99.0 if gross_profit > 0 else 0.0)
+        )
+        total_pnl = round(sum(s.get("pnl_pct", 0) for s in closed), 2)
+
+        returns = [s.get("pnl_pct", 0) for s in closed]
+        if len(returns) > 1:
+            mean_r = sum(returns) / len(returns)
+            std_r = math.sqrt(sum((r - mean_r) ** 2 for r in returns) / len(returns)) or 1e-8
+            sharpe_live = round((mean_r / std_r) * trade_annualization_factor(), 2)
+        else:
+            sharpe_live = 0.0
+
+        live_stats = {
+            "total_trades": total,
+            "open_trades": len([s for s in strat_signals if s.get("status") == "ACTIVE_IN_POSITION"]),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(win_rate, 4),
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+            "profit_factor": profit_factor,
+            "sharpe_live": sharpe_live,
+            "total_pnl_pct": total_pnl,
+        }
+
+        equity_curve: List[Dict[str, Any]] = []
+        if closed:
+            closed_sorted = sorted(closed, key=lambda s: s.get("time", 0))
+            current_eq = 100.0
+            peak = 100.0
+            first_time = closed_sorted[0].get("time", int(time.time())) - 60
+            equity_curve.append({"time": first_time, "equity_pct": 100.0, "drawdown_pct": 0.0})
+            for s in closed_sorted:
+                pnl = float(s.get("pnl_pct", 0.0))
+                current_eq = round(current_eq * (1.0 + (pnl / 100.0)), 2)
+                peak = max(peak, current_eq)
+                dd = round(((peak - current_eq) / peak) * 100.0, 2)
+                equity_curve.append({
+                    "time": s.get("time", int(time.time())),
+                    "equity_pct": current_eq,
+                    "drawdown_pct": dd,
+                })
+
+        sorted_sigs = sorted(strat_signals, key=lambda s: s.get("time", 0), reverse=True)
+        signals_summary = {
+            "total_signals": len(sorted_sigs),
+            "recent_signals": sorted_sigs[:25],
+        }
+        return live_stats, equity_curve, signals_summary
+
+    def get_all(self, sync: bool = True, include_heavy: bool = True) -> List[Dict[str, Any]]:
+        """Returns all strategies with rankings, enriched with live stats and signals in a single pass."""
         if sync or not os.path.exists(self._path):
             strategies = self.sync_with_filesystem()
         else:
             strategies = self._read_raw()
 
-        # Enrich with real live signals & equity curve
+        all_signals = signal_store.get_all()
         for strat in strategies:
-            strat["live_stats"] = self.get_live_stats_for_strategy(strat.get("name", ""))
-            strat["live_equity_curve"] = self.get_live_equity_for_strategy(strat.get("name", ""))
-            strat["signals_summary"] = self.get_signals_summary(strat.get("name", ""))
+            clean_name = str(strat.get("name") or "").replace(".py", "").lower()
+            strat_signals = [
+                s for s in all_signals
+                if (clean_name and clean_name in s.get("strategy", "").lower())
+                or s.get("strategy", "").replace(".py", "").lower() == clean_name
+            ]
+            live_stats, live_eq, sig_sum = self._compute_live_enrichment(clean_name, strat_signals)
+            strat["live_stats"] = live_stats
+            strat["live_equity_curve"] = live_eq
+            strat["signals_summary"] = sig_sum
+            if not include_heavy:
+                strat.pop("trade_markers", None)
+                strat.pop("trades_detail", None)
         return strategies
 
     def get(self, strategy_id: str) -> Optional[Dict[str, Any]]:
         clean_id = strategy_id if strategy_id.endswith(".py") else f"{strategy_id}.py"
         clean_name = strategy_id.replace(".py", "")
-        all_strats = self.get_all(sync=False)
-        for s in all_strats:
+        raw = self._read_raw()
+        for s in raw:
             if s.get("file") == clean_id or s.get("name") == clean_name:
+                cname = str(s.get("name") or clean_name).replace(".py", "").lower()
+                all_signals = signal_store.get_all()
+                strat_signals = [
+                    sig for sig in all_signals
+                    if (cname and cname in sig.get("strategy", "").lower())
+                    or sig.get("strategy", "").replace(".py", "").lower() == cname
+                ]
+                live_stats, live_eq, sig_sum = self._compute_live_enrichment(cname, strat_signals)
+                s["live_stats"] = live_stats
+                s["live_equity_curve"] = live_eq
+                s["signals_summary"] = sig_sum
                 return s
         return None
 
@@ -1254,8 +1398,10 @@ class StrategyRegistry:
                 s["time_period"] = tp
                 s["backtest_equity_curve"] = compact_eq
                 s["falsification_gates"] = gates
-                s["trade_markers"] = bt_result.get("trade_markers", [])
-                s["trades_detail"] = bt_result.get("trades_detail", [])
+                raw_markers = bt_result.get("trade_markers", []) or []
+                raw_details = bt_result.get("trades_detail", []) or []
+                s["trade_markers"] = raw_markers[-1000:] if len(raw_markers) > 1000 else raw_markers
+                s["trades_detail"] = raw_details[-500:] if len(raw_details) > 500 else raw_details
                 s["account_summary"] = bt_result.get("account_summary", {})
                 s["account_growth_models"] = bt_result.get("account_growth_models", {})
                 s["regime_breakdown"] = bt_result.get("regime_breakdown", {})
@@ -1299,7 +1445,7 @@ class StrategyRegistry:
         Computes aggregate portfolio-level performance across ALL currently active strategies (ACTIVE_LIVE).
         Provides real live bot execution telemetry alongside historical backtest benchmarks.
         """
-        strategies = self.get_all(sync=False)
+        strategies = self._read_raw()
         active_strats = [s for s in strategies if s.get("status") == "ACTIVE_LIVE"]
 
         if not active_strats:
@@ -1423,7 +1569,7 @@ class StrategyRegistry:
         Computes drift distribution (improving vs decaying strategies) and
         performance distributions (Sharpe bins, Tier counts, Asset diversification).
         """
-        strategies = self.get_all(sync=False)
+        strategies = self._read_raw()
 
         improving = []
         decaying = []

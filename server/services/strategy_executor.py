@@ -906,8 +906,8 @@ class NativeStrategyRunner:
                 return
 
             # Lifecycle Guard: If strategy is deactivated, only monitor exit of active position, then stop
-            strat_record = strategy_registry.get(self.strategy_name)
-            if not strat_record or strat_record.get("status") != "ACTIVE_LIVE":
+            strat_status = strategy_registry.get_status(self.strategy_name)
+            if strat_status != "ACTIVE_LIVE":
                 active_pos = signal_store.get_active(self.strategy_name)
                 if active_pos:
                     current_price = float(quote.get("price") or 0.0)
@@ -941,9 +941,9 @@ class NativeStrategyRunner:
                 return
 
             # Strict Lifecycle Guard: If strategy is no longer ACTIVE_LIVE, immediately halt runner
-            strat_record = strategy_registry.get(self.strategy_name)
-            if not strat_record or strat_record.get("status") != "ACTIVE_LIVE":
-                logger.info(f"[NativeStrategyRunner] Strategy '{self.strategy_name}' is not ACTIVE_LIVE (status: {strat_record.get('status') if strat_record else 'None'}). Halting runner.")
+            strat_status = strategy_registry.get_status(self.strategy_name)
+            if strat_status != "ACTIVE_LIVE":
+                logger.info(f"[NativeStrategyRunner] Strategy '{self.strategy_name}' is not ACTIVE_LIVE (status: {strat_status}). Halting runner.")
                 await self.stop()
                 return
 
@@ -1436,18 +1436,7 @@ class NativeStrategyRunner:
                 "event_type": "SIGNAL_TRIGGERED",
                 "payload": new_signal_entry
             })
-            # Also broadcast updated portfolio & strategies stats
-            all_strats = strategy_registry.get_all(sync=False)
-            portfolio = strategy_registry.get_portfolio_summary()
-            dist = strategy_registry.get_distribution_analytics()
-            await self.broadcast_callback({
-                "event_type": "STRATEGIES_UPDATED",
-                "payload": {
-                    "strategies": all_strats,
-                    "portfolio_summary": portfolio,
-                    "distribution_analytics": dist
-                }
-            })
+            asyncio.create_task(self._broadcast_strategies_updated())
 
         # 6. Asynchronous live broker fill reconciliation (never blocks order dispatch or UI broadcast)
         try:
@@ -1464,6 +1453,26 @@ class NativeStrategyRunner:
                 asyncio.create_task(self._reconcile_entry_fill_async(dict(new_signal_entry)))
         except Exception:
             pass
+
+    async def _broadcast_strategies_updated(self) -> None:
+        """Broadcasts compact STRATEGIES_UPDATED telemetry asynchronously off the trade hot path."""
+        if not self.broadcast_callback:
+            return
+        try:
+            def _build_payload():
+                try:
+                    all_strats = strategy_registry.get_all(sync=False, include_heavy=False)
+                except TypeError:
+                    all_strats = strategy_registry.get_all(sync=False)
+                return {
+                    "strategies": all_strats,
+                    "portfolio_summary": strategy_registry.get_portfolio_summary(),
+                    "distribution_analytics": strategy_registry.get_distribution_analytics(),
+                }
+            payload = await asyncio.to_thread(_build_payload)
+            await self.broadcast_callback({"event_type": "STRATEGIES_UPDATED", "payload": payload})
+        except Exception as e_bc:
+            logger.debug(f"[NativeStrategyRunner] Async strategies broadcast note: {e_bc}")
 
     async def _reconcile_entry_fill_async(self, sig_entry: Dict[str, Any]) -> None:
         """Asynchronously reconciles authentic broker fill price & position_id after fast order placement."""
@@ -2102,17 +2111,7 @@ class NativeStrategyRunner:
                 # Broadcast to UI immediately (two-phase: refine exit fill asynchronously on live brokers)
                 if self.broadcast_callback:
                     await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
-                    all_strats = strategy_registry.get_all(sync=False)
-                    portfolio = strategy_registry.get_portfolio_summary()
-                    dist = strategy_registry.get_distribution_analytics()
-                    await self.broadcast_callback({
-                        "event_type": "STRATEGIES_UPDATED",
-                        "payload": {
-                            "strategies": all_strats,
-                            "portfolio_summary": portfolio,
-                            "distribution_analytics": dist
-                        }
-                    })
+                    asyncio.create_task(self._broadcast_strategies_updated())
 
                 if reconciled_exit_price is None and is_live_connected and hasattr(broker, "get_latest_position_execution"):
                     asyncio.create_task(
@@ -2159,13 +2158,7 @@ class NativeStrategyRunner:
                                 telegram_gateway.format_and_send_trade_close(closed)
                                 if self.broadcast_callback:
                                     await self.broadcast_callback({"event_type": "SIGNAL_CLOSED", "payload": closed})
-                                    all_strats = strategy_registry.get_all(sync=False)
-                                    portfolio = strategy_registry.get_portfolio_summary()
-                                    dist = strategy_registry.get_distribution_analytics()
-                                    await self.broadcast_callback({
-                                        "event_type": "STRATEGIES_UPDATED",
-                                        "payload": {"strategies": all_strats, "portfolio_summary": portfolio, "distribution_analytics": dist}
-                                    })
+                                    asyncio.create_task(self._broadcast_strategies_updated())
                             return
             signal_store.save()
             logger.info(f"[NativeStrategyRunner] 🛡️ Trailing Stop ratcheted to {new_sl} for #{pos['id']} ({self.symbol}). Broker synced.")

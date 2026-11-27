@@ -24,7 +24,7 @@ from server.brokers.paper import PaperExecutionBroker
 from server.providers.base import BaseMarketDataProvider
 from server.services.strategy_executor import NativeStrategyRunner, StrategyEvaluator
 from server.services.strategy_loader import load_strategy_instance
-from server.state.state_manager import SignalStore
+from server.state.state_manager import SignalStore, StrategyRegistry
 
 from _feed_stubs import live_feeds_stubbed
 
@@ -285,6 +285,7 @@ def test_runner_single_snapshot_and_no_gold_sleep(tmp_path):
          patch("server.backtest_engine.load_strategy_instance", return_value=_DummyStrat()):
         mock_reg.get_broker.return_value = broker
         mock_sreg.get.return_value = {"name": "GoldFastTest", "status": "ACTIVE_LIVE"}
+        mock_sreg.get_status.return_value = "ACTIVE_LIVE"
         mock_sreg.get_all.return_value = []
         mock_sreg.get_portfolio_summary.return_value = {}
         mock_sreg.get_distribution_analytics.return_value = {}
@@ -474,3 +475,29 @@ def test_state_manager_and_strategy_loader_cache_coherency(tmp_path):
         )
         s3 = load_strategy_instance("TmpCacheStrat")
         assert s3.val == 222
+
+
+def test_strategy_registry_o1_status_and_lightweight_summary(tmp_path):
+    """StrategyRegistry.get_status() is O(1) and include_heavy=False omits trades_detail/trade_markers."""
+    reg_file = str(tmp_path / "strategies.json")
+    s_dir = str(tmp_path / "strategies")
+    os.makedirs(s_dir, exist_ok=True)
+    with open(reg_file, "w") as f:
+        json.dump([{
+            "name": "FastStrat",
+            "file": "FastStrat.py",
+            "status": "ACTIVE_LIVE",
+            "trades_detail": [{"id": i} for i in range(10)],
+            "trade_markers": [{"time": i} for i in range(10)],
+        }], f)
+
+    reg = StrategyRegistry(path=reg_file, strategies_dir=s_dir)
+    with patch("server.state.state_manager.signal_store.get_all", return_value=[]):
+        assert reg.get_status("FastStrat") == "ACTIVE_LIVE"
+        assert reg.get_status("FastStrat.py") == "ACTIVE_LIVE"
+        assert reg.get_status("UnknownStrat") is None
+        light = reg.get_all(sync=False, include_heavy=False)
+        assert len(light) == 1
+        assert "trades_detail" not in light[0]
+        assert "trade_markers" not in light[0]
+

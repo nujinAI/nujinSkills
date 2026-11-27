@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from typing import Optional
@@ -38,14 +39,14 @@ async def deploy_bot(req: DeployBotRequest):
         )
     strat = clean_strat
     logger.info(f"Activating & deploying strategy for system: {strat}")
-    bt_result = run_real_backtest(strat, save_as_active=True)
+    bt_result = await asyncio.to_thread(run_real_backtest, strat, True)
     bot_supervisor.set_broadcast_callback(manager.broadcast)
     res = bot_supervisor.deploy_strategy(strat, req.mode or "dry-run")
     try:
         strategy_registry.update_status(strat, "ACTIVE_LIVE")
     except Exception as e_reg:
         logger.warning(f"Error updating registry for {strat}: {e_reg}")
-    all_strats = strategy_registry.get_all(sync=False)
+    all_strats = await asyncio.to_thread(strategy_registry.get_all, False, False)
     portfolio = strategy_registry.get_portfolio_summary()
     distribution = strategy_registry.get_distribution_analytics()
     await manager.broadcast({"event_type": "STATE_UPDATED", "payload": bt_result["state"]})

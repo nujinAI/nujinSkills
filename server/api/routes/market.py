@@ -97,13 +97,13 @@ async def get_candles(
     interval = timeframe or "15m"
 
     try:
-        # Single Market Authority: TradingView Provider via ProviderRegistry
-        provider = ProviderRegistry.get_provider(symbol, interval)
+        import asyncio
+        # Single Market Authority: TradingView / Broker Provider via ProviderRegistry (offloaded from event loop)
+        provider = await asyncio.to_thread(ProviderRegistry.get_provider, symbol, interval)
         if not provider.is_running:
-            import asyncio
             asyncio.create_task(provider.start())
 
-        c_list = provider.get_candles(count=count)
+        c_list = await asyncio.to_thread(provider.get_candles, count)
         if c_list and len(c_list) > 0:
             raw_data = c_list[-count:] if (count and count < len(c_list)) else c_list
             data = _sanitize_candles(raw_data)

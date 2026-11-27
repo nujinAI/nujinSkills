@@ -62,7 +62,7 @@ async def get_system_status():
         "active_strategies": bot_supervisor.active_strategies,
         "bot_status": bot_supervisor.get_status(),
         "telegram_configured": telegram_gateway.is_configured,
-        "signals_count": curr_state.get("signals_count", 0),
+        "signals_count": len(signal_store.get_all()),
         "open_positions_count": len(signal_store.get_active_signals()),
     }
 
